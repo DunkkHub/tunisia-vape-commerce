@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1.7
+ARG NODE_IMAGE=node:24-alpine
+
+FROM ${NODE_IMAGE} AS build
+ENV PNPM_HOME=/pnpm
+ENV PATH=/pnpm:${PATH}
+WORKDIR /workspace
+RUN apk add --no-cache python3 make g++ libc6-compat
+RUN corepack enable && corepack prepare pnpm@11.11.0 --activate
+COPY . .
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --frozen-lockfile
+RUN pnpm --filter @vape/worker... build
+RUN pnpm --filter @vape/worker deploy --prod --legacy /opt/worker
+
+FROM ${NODE_IMAGE} AS runtime
+RUN apk add --no-cache dumb-init libstdc++
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=build --chown=node:node /opt/worker ./worker
+USER node
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "process.kill(1, 0)" || exit 1
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "worker/dist/main.js"]

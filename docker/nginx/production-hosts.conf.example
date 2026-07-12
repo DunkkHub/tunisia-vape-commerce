@@ -1,0 +1,49 @@
+upstream vape_api_production {
+    server api:3000;
+    keepalive 64;
+}
+
+upstream vape_web_production {
+    server web:8080;
+    keepalive 32;
+}
+
+# Replace hostnames, terminate trusted TLS, and include the reviewed common
+# proxy/security policy before using this example.
+server {
+    listen 443 ssl;
+    server_name store.example.tn;
+
+    location ^~ /admin {
+        return 404;
+    }
+
+    location ^~ /api/v1/auth/admin/ {
+        return 404;
+    }
+
+    location /api/ {
+        proxy_pass http://vape_api_production;
+    }
+
+    location / {
+        proxy_pass http://vape_web_production;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name admin.example.tn;
+
+    location ^~ /api/v1/auth/customer/ {
+        return 404;
+    }
+
+    location /api/ {
+        proxy_pass http://vape_api_production;
+    }
+
+    location / {
+        proxy_pass http://vape_web_production;
+    }
+}

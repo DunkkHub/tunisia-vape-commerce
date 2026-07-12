@@ -1,0 +1,53 @@
+{
+  "name": "@vape/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run src",
+    "test:integration": "vitest run test/integration --passWithNoTests",
+    "test:security": "vitest run test/security --passWithNoTests",
+    "admin:create": "tsx src/cli/admin-create.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "11.1.28",
+    "@nestjs/config": "4.0.4",
+    "@nestjs/core": "11.1.28",
+    "@nestjs/platform-express": "11.1.28",
+    "@nestjs/swagger": "11.4.5",
+    "@nestjs/throttler": "6.5.0",
+    "@prisma/client": "6.19.2",
+    "@vape/shared-types": "workspace:*",
+    "@vape/validation": "workspace:*",
+    "argon2": "0.44.0",
+    "class-transformer": "0.5.1",
+    "class-validator": "0.15.1",
+    "cookie-parser": "1.4.7",
+    "helmet": "8.2.0",
+    "ioredis": "5.11.1",
+    "nestjs-pino": "4.6.1",
+    "otplib": "13.4.1",
+    "pino-http": "11.0.0",
+    "qrcode": "1.5.4",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "uuid": "14.0.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "1.4.10",
+    "@types/express": "5.0.6",
+    "@types/node": "24.10.9",
+    "@types/qrcode": "1.5.6",
+    "@types/supertest": "7.2.0",
+    "@vitest/coverage-v8": "4.1.10",
+    "supertest": "7.2.2",
+    "tsx": "4.23.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}

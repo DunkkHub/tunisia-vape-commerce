@@ -1,0 +1,282 @@
+name: tunisia-vape-commerce
+
+x-app-environment: &app-environment
+  NODE_ENV: development
+  DATABASE_URL: ${DATABASE_URL:-mysql://app_user:change_me@mysql:3306/vape_store}
+  DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:-mysql://migration_user:change_me@mysql:3306/vape_store}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+  WEB_URL: ${COMPOSE_WEB_URL:-http://localhost:8080}
+  API_URL: http://api:3000
+  PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8080/api/v1}
+  SESSION_SECRET: ${SESSION_SECRET:-development-only-session-secret-change-before-staging}
+  COOKIE_SECRET: ${COOKIE_SECRET:-development-only-cookie-secret-change-before-staging}
+  FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:-development-only-field-encryption-key-change-before-staging}
+  S3_ENDPOINT: http://minio:9000
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_BUCKET: ${S3_BUCKET:-vape-store}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minio_local_admin}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-change_me_minio}
+  S3_FORCE_PATH_STYLE: 'true'
+  SMTP_HOST: mailpit
+  SMTP_PORT: '1025'
+  SMS_PROVIDER: ${SMS_PROVIDER:-console}
+  DEFAULT_LOCALE: ${DEFAULT_LOCALE:-fr}
+  SUPPORTED_LOCALES: ${SUPPORTED_LOCALES:-fr,ar}
+  CURRENCY: TND
+  TIMEZONE: Africa/Tunis
+  MINIMUM_PURCHASE_AGE: ${MINIMUM_PURCHASE_AGE:-18}
+  LEGAL_REVIEW_COMPLETED: ${LEGAL_REVIEW_COMPLETED:-false}
+  CHECKOUT_ENABLED: ${CHECKOUT_ENABLED:-false}
+  MAINTENANCE_MODE: ${MAINTENANCE_MODE:-false}
+  PRELAUNCH_MODE: ${PRELAUNCH_MODE:-true}
+  CUSTOMER_SESSION_IDLE_MINUTES: ${CUSTOMER_SESSION_IDLE_MINUTES:-10080}
+  ADMIN_SESSION_IDLE_MINUTES: ${ADMIN_SESSION_IDLE_MINUTES:-30}
+  RATE_LIMIT_REDIS_PREFIX: ${RATE_LIMIT_REDIS_PREFIX:-vape-store}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+x-resource-limits: &resource-limits
+  deploy:
+    resources:
+      limits:
+        cpus: '1.00'
+        memory: 768M
+      reservations:
+        cpus: '0.10'
+        memory: 128M
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+      - --innodb-strict-mode=ON
+      - --binlog-expire-logs-seconds=604800
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-vape_store}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change_me_root}
+      MYSQL_USER: app_user
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:-change_me}
+      MYSQL_MIGRATION_PASSWORD: ${MYSQL_MIGRATION_PASSWORD:-change_me}
+      TZ: UTC
+    ports:
+      - '127.0.0.1:${MYSQL_PORT:-3306}:3306'
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql/init/00-least-privilege-users.sh:/docker-entrypoint-initdb.d/00-least-privilege-users.sh:ro
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'mysqladmin ping --host=127.0.0.1 --user=root --password="$${MYSQL_ROOT_PASSWORD}" --silent',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [backend]
+    <<: *resource-limits
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--appendfsync',
+        'everysec',
+        '--maxmemory-policy',
+        'noeviction',
+      ]
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks: [backend]
+    <<: *resource-limits
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_local_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change_me_minio}
+    ports:
+      - '127.0.0.1:${MINIO_API_PORT:-9000}:9000'
+      - '127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '--fail', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [backend]
+    <<: *resource-limits
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    restart: 'no'
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_local_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change_me_minio}
+      S3_BUCKET: ${S3_BUCKET:-vape-store}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb --ignore-existing "local/$${S3_BUCKET}"
+        mc version enable "local/$${S3_BUCKET}"
+        mc anonymous set none "local/$${S3_BUCKET}"
+    networks: [backend]
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: '5000'
+      MP_DATABASE: /data/mailpit.db
+    ports:
+      - '127.0.0.1:${MAILPIT_WEB_PORT:-8025}:8025'
+    volumes:
+      - mailpit-data:/data
+    healthcheck:
+      test: ['CMD', '/mailpit', 'readyz']
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks: [backend]
+    <<: *resource-limits
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+      target: migration
+    restart: 'no'
+    environment:
+      <<: *app-environment
+      NODE_ENV: development
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks: [backend]
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+      target: runtime
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+      PORT: '3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_healthy
+    expose: ['3000']
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+    <<: *resource-limits
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+      target: runtime
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+    <<: *resource-limits
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+      target: runtime
+      args:
+        VITE_API_URL: ''
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    expose: ['8080']
+    networks: [edge]
+    <<: *resource-limits
+
+  nginx:
+    image: nginxinc/nginx-unprivileged:1.28-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${GATEWAY_PORT:-8080}:8080'
+    volumes:
+      - ./docker/nginx/gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8080/']
+      interval: 20s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks: [edge, backend]
+    <<: *resource-limits
+
+volumes:
+  mysql-data:
+  redis-data:
+  minio-data:
+  mailpit-data:
+
+networks:
+  edge:
+  backend:

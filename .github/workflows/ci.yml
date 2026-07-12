@@ -1,0 +1,172 @@
+name: CI
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_ENV: test
+  DATABASE_URL: mysql://app_user:ci_app_password@127.0.0.1:3306/vape_store
+  DATABASE_MIGRATION_URL: mysql://root:ci_root_password@127.0.0.1:3306/vape_store
+  REDIS_URL: redis://127.0.0.1:6379
+  WEB_URL: http://127.0.0.1:4173
+  COOKIE_SECRET: ci-only-cookie-secret-that-is-never-used-outside-ci
+  FIELD_ENCRYPTION_KEY: ci-only-field-key-that-is-never-used-outside-ci
+  LEGAL_REVIEW_COMPLETED: 'false'
+  CHECKOUT_ENABLED: 'false'
+  MAINTENANCE_MODE: 'false'
+  PRELAUNCH_MODE: 'true'
+  MINIMUM_PURCHASE_AGE: '18'
+
+jobs:
+  quality:
+    name: Format, lint, types and schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma:generate
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm prisma:validate
+
+  test:
+    name: Unit and integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: vape_store
+          MYSQL_USER: app_user
+          MYSQL_PASSWORD: ci_app_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_root_password --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=3s
+          --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma:generate
+      - run: pnpm prisma:migrate:deploy
+      - run: pnpm test:unit
+      - run: pnpm test:integration
+      - run: pnpm test:security
+
+  build:
+    name: Production builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma:generate
+      - run: pnpm build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-builds
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            apps/api/dist
+            apps/worker/dist
+            apps/web/dist
+
+  e2e:
+    name: Browser end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
+
+  docker:
+    name: Multi-stage Docker builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.api
+          target: runtime
+          push: false
+          tags: vape-api:ci
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.worker
+          target: runtime
+          push: false
+          tags: vape-worker:ci
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.web
+          target: runtime
+          push: false
+          tags: vape-web:ci
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web

@@ -1,0 +1,85 @@
+name: Security
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+  schedule:
+    - cron: '31 3 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  dependency-and-secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level=high
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v3
+
+  image-scan-and-sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            file: docker/Dockerfile.api
+          - name: worker
+            file: docker/Dockerfile.worker
+          - name: web
+            file: docker/Dockerfile.web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          target: runtime
+          load: true
+          push: false
+          tags: vape-${{ matrix.name }}:security-scan
+          cache-from: type=gha,scope=${{ matrix.name }}
+      - uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: vape-${{ matrix.name }}:security-scan
+          format: sarif
+          output: trivy-${{ matrix.name }}.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.name }}.sarif
+      - uses: anchore/sbom-action@v0
+        if: always()
+        with:
+          image: vape-${{ matrix.name }}:security-scan
+          artifact-name: sbom-${{ matrix.name }}.spdx.json
+          format: spdx-json

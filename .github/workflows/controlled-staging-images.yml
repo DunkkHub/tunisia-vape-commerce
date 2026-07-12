@@ -1,0 +1,72 @@
+name: Controlled staging image gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      change_reference:
+        description: Approved change or release reference
+        required: true
+        type: string
+      backup_rehearsal_reference:
+        description: Backup/migration rehearsal evidence reference
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
+jobs:
+  approved-image-promotion:
+    environment: controlled-staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require successful CI and security runs for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ci_runs=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --status success --json databaseId --jq 'length')
+          security_runs=$(gh run list --workflow security.yml --commit "$GITHUB_SHA" --status success --json databaseId --jq 'length')
+          test "$ci_runs" -gt 0
+          test "$security_runs" -gt 0
+      - name: Record required approvals
+        run: |
+          test -n "${{ inputs.change_reference }}"
+          test -n "${{ inputs.backup_rehearsal_reference }}"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.api
+          target: runtime
+          push: true
+          tags: ghcr.io/${{ github.repository }}/api:sha-${{ github.sha }}
+          cache-from: type=gha,scope=api
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.worker
+          target: runtime
+          push: true
+          tags: ghcr.io/${{ github.repository }}/worker:sha-${{ github.sha }}
+          cache-from: type=gha,scope=worker
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.web
+          target: runtime
+          push: true
+          tags: ghcr.io/${{ github.repository }}/web:sha-${{ github.sha }}
+          cache-from: type=gha,scope=web
+      - name: State the boundary
+        run: |
+          echo "Images were promoted after the protected environment gate."
+          echo "No runtime target is configured; deployment and migration remain blocked until an approved target adapter exists."
