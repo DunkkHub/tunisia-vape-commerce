@@ -20,7 +20,7 @@
     "@nestjs/platform-express": "11.1.28",
     "@nestjs/swagger": "11.4.5",
     "@nestjs/throttler": "6.5.0",
-    "@prisma/client": "6.19.2",
+    "@prisma/client": "6.19.3",
     "@vape/shared-types": "workspace:*",
     "@vape/validation": "workspace:*",
     "argon2": "0.44.0",

@@ -14,7 +14,7 @@ The direct dependency baseline selected in the manifests on 2026-07-11 is:
 
 | Area                   | Exact versions                                                                                                                                                               |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Toolchain              | Node >=22.12.0 (container line 24), pnpm 11.11.0, TypeScript 5.9.3, Prisma/Prisma Client 6.19.2, ESLint 10.7.0, Prettier 3.9.5, tsx 4.23.0                                   |
+| Toolchain              | Node >=22.12.0 (container line 24), pnpm 11.11.0, TypeScript 5.9.3, Prisma/Prisma Client 6.19.3, ESLint 10.7.0, Prettier 3.9.5, tsx 4.23.0                                   |
 | API framework/security | NestJS common/core/platform-express 11.1.28, Nest config 4.0.4, Swagger 11.4.5, throttler 6.5.0, Argon2 0.44.0, Helmet 8.2.0, cookie-parser 1.4.7, Zod 4.4.3                 |
 | API runtime/telemetry  | ioredis 5.11.1, nestjs-pino 4.6.1, pino-http 11.0.0, otplib 13.4.1, qrcode 1.5.4, RxJS 7.8.2, uuid 14.0.1                                                                    |
 | Web                    | React/React DOM 19.2.7, Vite 8.1.4, React Router 7.18.1, TanStack Query 5.101.2, React Hook Form 7.81.0, Zod 4.4.3, i18next 26.3.6, react-i18next 17.0.9, Tailwind CSS 4.3.2 |
