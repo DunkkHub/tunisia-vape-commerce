@@ -6,7 +6,7 @@ Review date: 2026-07-12
 
 The repository is under active greenfield implementation. Foundational architecture, security, API, deployment, backup, incident, delivery, COD and administration guidance has been established, including an explicit boundary between customer authentication at /api/v1/auth/customer/* and administrator authentication at /api/v1/auth/admin/*, with /admin/login and mandatory administrator TOTP.
 
-No release claim is supported yet. Local builds, automated tests, a development database migration/seed, browser smoke checks, and the hosted CI workflow now pass, but the hosted security workflow remains blocked by confirmed container-image vulnerabilities. Target MySQL 8/Redis/Docker staging, legal review, provider setup, load results, and backup restoration evidence are not complete.
+No release claim is supported yet. Local builds, automated tests, a development database migration/seed, browser smoke checks, and the hosted CI and security workflows now pass. Target MySQL 8/Redis/Docker staging, legal review, provider setup, load results, and backup restoration evidence are not complete.
 
 ## Passed requirements
 
@@ -36,7 +36,7 @@ The API and web development servers were started and probed successfully. `/api/
 - Migration against target MySQL 8.4 and a representative existing-database upgrade have not been recorded.
 - Secure local administrator creation through the interactive CLI passed; TOTP/recovery, session isolation/revocation and recent-auth flows have not been independently verified end to end.
 - Database-backed final-stock concurrency, checkout idempotency, delivery/COD transitions, and reconciliation-balance results have not been recorded. Grouped inventory and cash summaries are read projections only.
-- Hosted Docker builds, Trivy execution, SARIF upload, and SBOM generation completed. Security run 29205303375 correctly blocked all three runtime images on confirmed HIGH/CRITICAL findings. The current API and worker Dockerfiles narrowly update their bundled npm runtime tool to the first compatible fixed release. The web runtime and Compose gateway use the smallest published NGINX stable-line image that passed the same remote HIGH/CRITICAL scan. Docker service health and controlled deployment evidence remain absent.
+- Hosted Docker builds, Trivy execution, SARIF upload, and SBOM generation completed successfully in security run 29206001325 after targeted runtime dependency remediation. Docker service health and controlled deployment evidence remain absent.
 - Backup creation, isolated restore and measured RPO/RTO evidence are absent.
 
 ## Known limitations
@@ -56,7 +56,7 @@ The API and web development servers were started and probed successfully. `/api/
 - Provider, network, WAF/egress, key custody and CI trust controls cannot be finalized without the target environment.
 - Authentication realm separation, mandatory 2FA, CSRF, and the new read-route permission metadata/denials have targeted local test evidence, but upload handling, runtime log redaction, the complete authorization matrix, queue replay, query plans, and transactional invariants still require broader executable evidence.
 - The package audit is clear after the narrow Prisma/Prisma Client 6.19.3 update moved transitive `effect` from 3.18.4 to 3.21.0, addressing GHSA-38f7-945m-qr2g without a major dependency upgrade.
-- Trivy run 29205303375 reported 25 unique HIGH/CRITICAL CVEs: CVE-2026-12151 in npm's bundled `undici` for the API and worker images, plus 24 CVEs in the web image's NGINX/Alpine packages. The API and worker runtime stages now pin npm 11.18.0, the first npm 11 release containing fixed `undici` 6.27.0. Because no patched NGINX 1.28 image exists, the web runtime and Compose gateway now use exact `nginxinc/nginx-unprivileged:1.30.2-alpine-slim`, the smallest published compatible stable-line image that passed a remote Trivy 0.70.0 HIGH/CRITICAL scan without requiring application dependency changes.
+- Trivy run 29205303375 reported 25 unique HIGH/CRITICAL CVEs: CVE-2026-12151 in npm's bundled `undici` for the API and worker images, plus 24 CVEs in the web image's NGINX/Alpine packages. The API and worker runtime stages now pin npm 11.18.0, the first npm 11 release containing fixed `undici` 6.27.0. Because no patched NGINX 1.28 image exists, the web runtime and Compose gateway now use exact `nginxinc/nginx-unprivileged:1.30.2-alpine-slim`, the smallest published compatible stable-line image that passed a remote Trivy 0.70.0 HIGH/CRITICAL scan. Security run 29206001325 confirmed all three resulting images pass the enforced HIGH/CRITICAL scan without application dependency changes.
 - Third-party actions now use valid stable major release channels, but immutable commit-SHA action and image pinning remains open hardening work.
 
 ## Missing infrastructure credentials
