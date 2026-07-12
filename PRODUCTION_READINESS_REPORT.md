@@ -36,7 +36,7 @@ The API and web development servers were started and probed successfully. `/api/
 - Migration against target MySQL 8.4 and a representative existing-database upgrade have not been recorded.
 - Secure local administrator creation through the interactive CLI passed; TOTP/recovery, session isolation/revocation and recent-auth flows have not been independently verified end to end.
 - Database-backed final-stock concurrency, checkout idempotency, delivery/COD transitions, and reconciliation-balance results have not been recorded. Grouped inventory and cash summaries are read projections only.
-- Hosted Docker builds, Trivy execution, SARIF upload, and SBOM generation completed. The security workflow remains failed because Trivy correctly blocked all three runtime images on confirmed HIGH/CRITICAL findings; Docker service health and controlled deployment evidence remain absent.
+- Hosted Docker builds, Trivy execution, SARIF upload, and SBOM generation completed. Security run 29205303375 correctly blocked all three runtime images on confirmed HIGH/CRITICAL findings. The current API and worker Dockerfiles narrowly update their bundled npm runtime tool to the first compatible fixed release; the web image remains blocked pending an explicitly reviewed NGINX image-line upgrade. Docker service health and controlled deployment evidence remain absent.
 - Backup creation, isolated restore and measured RPO/RTO evidence are absent.
 
 ## Known limitations
@@ -56,7 +56,7 @@ The API and web development servers were started and probed successfully. `/api/
 - Provider, network, WAF/egress, key custody and CI trust controls cannot be finalized without the target environment.
 - Authentication realm separation, mandatory 2FA, CSRF, and the new read-route permission metadata/denials have targeted local test evidence, but upload handling, runtime log redaction, the complete authorization matrix, queue replay, query plans, and transactional invariants still require broader executable evidence.
 - The package audit is clear after the narrow Prisma/Prisma Client 6.19.3 update moved transitive `effect` from 3.18.4 to 3.21.0, addressing GHSA-38f7-945m-qr2g without a major dependency upgrade.
-- Trivy reports 25 unique HIGH/CRITICAL CVEs: CVE-2026-12151 in npm's bundled `undici` for the API and worker images, plus 24 CVEs in the web image's NGINX/Alpine packages. The existing NGINX 1.28 image line has no published 1.28.3 image tag, so an NGINX image-line upgrade and the individual Alpine package updates require explicit compatibility review rather than a silent broad upgrade.
+- Trivy run 29205303375 reported 25 unique HIGH/CRITICAL CVEs: CVE-2026-12151 in npm's bundled `undici` for the API and worker images, plus 24 CVEs in the web image's NGINX/Alpine packages. The API and worker runtime stages now pin npm 11.18.0, the first npm 11 release containing fixed `undici` 6.27.0. The existing NGINX 1.28 image line has no published 1.28.3 image tag, so the remaining web remediation requires an explicit image-line compatibility review rather than a silent broad upgrade.
 - Third-party actions now use valid stable major release channels, but immutable commit-SHA action and image pinning remains open hardening work.
 
 ## Missing infrastructure credentials

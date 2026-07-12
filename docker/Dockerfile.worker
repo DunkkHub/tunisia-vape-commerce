@@ -13,6 +13,7 @@ RUN pnpm --filter @vape/worker... build
 RUN pnpm --filter @vape/worker deploy --prod --legacy /opt/worker
 
 FROM ${NODE_IMAGE} AS runtime
+RUN npm install --global npm@11.18.0 --no-audit --no-fund && npm cache clean --force
 RUN apk add --no-cache dumb-init libstdc++
 ENV NODE_ENV=production
 WORKDIR /app

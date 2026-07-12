@@ -20,6 +20,7 @@ ENTRYPOINT ["dumb-init", "--"]
 CMD ["pnpm", "prisma:migrate:deploy"]
 
 FROM ${NODE_IMAGE} AS runtime
+RUN npm install --global npm@11.18.0 --no-audit --no-fund && npm cache clean --force
 RUN apk add --no-cache dumb-init openssl libstdc++
 ENV NODE_ENV=production
 ENV PORT=3000
