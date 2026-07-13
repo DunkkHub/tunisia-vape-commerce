@@ -16,6 +16,8 @@ env:
   NODE_ENV: test
   DATABASE_URL: mysql://app_user:ci_app_password@127.0.0.1:3306/vape_store
   DATABASE_MIGRATION_URL: mysql://root:ci_root_password@127.0.0.1:3306/vape_store
+  TEST_DATABASE_ADMIN_URL: mysql://root:ci_root_password@127.0.0.1:3306
+  TEST_REDIS_URL: redis://127.0.0.1:6379/15
   REDIS_URL: redis://127.0.0.1:6379
   WEB_URL: http://127.0.0.1:4173
   COOKIE_SECRET: ci-only-cookie-secret-that-is-never-used-outside-ci
