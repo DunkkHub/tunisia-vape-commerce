@@ -1,12 +1,16 @@
 import { BadRequestException } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgeGateService } from '../compliance/age-gate.service';
+import type { Environment } from '../config/environment';
 import type { PrismaService } from '../database/prisma.service';
 import { CatalogService } from './catalog.service';
 
+const config = {} as ConfigService<Environment, true>;
+
 describe('CatalogService public filters and facets', () => {
   it('defensively rejects an inverted price range when called outside controller validation', async () => {
-    const service = new CatalogService({} as PrismaService, {} as AgeGateService);
+    const service = new CatalogService({} as PrismaService, {} as AgeGateService, config);
 
     try {
       await service.products(
@@ -66,7 +70,7 @@ describe('CatalogService public filters and facets', () => {
       productVariant: { fields: { priceMillimes: { name: 'priceMillimes' } } },
       $transaction: transaction,
     } as unknown as PrismaService;
-    const service = new CatalogService(prisma, {} as AgeGateService);
+    const service = new CatalogService(prisma, {} as AgeGateService, config);
 
     const response = await service.products(
       {
@@ -108,7 +112,7 @@ describe('CatalogService public filters and facets', () => {
       product: { groupBy },
       $queryRaw: vi.fn().mockResolvedValue([{ minimumMillimes: 9_900, maximumMillimes: 42_000 }]),
     } as unknown as PrismaService;
-    const service = new CatalogService(prisma, {} as AgeGateService);
+    const service = new CatalogService(prisma, {} as AgeGateService, config);
 
     await expect(service.facets()).resolves.toEqual({
       data: {

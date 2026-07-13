@@ -60,6 +60,25 @@ Prisma rollback is usually a forward corrective migration. If an application rol
 8. Observe latency, errors, DB connections/locks, queue depth, login failures, checkout failures, reservation failures, delivery errors, and COD discrepancies.
 9. Record evidence in PRODUCTION_READINESS_REPORT.md.
 
+## Production-shaped Compose overlay
+
+`docker-compose.yml` remains the development reference. A stricter single-host operational overlay
+is provided for production-shaped rehearsal:
+
+    docker compose -f docker-compose.yml -f docker-compose.production.yml config
+    docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
+
+The overlay is not a high-availability claim. It removes host-published MySQL, Redis, MinIO, and
+Mailpit ports; requires database, Redis, cookie, field-encryption, and MySQL secret inputs without
+placeholder defaults; maps `DATABASE_MIGRATION_URL` explicitly into the migration container's
+`DATABASE_URL`; adds authenticated Redis configuration from a mounted secret; switches API health
+to readiness; checks worker heartbeat age; and adds bounded graceful-stop periods. Base resource
+limits are starting guidance only and must be load-tested on the selected platform.
+
+Run `pnpm verify:db-privileges` with the runtime `DATABASE_URL` after database provisioning. It
+performs a randomized, cleaned-up DDL probe and succeeds only when MySQL denies `CREATE` with the
+expected permission error. Migration deployment must run under the separate migration URL.
+
 ## Health behavior
 
 - Liveness answers only when the process event loop is functioning.
@@ -67,6 +86,12 @@ Prisma rollback is usually a forward corrective migration. If an application rol
 - A worker reports heartbeat/queue connectivity separately.
 - Health responses contain no credentials, versions useful to attackers, raw provider errors, or database topology.
 - During shutdown, stop accepting traffic, drain bounded in-flight HTTP work, pause new queue claims, finish/return jobs safely, and close pools before the orchestrator deadline.
+
+`/api/v1/health/live` is deliberately process-only. `/api/v1/health/ready` returns only named
+`up`/`down` summaries and requires MySQL connectivity, Redis PONG, a recent healthy durable-worker
+heartbeat, the configured expected migration, and no unfinished migration. Configure
+`EXPECTED_MIGRATION_NAME`, `HEALTHCHECK_TIMEOUT_MS`, and `WORKER_HEARTBEAT_MAX_AGE_SECONDS` with the
+deployed image. A dependency's address, version, exception, or credential is never returned.
 
 ## Rollback
 

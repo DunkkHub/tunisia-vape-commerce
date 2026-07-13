@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ShieldCheck } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -34,6 +34,179 @@ function nullableText(value: string) {
 
 function nullableInteger(value: string) {
   return value === '' ? null : Number(value);
+}
+
+const formText = (form: FormData, key: string): string => {
+  const value = form.get(key);
+  return typeof value === 'string' ? value.trim() : '';
+};
+
+function VariantManager({ productId }: { productId: string }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const variants = useQuery({
+    queryKey: ['admin', 'product', productId, 'variants'],
+    queryFn: () => adminDataClient.productVariants(productId),
+  });
+  const refresh = () =>
+    queryClient.invalidateQueries({ queryKey: ['admin', 'product', productId, 'variants'] });
+  const create = useMutation({
+    mutationFn: (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const promotional = formText(form, 'promotionalPriceMillimes');
+      return adminDataClient.createProductVariant(productId, {
+        nameFr: formText(form, 'nameFr'),
+        nameAr: formText(form, 'nameAr'),
+        sku: formText(form, 'sku'),
+        costMillimes: Number(formText(form, 'costMillimes')),
+        priceMillimes: Number(formText(form, 'priceMillimes')),
+        promotionalPriceMillimes: promotional ? Number(promotional) : null,
+        lowStockThreshold: Number(formText(form, 'lowStockThreshold') || '0'),
+      });
+    },
+    onSuccess: () => void refresh(),
+  });
+  const update = useMutation({
+    mutationFn: ({
+      variantId,
+      event,
+    }: {
+      variantId: string;
+      event: FormEvent<HTMLFormElement>;
+    }) => {
+      event.preventDefault();
+      const variant = variants.data!.items.find((item) => item.id === variantId)!;
+      const form = new FormData(event.currentTarget);
+      const promotional = formText(form, 'promotionalPriceMillimes');
+      const status = formText(form, 'publicationStatus') as 'DRAFT' | 'PUBLISHED' | 'SUSPENDED';
+      return adminDataClient.updateProductVariant(productId, variantId, {
+        version: variant.version,
+        priceMillimes: Number(formText(form, 'priceMillimes')),
+        promotionalPriceMillimes: promotional ? Number(promotional) : null,
+        lowStockThreshold: Number(formText(form, 'lowStockThreshold') || '0'),
+        publicationStatus: status,
+      });
+    },
+    onSuccess: () => void refresh(),
+  });
+  const archive = useMutation({
+    mutationFn: ({ variantId, action }: { variantId: string; action: 'archive' | 'restore' }) => {
+      const variant = variants.data!.items.find((item) => item.id === variantId)!;
+      return adminDataClient.productVariantArchiveAction(
+        productId,
+        variantId,
+        action,
+        variant.version,
+      );
+    },
+    onSuccess: () => void refresh(),
+  });
+
+  return (
+    <section className="admin-panel">
+      <h2>Variantes, prix et seuils</h2>
+      {variants.isPending ? <LoadingState label={t('common.loading')} tone="admin" /> : null}
+      {variants.data?.items.map((variant) => (
+        <form
+          className="admin-panel"
+          key={variant.id}
+          onSubmit={(event) => update.mutate({ variantId: variant.id, event })}
+        >
+          <strong>
+            {variant.nameFr} · {variant.sku}
+          </strong>
+          <div className="admin-form-grid">
+            <FormField
+              name="priceMillimes"
+              label="Prix (millimes)"
+              type="number"
+              min={0}
+              defaultValue={variant.priceMillimes}
+            />
+            <FormField
+              name="promotionalPriceMillimes"
+              label="Prix promotionnel (millimes)"
+              type="number"
+              min={0}
+              defaultValue={variant.promotionalPriceMillimes ?? ''}
+            />
+            <FormField
+              name="lowStockThreshold"
+              label="Seuil de stock bas"
+              type="number"
+              min={0}
+              defaultValue={variant.lowStockThreshold}
+            />
+            <SelectField
+              name="publicationStatus"
+              label={t('common.status')}
+              defaultValue={
+                variant.publicationStatus === 'ARCHIVED' ? 'DRAFT' : variant.publicationStatus
+              }
+              disabled={Boolean(variant.archivedAt)}
+            >
+              <option value="DRAFT">{t('admin.draft')}</option>
+              <option value="PUBLISHED">{t('admin.publishedStatus')}</option>
+              <option value="SUSPENDED">{t('admin.suspended')}</option>
+            </SelectField>
+          </div>
+          <div className="admin-heading-actions">
+            <Button
+              type="submit"
+              variant="admin"
+              loading={update.isPending}
+              disabled={Boolean(variant.archivedAt)}
+            >
+              Mettre à jour la variante
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              loading={archive.isPending}
+              onClick={() =>
+                archive.mutate({
+                  variantId: variant.id,
+                  action: variant.archivedAt ? 'restore' : 'archive',
+                })
+              }
+            >
+              {variant.archivedAt ? 'Restaurer' : 'Archiver'}
+            </Button>
+          </div>
+        </form>
+      ))}
+      <form className="admin-panel" onSubmit={(event) => create.mutate(event)}>
+        <h3>Nouvelle variante (brouillon)</h3>
+        <div className="admin-form-grid">
+          <FormField name="nameFr" label={t('admin.nameFr')} required />
+          <FormField name="nameAr" label={t('admin.nameAr')} dir="rtl" required />
+          <FormField name="sku" label={t('admin.columns.sku')} required />
+          <FormField name="costMillimes" label="Coût (millimes)" type="number" min={0} required />
+          <FormField name="priceMillimes" label="Prix (millimes)" type="number" min={0} required />
+          <FormField
+            name="promotionalPriceMillimes"
+            label="Prix promotionnel (millimes)"
+            type="number"
+            min={0}
+          />
+          <FormField
+            name="lowStockThreshold"
+            label="Seuil de stock bas"
+            type="number"
+            min={0}
+            defaultValue={0}
+          />
+        </div>
+        <Button type="submit" variant="admin" loading={create.isPending}>
+          Créer la variante
+        </Button>
+      </form>
+      {variants.isError || create.isError || update.isError || archive.isError ? (
+        <ErrorState compact />
+      ) : null}
+    </section>
+  );
 }
 
 export function AdminProductEditorPage() {
@@ -98,6 +271,14 @@ export function AdminProductEditorPage() {
     queryKey: ['admin', 'product', id],
     queryFn: () => adminDataClient.product(id ?? ''),
     enabled: editing,
+  });
+  const categories = useQuery({
+    queryKey: ['admin', 'categories', 'editor'],
+    queryFn: () => adminDataClient.list('categories', 'page=1&limit=50&sort=name'),
+  });
+  const brands = useQuery({
+    queryKey: ['admin', 'brands', 'editor'],
+    queryFn: () => adminDataClient.list('brands', 'page=1&limit=50&sort=name'),
   });
 
   useEffect(() => {
@@ -216,16 +397,30 @@ export function AdminProductEditorPage() {
             error={form.formState.errors.flavor?.message}
             {...form.register('flavor')}
           />
-          <FormField
+          <SelectField
             label={t('admin.categoryId')}
             error={form.formState.errors.categoryId?.message}
             {...form.register('categoryId')}
-          />
-          <FormField
+          >
+            <option value="">—</option>
+            {categories.data?.items.map((category) => (
+              <option key={category.id} value={category.id}>
+                {typeof category.nameFr === 'string' ? category.nameFr : category.id}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField
             label={t('admin.brandOptional')}
             error={form.formState.errors.brandId?.message}
             {...form.register('brandId')}
-          />
+          >
+            <option value="">—</option>
+            {brands.data?.items.map((brand) => (
+              <option key={brand.id} value={brand.id}>
+                {typeof brand.name === 'string' ? brand.name : brand.id}
+              </option>
+            ))}
+          </SelectField>
           <FormField
             label={t('admin.skuOptional')}
             error={form.formState.errors.sku?.message}
@@ -295,6 +490,7 @@ export function AdminProductEditorPage() {
           {t('admin.saveProduct')}
         </Button>
       </form>
+      {editing && id ? <VariantManager productId={id} /> : null}
     </div>
   );
 }

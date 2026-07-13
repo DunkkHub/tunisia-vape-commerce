@@ -1,0 +1,101 @@
+services:
+  mysql:
+    ports: !reset []
+    environment:
+      MYSQL_ROOT_PASSWORD: null
+      MYSQL_PASSWORD: null
+      MYSQL_MIGRATION_PASSWORD: null
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_app_password
+      MYSQL_MIGRATION_PASSWORD_FILE: /run/secrets/mysql_migration_password
+    secrets:
+      - mysql_root_password
+      - mysql_app_password
+      - mysql_migration_password
+    stop_grace_period: 1m
+
+  redis:
+    ports: !reset []
+    command: ['/bin/sh', '/usr/local/bin/production-redis-entrypoint.sh']
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    volumes:
+      - ./docker/redis/production-entrypoint.sh:/usr/local/bin/production-redis-entrypoint.sh:ro
+    secrets:
+      - redis_password
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'REDISCLI_AUTH="$$(cat /run/secrets/redis_password)" redis-cli ping | grep -q PONG',
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    stop_grace_period: 30s
+
+  minio:
+    ports: !reset []
+
+  mailpit:
+    ports: !reset []
+
+  migrate:
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL is required}
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL is required}
+      COOKIE_SECRET: ${COOKIE_SECRET:?COOKIE_SECRET is required}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY is required}
+      WEB_URL: ${WEB_URL:?WEB_URL is required}
+
+  api:
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      WEB_URL: ${WEB_URL:?WEB_URL is required}
+      COOKIE_SECRET: ${COOKIE_SECRET:?COOKIE_SECRET is required}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY is required}
+      EXPECTED_MIGRATION_NAME: ${EXPECTED_MIGRATION_NAME:?EXPECTED_MIGRATION_NAME is required}
+      HEALTHCHECK_TIMEOUT_MS: ${HEALTHCHECK_TIMEOUT_MS:-2000}
+      WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${WORKER_HEARTBEAT_MAX_AGE_SECONDS:-60}
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:3000/api/v1/health/ready']
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 45s
+    stop_grace_period: 30s
+
+  worker:
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      NOTIFICATION_ADAPTER: disabled
+      EXPECTED_MIGRATION_NAME: ${EXPECTED_MIGRATION_NAME:?EXPECTED_MIGRATION_NAME is required}
+      WORKER_HEALTHCHECK_MAX_AGE_SECONDS: ${WORKER_HEALTHCHECK_MAX_AGE_SECONDS:-60}
+    healthcheck:
+      test: ['CMD', 'node', 'worker/dist/healthcheck.js']
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 1m
+
+  web:
+    stop_grace_period: 15s
+
+  nginx:
+    stop_grace_period: 30s
+
+secrets:
+  mysql_root_password:
+    file: ${MYSQL_ROOT_PASSWORD_FILE:?MYSQL_ROOT_PASSWORD_FILE is required}
+  mysql_app_password:
+    file: ${MYSQL_APP_PASSWORD_FILE:?MYSQL_APP_PASSWORD_FILE is required}
+  mysql_migration_password:
+    file: ${MYSQL_MIGRATION_PASSWORD_FILE:?MYSQL_MIGRATION_PASSWORD_FILE is required}
+  redis_password:
+    file: ${REDIS_PASSWORD_FILE:?REDIS_PASSWORD_FILE is required}

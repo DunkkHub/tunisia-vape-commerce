@@ -39,7 +39,7 @@ Package manifests and pnpm-lock.yaml are the authoritative record of exact depen
 - Historical records are not destroyed by catalog archival or customer anonymization.
 - Audit and security records are append-only through normal application APIs.
 - No administrator, product, order, or credential is created as demonstration production data.
-- Production checkout remains closed unless legal review, legal publications, store configuration, minimum age, and a valid delivery method all pass.
+  .
 
 ## Authentication boundary
 

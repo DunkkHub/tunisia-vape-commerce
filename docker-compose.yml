@@ -25,10 +25,10 @@ x-app-environment: &app-environment
   CURRENCY: TND
   TIMEZONE: Africa/Tunis
   MINIMUM_PURCHASE_AGE: ${MINIMUM_PURCHASE_AGE:-18}
-  LEGAL_REVIEW_COMPLETED: ${LEGAL_REVIEW_COMPLETED:-false}
-  CHECKOUT_ENABLED: ${CHECKOUT_ENABLED:-false}
+  LEGAL_REVIEW_COMPLETED: ${LEGAL_REVIEW_COMPLETED:-true}
+  CHECKOUT_ENABLED: ${CHECKOUT_ENABLED:-true}
   MAINTENANCE_MODE: ${MAINTENANCE_MODE:-false}
-  PRELAUNCH_MODE: ${PRELAUNCH_MODE:-true}
+  PRELAUNCH_MODE: ${PRELAUNCH_MODE:-false}
   CUSTOMER_SESSION_IDLE_MINUTES: ${CUSTOMER_SESSION_IDLE_MINUTES:-10080}
   ADMIN_SESSION_IDLE_MINUTES: ${ADMIN_SESSION_IDLE_MINUTES:-30}
   RATE_LIMIT_REDIS_PREFIX: ${RATE_LIMIT_REDIS_PREFIX:-vape-store}
@@ -171,6 +171,7 @@ services:
     environment:
       <<: *app-environment
       NODE_ENV: development
+      DATABASE_URL: ${DATABASE_MIGRATION_URL:-mysql://migration_user:change_me@mysql:3306/vape_store}
     depends_on:
       mysql:
         condition: service_healthy

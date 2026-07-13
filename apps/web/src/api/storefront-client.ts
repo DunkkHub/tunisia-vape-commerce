@@ -5,7 +5,10 @@ import type {
   CatalogFacets,
   CategorySummary,
   CheckoutPayload,
+  CheckoutQuote,
+  CheckoutQuoteRequest,
   CheckoutResult,
+  DeliveryMethodOption,
   DeliveryWindowOption,
   GeographyOption,
   LegalDocument,
@@ -55,6 +58,11 @@ export const storefrontClient = {
       headers: { 'Idempotency-Key': idempotencyKey },
       body: jsonBody(payload),
     }),
+  checkoutQuote: (payload: CheckoutQuoteRequest) =>
+    storeRequest<CheckoutQuote>('/checkout/quote', {
+      method: 'POST',
+      body: jsonBody(payload),
+    }),
   governorates: () => storeRequest<GeographyOption[]>('/geography/governorates'),
   delegations: (governorateId: string) =>
     storeRequest<GeographyOption[]>(
@@ -68,9 +76,23 @@ export const storefrontClient = {
     storeRequest<DeliveryWindowOption[]>(
       `/delivery/windows?localityId=${encodeURIComponent(localityId)}`,
     ),
-  orders: () => storeRequest<Pagination<OrderSummary>>('/customers/me/orders'),
+  deliveryMethods: (localityId?: string) =>
+    storeRequest<DeliveryMethodOption[]>(
+      `/delivery/methods${localityId ? `?localityId=${encodeURIComponent(localityId)}` : ''}`,
+    ),
+  orders: () => storeRequest<Pagination<OrderSummary>>('/orders'),
   order: (orderNumber: string) =>
-    storeRequest<OrderSummary>(`/customers/me/orders/${encodeURIComponent(orderNumber)}`),
+    storeRequest<OrderSummary>(`/orders/${encodeURIComponent(orderNumber)}`),
+  cancelOrder: (orderNumber: string, expectedVersion: number, reason: string) =>
+    storeRequest<OrderSummary>(`/orders/${encodeURIComponent(orderNumber)}/cancel`, {
+      method: 'POST',
+      body: jsonBody({
+        expectedVersion,
+        confirmed: true,
+        confirmation: 'CANCEL_ORDER',
+        reason,
+      }),
+    }),
   addresses: () => storeRequest<AddressSummary[]>('/customers/me/addresses'),
   wishlist: () => storeRequest<Pagination<ProductSummary>>('/wishlist'),
   legal: (slug: string) =>

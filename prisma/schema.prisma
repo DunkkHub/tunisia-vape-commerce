@@ -2445,6 +2445,17 @@ enum BackgroundJobStatus {
   CANCELLED
 }
 
+enum OutboxEventStatus {
+  PENDING
+  LEASED
+  PUBLISHED
+  PROCESSING
+  RETRY
+  PROCESSED
+  DEAD_LETTER
+  CANCELLED
+}
+
 enum SystemHealthStatus {
   HEALTHY
   DEGRADED
@@ -2499,6 +2510,35 @@ model BackgroundJobRecord {
   @@unique([queue, externalJobId])
   @@index([queue, status, scheduledAt])
   @@index([status, nextRetryAt])
+}
+
+model OutboxEvent {
+  id               String            @id @default(cuid()) @db.VarChar(30)
+  deterministicKey String            @unique @db.VarChar(191)
+  aggregateType    String            @db.VarChar(80)
+  aggregateId      String            @db.VarChar(80)
+  eventType        String            @db.VarChar(120)
+  eventVersion     Int               @default(1)
+  payload          Json
+  status           OutboxEventStatus @default(PENDING)
+  availableAt      DateTime          @default(now()) @db.DateTime(3)
+  leaseOwner       String?           @db.VarChar(160)
+  leaseExpiresAt   DateTime?         @db.DateTime(3)
+  attemptCount     Int               @default(0)
+  maxAttempts      Int               @default(8)
+  lastAttemptAt    DateTime?         @db.DateTime(3)
+  publishedAt      DateTime?         @db.DateTime(3)
+  publishedJobId   String?           @db.VarChar(191)
+  processedAt      DateTime?         @db.DateTime(3)
+  deadLetteredAt   DateTime?         @db.DateTime(3)
+  safeErrorCode    String?           @db.VarChar(100)
+  createdAt        DateTime          @default(now()) @db.DateTime(3)
+  updatedAt        DateTime          @updatedAt @db.DateTime(3)
+
+  @@index([status, availableAt, id])
+  @@index([status, leaseExpiresAt])
+  @@index([aggregateType, aggregateId, createdAt])
+  @@index([eventType, createdAt])
 }
 
 model SystemHealthRecord {

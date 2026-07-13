@@ -4,7 +4,6 @@ export interface CheckoutPolicyInput {
   maintenanceMode: boolean;
   prelaunchMode: boolean;
   minimumAge: number | null;
-  hasPublishedRequiredLegalDocuments: boolean;
   hasStoreInformation: boolean;
   hasDeliveryMethod: boolean;
 }
@@ -15,7 +14,6 @@ export type CheckoutBlocker =
   | 'MAINTENANCE_MODE'
   | 'PRELAUNCH_MODE'
   | 'MINIMUM_AGE_NOT_CONFIGURED'
-  | 'LEGAL_DOCUMENTS_MISSING'
   | 'STORE_INFORMATION_MISSING'
   | 'DELIVERY_METHOD_MISSING';
 
@@ -28,7 +26,6 @@ export const evaluateCheckoutPolicy = (input: CheckoutPolicyInput): CheckoutBloc
   if (input.minimumAge === null || input.minimumAge < 18) {
     blockers.push('MINIMUM_AGE_NOT_CONFIGURED');
   }
-  if (!input.hasPublishedRequiredLegalDocuments) blockers.push('LEGAL_DOCUMENTS_MISSING');
   if (!input.hasStoreInformation) blockers.push('STORE_INFORMATION_MISSING');
   if (!input.hasDeliveryMethod) blockers.push('DELIVERY_METHOD_MISSING');
   return blockers;

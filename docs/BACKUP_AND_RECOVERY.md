@@ -52,11 +52,23 @@ Do not represent these as achieved until a timed restore exercise proves them on
 
 ## Local logical backup example
 
-For disposable local verification only:
+The repository backup command requires a dedicated read-capable backup URL, a 32-byte base64 key,
+an external key identifier, and an environment label:
 
-    docker compose exec -T mysql sh -c 'exec mysqldump --single-transaction --quick --routines --events --triggers --set-gtid-purged=OFF -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' > local-backup.sql
+    DATABASE_BACKUP_URL=mysql://backup_user:...@mysql:3306/vape_store
+    BACKUP_ENCRYPTION_KEY_BASE64=<32 random bytes, base64>
+    BACKUP_ENCRYPTION_KEY_ID=<managed-key-version>
+    BACKUP_ENVIRONMENT=<environment-name>
+    pnpm backup:mysql
 
-This local command exposes the password to a process argument inside the isolated development container. Production must use the provider's authenticated backup mechanism or a protected client option file and a dedicated backup identity.
+The command uses a consistent logical transaction and includes routines, scheduled events, triggers,
+all commerce/audit/outbox tables, and `_prisma_migrations`. It streams directly into AES-256-GCM,
+writes through a restricted `.partial` file, deletes incomplete output on failure, and atomically
+publishes the encrypted file plus a restricted JSON manifest. The manifest records ciphertext
+SHA-256 and size, plaintext size, database/dump tool versions, latest migration, advisory table
+counts, environment, and encryption key ID. Passwords are passed to MySQL tools through their
+environment rather than process arguments; a managed provider or protected option file is still
+preferred in production.
 
 Check the output is nonempty, capture a SHA-256 checksum, encrypt it before transport, and never commit it. Logical dumps containing customer data are sensitive.
 
@@ -74,11 +86,26 @@ Check the output is nonempty, capture a SHA-256 checksum, encrypt it before tran
 10. Run the verification suite below and record actual RPO, RTO, errors, row counts, and evidence.
 11. Destroy or retain the isolated copy according to approved sensitive-data handling, with audited deletion.
 
-Local import into a newly created disposable database:
+Repository restore tooling refuses an ordinary target. It requires a fully empty database and all
+of these independent confirmations:
 
-    docker compose exec -T mysql sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' < local-backup.sql
+    DATABASE_RESTORE_URL=mysql://restore_user:...@mysql:3306/vape_restore_drill
+    BACKUP_ENCRYPTION_KEY_BASE64=<matching-key>
+    RESTORE_TARGET_IS_DISPOSABLE=true
+    RESTORE_CONFIRM_DATABASE=vape_restore_drill
+    pnpm restore:mysql <backup.sql.enc> --confirm-empty-disposable-database
 
-Never import over the original local database when testing a restore.
+Before spawning a mutating MySQL client, restore verifies the manifest checksum/size and fully
+authenticates/decrypts AES-GCM into a mode-0600 file inside a mode-0700 temporary directory. It then
+proves the target database has zero tables. After import it runs migration, key table count,
+nonnegative inventory, active-reservation coverage, order/line money equation, and nonnegative cash
+invariants. Temporary plaintext is removed in `finally`. A failed logical import can still leave a
+partially populated target because MySQL DDL is not globally transactional; discard and recreate
+that disposable database before retrying. Never import over the source or production database.
+
+`pnpm verify:restore [manifest]` reruns read-only post-restore verification. Manifest table counts
+are advisory when writes occurred between metadata capture and the logical snapshot; invariant and
+migration failures are fatal.
 
 ## Restore verification
 

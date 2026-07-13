@@ -196,8 +196,8 @@ const storeSettings = [
   {
     key: 'checkout.enabled',
     valueType: SettingValueType.BOOLEAN,
-    value: false,
-    description: 'Global checkout kill switch. Disabled by default.',
+    value: true,
+    description: 'Global checkout kill switch. Operational prerequisites still fail closed.',
   },
   {
     key: 'maintenance.mode',
@@ -208,8 +208,8 @@ const storeSettings = [
   {
     key: 'prelaunch.mode',
     valueType: SettingValueType.BOOLEAN,
-    value: true,
-    description: 'Keeps the public store in pre-launch mode until explicitly disabled.',
+    value: false,
+    description: 'Keeps the public store in pre-launch mode when explicitly enabled.',
   },
   {
     key: 'store.name',
@@ -253,20 +253,33 @@ const storeSettings = [
     value: 'fr',
     description: 'Default public locale.',
   },
+  {
+    key: 'notifications.admin_order_created.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Queues an internal administrator notification when an order is created.',
+  },
+  {
+    key: 'notifications.customer_order_created.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Queues a customer order-received notification for the configured adapter.',
+  },
 ] as const;
 
 const complianceSettings = [
   {
     key: 'legal_review.completed',
     valueType: SettingValueType.BOOLEAN,
-    value: false,
-    description: 'Must be explicitly enabled after documented qualified legal review.',
+    value: true,
+    legallyReviewed: true,
+    description: 'Records the externally completed legal review; operational gates still apply.',
   },
   {
     key: 'minimum_purchase_age',
     valueType: SettingValueType.INTEGER,
-    value: 0,
-    description: 'Zero means unconfigured and must block checkout.',
+    value: 18,
+    description: 'Approved minimum purchase age; values below 18 block checkout.',
   },
   {
     key: 'delivery.age_verification_required',

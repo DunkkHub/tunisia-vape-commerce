@@ -8,15 +8,15 @@ This shape keeps database transactions and business invariants in one deployment
 
 ## Runtime components
 
-| Component     | Responsibility                                                          | Persistent authority                             |
-| ------------- | ----------------------------------------------------------------------- | ------------------------------------------------ |
-| React web     | Storefront and /admin UI, i18n, RTL, accessible interaction             | None; server-backed state only                   |
-| NestJS API    | Validation, authentication, RBAC, business rules, transactions, OpenAPI | MySQL through Prisma                             |
-| BullMQ worker | Notification, export, media, expiry, and retry jobs                     | Job result/status in MySQL; queue state in Redis |
-| MySQL 8.4     | Orders, inventory, catalog, customer, delivery, COD, consent, audit     | Primary transactional record                     |
-| Redis         | Sessions, rate limits, queues, short caches, distributed coordination   | Reconstructible except active sessions/queues    |
-| S3/MinIO      | Original and derived product media, controlled evidence references      | Versioned object data                            |
-| Nginx         | TLS/proxy/static delivery, request limits, security headers             | None                                             |
+| Component     | Responsibility                                                          | Persistent authority                                  |
+| ------------- | ----------------------------------------------------------------------- | ----------------------------------------------------- |
+| React web     | Storefront and /admin UI, i18n, RTL, accessible interaction             | None; server-backed state only                        |
+| NestJS API    | Validation, authentication, RBAC, business rules, transactions, OpenAPI | MySQL through Prisma                                  |
+| BullMQ worker | Durable-outbox publication, reservation expiry and notification retry   | Event/notification state in MySQL; transport in Redis |
+| MySQL 8.4     | Orders, inventory, catalog, customer, delivery, COD, consent, audit     | Primary transactional record                          |
+| Redis         | Sessions, rate limits, queues, short caches, distributed coordination   | Reconstructible except active sessions/queues         |
+| S3/MinIO      | Original and derived product media, controlled evidence references      | Versioned object data                                 |
+| Nginx         | TLS/proxy/static delivery, request limits, security headers             | None                                                  |
 
 Mailpit and MinIO in Docker Compose are development services, not production service selections.
 
@@ -50,39 +50,45 @@ For staging/production, use different storefront and admin hostnames with host-o
 
 ## Module boundaries
 
-NestJS modules follow the domains named in the product specification. Modules may call public application services, not another module's Prisma internals. Cross-domain operations are coordinated by explicit use cases:
+NestJS modules follow the domains named in the product specification. Modules may call public application services, not another module's Prisma internals. The current API composes separate commerce, inventory, order intake, delivery configuration, manual delivery, cash, settings, health, access, and operations modules. Cross-domain operations are coordinated by explicit use cases:
 
-- Checkout coordinates carts, catalog, promotions, geography/rates, inventory, orders, consent, and an outbox in one database transaction.
+- Checkout coordinates catalog, geography/rates, inventory, orders, consent, and a durable queued `Notification` in one database transaction. The worker source later upserts a deterministic `OutboxEvent` for each due notification.
 - Delivery transition coordinates delivery history, order projection, age outcome, inventory return workflow, COD collection, and notifications.
 - COD reconciliation coordinates collections, remittances, discrepancies, approval, and append-only audit.
-- Compliance gate reads versioned settings/legal publications and is enforced inside checkout, never only in React.
+- Compliance/operations gate reads environment overrides plus versioned store/compliance settings and is enforced inside quote and order creation, never only in React. `legal_review.completed` is recorded true by default under owner instruction. Published `LegalDocumentVersion` rows are optional consent-version evidence: a supplied terms/privacy version must be published and effective, but publication is not a global checkout-readiness blocker.
+
+Customer carts and orders are currently authenticated-customer flows. There is no guest-cart checkout implementation. Manual courier/pickup workflows deliberately do not claim a real courier, SMS, email, or payment-provider integration.
 
 ## Transaction and concurrency boundaries
 
-Checkout uses a short MySQL transaction:
+Authenticated-customer COD checkout uses a bounded MySQL `READ COMMITTED` transaction with a five-second acquisition wait, 15-second transaction timeout, and at most three recognized transaction-conflict attempts:
 
-1. Claim a unique customer/guest-scoped idempotency key.
-2. Load the server cart and validate catalog publication and restrictions.
+1. Claim or lock a unique customer-scoped SHA-256 idempotency key and request fingerprint. A completed identical request replays its stored order response; a changed request conflicts.
+2. Validate the launch policy, active customer/blocklist state, submitted items, catalog publication/restrictions, integer prices, and request consent.
 3. Lock inventory rows in a deterministic variant/location order.
 4. Calculate active reservations and reject insufficient availability.
 5. Resolve promotion and delivery rules and compute integer-millime totals.
-6. Create immutable address, item, warning, delivery, promotion, consent, and age snapshots.
-7. Create reservations, order, initial history, idempotency result, audit, and outbox records.
+6. Create immutable address, item, warning, delivery-fee/rule and consent snapshots. Optional supplied terms/privacy document versions are validated and snapshotted.
+7. Create active 30-minute reservations, zero-physical-delta reservation movements, the pending order/delivery histories, expected COD collection, queued notification, audit record, and completed idempotency result.
 8. Commit; only then can workers perform external side effects.
 
 Deadlocks are retried a bounded number of times with jitter. A unique idempotency constraint makes retries return the original result. Sequence/order-number allocation is transactional and does not use max-plus-one.
 
-InventoryItem.onHandQuantity is authoritative. Available quantity is on-hand minus unexpired active reservations. Confirming/deducting stock and releasing/expiring reservations are idempotent state transitions with stock-movement records. Returned stock goes to inspection and is never restored automatically.
+`InventoryItem.onHandQuantity` is authoritative. Available quantity is on-hand minus unexpired active reservations. Checkout does not decrement physical stock. Administrator confirmation locks the order, reservations, and inventory in stable order, requires complete unexpired reservation coverage and expected versions, decrements on-hand and consumes each reservation exactly once. Customer/admin cancellation and worker expiry only release an active reservation and clear its active key; they do not add to on-hand. Returned stock goes to inspection and is never restored automatically.
+
+Administrator edits use optimistic versions where the schema provides them. Delivery zones use `updatedAt`; delivery rates use `version`. `PickupLocation` and `DeliveryTimeWindow` have neither, so the API derives a SHA-256 state token and combines it with a row lock. MySQL/Prisma still cannot express every exclusive-owner, workflow, or append-only invariant; services fail closed and require real-database concurrency evidence.
 
 ## Delivery and COD state
 
 Order, delivery, return, payment, collection, and remittance are related but separate state machines. Delivery success does not by itself prove cash remittance. Reporting distinguishes order created, confirmed, delivered, cash collected, cash remitted, and cash reconciled.
 
-Every transition records actor, source state, target state, timestamp, request ID, reason/evidence metadata, and result. Impossible transitions are rejected even for a Super Administrator; exceptional correction uses a documented approval workflow and compensating event rather than history mutation.
+Every implemented transition records actor, source state, target state, timestamp, request ID, reason/evidence metadata, and result. Order intake supports confirmation, cancellation/rejection, preparation, store-pickup readiness, contact attempts, notes, and an audited printable slip. Manual delivery supports courier assignment/reassignment, controlled transitions/attempts, completion only with age and exact-COD evidence, and return completion without automatic restock. Impossible transitions are rejected even for a Super Administrator; exceptional correction uses a documented approval workflow and compensating event rather than history mutation.
+
+COD custody is separate from order and delivery state. Checkout creates an `EXPECTED` collection. Authorized operations record physical cash, allocate eligible collections to a draft courier remittance under locks, submit it for review, verify the declared amount or open a discrepancy, and resolve/write off a discrepancy with recent authentication and audit. Delivery success alone never marks cash remitted or reconciled.
 
 ## Queues and external effects
 
-Database changes and an outbox record commit together. A dispatcher publishes deterministic job IDs to BullMQ. Workers:
+MySQL `OutboxEvent` is the durable work ledger; BullMQ is transport only. The worker claims bounded ordered batches under `READ COMMITTED`, leases recoverable work, publishes a deterministic hashed BullMQ job ID, reloads and strictly validates the versioned payload from MySQL, and commits successful domain work with the `PROCESSED` transition. Supported version-1 sources are reservation-expiry requests and notification-dispatch requests. Workers:
 
 - are safe to run more than once;
 - use bounded exponential backoff and dead-letter handling;
@@ -91,7 +97,13 @@ Database changes and an outbox record commit together. A dispatcher publishes de
 - never keep a MySQL transaction open during network calls;
 - redact payloads and correlation metadata.
 
-Queue depth, oldest-job age, retries, dead letters, and handler latency are monitored.
+Reservation expiry locks expired active reservations and their inventory rows, marks each reservation `EXPIRED`, clears its active key, and writes a zero-delta release movement plus system audit. Notification payloads contain only a notification ID. The development console adapter logs safe metadata; unconfigured real providers retry and eventually dead-letter without copying recipients into Redis. Queue depth, oldest-job age, retries, dead letters, and handler latency still need production monitoring and staging evidence; there is no dead-letter replay UI.
+
+## Health and recovery boundaries
+
+`GET /api/v1/health/live` proves only that the API process can answer. `GET /api/v1/health/ready` is no-store and returns 503 unless MySQL responds, Redis answers `PING`, the configured expected migration is applied with no unfinished migration, and the latest `durable-outbox-worker` health record is fresh. It returns only named up/down checks and no credentials or database details.
+
+Logical backup tooling uses `mysqldump --single-transaction`, streams the dump through AES-256-GCM, and writes a checksum, key identifier, database/tool/migration metadata, byte counts, and selected table counts to a sidecar manifest. Restore refuses a non-empty or unconfirmed target, verifies checksum and authentication before starting MySQL mutation, restores only to an explicitly disposable database, then checks structure and invariants. Counts may differ when writes occurred during the logical backup and are advisory. Script tests are not a production-shaped restore drill; RPO/RTO remain unmeasured.
 
 ## Caching
 
@@ -105,7 +117,7 @@ User-facing text uses translation keys for French and Arabic. Document direction
 
 Controlled staging/production uses immutable images, at least two API replicas behind a health-aware proxy, separately scaled workers, managed or hardened MySQL with point-in-time recovery, authenticated Redis, versioned S3 storage, centralized telemetry, and a protected migration job. Database and Redis have no public ingress.
 
-The Docker Compose topology is a development/staging-reference environment, not evidence of high availability.
+The Docker Compose topology is a development/staging-reference environment, not evidence of high availability. Unit/static checks, local builds, or a successful logical backup script are not evidence of multi-instance safety, a restorable production backup, or production readiness.
 
 ## Architecture decisions deferred
 

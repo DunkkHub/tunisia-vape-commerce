@@ -1,29 +1,23 @@
-import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { Controller, Get, Header } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { PrismaService } from '../database/prisma.service';
+import { HealthService } from './health.service';
 
 @ApiTags('health')
 @Controller('health')
 export class HealthController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly health: HealthService) {}
 
   @Get('live')
-  @ApiOperation({ summary: 'Process liveness probe' })
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({ summary: 'Process-only liveness probe' })
   live(): { status: 'ok'; timestamp: string } {
     return { status: 'ok', timestamp: new Date().toISOString() };
   }
 
   @Get('ready')
-  @ApiOperation({ summary: 'Database readiness probe' })
-  async ready(): Promise<{ status: 'ready'; timestamp: string }> {
-    try {
-      await this.prisma.$queryRaw`SELECT 1`;
-      return { status: 'ready', timestamp: new Date().toISOString() };
-    } catch {
-      throw new ServiceUnavailableException({
-        code: 'DEPENDENCY_UNAVAILABLE',
-        message: 'A required dependency is unavailable.',
-      });
-    }
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({ summary: 'Safe readiness summary for required operational dependencies' })
+  ready() {
+    return this.health.ready();
   }
 }

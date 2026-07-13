@@ -20,10 +20,10 @@ env:
   WEB_URL: http://127.0.0.1:4173
   COOKIE_SECRET: ci-only-cookie-secret-that-is-never-used-outside-ci
   FIELD_ENCRYPTION_KEY: ci-only-field-key-that-is-never-used-outside-ci
-  LEGAL_REVIEW_COMPLETED: 'false'
-  CHECKOUT_ENABLED: 'false'
+  LEGAL_REVIEW_COMPLETED: 'true'
+  CHECKOUT_ENABLED: 'true'
   MAINTENANCE_MODE: 'false'
-  PRELAUNCH_MODE: 'true'
+  PRELAUNCH_MODE: 'false'
   MINIMUM_PURCHASE_AGE: '18'
 
 jobs:

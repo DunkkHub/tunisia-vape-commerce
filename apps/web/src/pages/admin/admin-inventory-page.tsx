@@ -3,6 +3,7 @@ import { RefreshCw, Search, X } from 'lucide-react';
 import { useMemo, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 
 import { adminDataClient } from '../../api/admin-data-client';
 import type { AdminInventoryPage } from '../../api/types';
@@ -206,6 +207,7 @@ export function AdminInventoryPage() {
                     <th scope="col">{t('admin.columns.reserved')}</th>
                     <th scope="col">{t('admin.columns.remaining')}</th>
                     <th scope="col">{t('admin.columns.status')}</th>
+                    <th scope="col">{t('common.actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -220,6 +222,9 @@ export function AdminInventoryPage() {
                       <td>{item.reservedQuantity}</td>
                       <td>{item.remainingQuantity}</td>
                       <td>{item.status}</td>
+                      <td>
+                        <Link to={`/admin/inventory/${item.id}`}>{t('common.details')}</Link>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -142,7 +142,12 @@ export interface OrderSummary {
   id: string;
   orderNumber: string;
   status: string;
+  paymentStatus: string;
+  deliveryStatus: string | null;
   grandTotalMillimes: number;
+  currency: 'TND';
+  cancellable: boolean;
+  version: number;
   createdAt: string;
 }
 
@@ -172,31 +177,63 @@ export interface StoreContent {
 }
 
 export interface CheckoutPayload {
-  fullName: string;
+  items: Array<{ variantId: string; quantity: number }>;
+  localityId?: string | undefined;
+  pickupLocationId?: string | undefined;
+  express?: boolean | undefined;
+  customerName: string;
   phone: string;
   email?: string | undefined;
-  governorateId: string;
-  delegationId: string;
-  localityId: string;
-  postalCode: string;
-  street: string;
-  building?: string | undefined;
-  floor?: string | undefined;
-  apartment?: string | undefined;
-  landmark?: string | undefined;
-  deliveryInstructions?: string | undefined;
-  deliveryMethod: 'DELIVERY' | 'PICKUP';
-  preferredDeliveryDate?: string | undefined;
-  preferredDeliveryTimeWindowId?: string | undefined;
-  adultConfirmation: true;
-  termsAccepted: true;
-  privacyAccepted: true;
+  address?: {
+    street: string;
+    building?: string | undefined;
+    floor?: string | undefined;
+    apartment?: string | undefined;
+    landmark?: string | undefined;
+    postalCode?: string | undefined;
+    instructions?: string | undefined;
+  };
+  consent: {
+    ageConfirmed: true;
+    termsAccepted: true;
+    privacyAccepted: true;
+  };
 }
 
 export interface CheckoutResult {
-  orderId: string;
+  id: string;
   orderNumber: string;
   status: string;
+  paymentStatus: string;
+  currency: 'TND';
+  subtotalMillimes: number;
+  discountTotalMillimes: number;
+  deliveryTotalMillimes: number;
+  taxTotalMillimes: number;
+  grandTotalMillimes: number;
+  expectedCodMillimes: number;
+  deliveryMethodType: 'COURIER' | 'STORE_PICKUP';
+  createdAt: string;
+}
+
+export interface CheckoutQuoteRequest {
+  items: Array<{ variantId: string; quantity: number }>;
+  localityId?: string | undefined;
+  pickupLocationId?: string | undefined;
+  express?: boolean | undefined;
+}
+
+export interface CheckoutQuote {
+  currency: 'TND';
+  subtotalMillimes: number;
+  discountTotalMillimes: number;
+  deliveryTotalMillimes: number;
+  taxTotalMillimes: number;
+  grandTotalMillimes: number;
+  expectedCodMillimes: number;
+  expiresAt: string;
+  stockReserved: false;
+  orderCreated: false;
 }
 
 export interface GeographyOption {
@@ -211,6 +248,15 @@ export interface DeliveryWindowOption {
   label: string;
 }
 
+export interface DeliveryMethodOption {
+  id: string;
+  type: 'COURIER' | 'STORE_PICKUP';
+  label: string;
+  address: string | null;
+  minimumOrderMillimes: number | null;
+  maximumCodMillimes: number | null;
+}
+
 export interface AdminMetricSet {
   ordersCreated: number;
   ordersDelivered: number;
@@ -218,6 +264,67 @@ export interface AdminMetricSet {
   codRemittedMillimes: number;
   lowStockCount: number;
   deliveryFailureCount: number;
+}
+
+export interface AdminOrderDetail {
+  id: string;
+  orderNumber: string;
+  customerName: string;
+  customerPhone: string;
+  customerEmail: string | null;
+  status: string;
+  paymentStatus: string;
+  deliveryMethodType: 'COURIER' | 'STORE_PICKUP';
+  currency: 'TND';
+  subtotalMillimes: number;
+  discountTotalMillimes: number;
+  deliveryTotalMillimes: number;
+  taxTotalMillimes: number;
+  grandTotalMillimes: number;
+  expectedCodMillimes: number;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  items: Array<{
+    id: string;
+    productName: string;
+    variantName: string;
+    sku: string;
+    quantity: number;
+    unitPriceMillimes: number;
+    lineTotalMillimes: number;
+  }>;
+  addresses: Array<{
+    id: string;
+    fullName: string;
+    phoneE164: string;
+    governorateName: string;
+    delegationName: string;
+    localityName: string | null;
+    postalCode: string | null;
+    street: string;
+  }>;
+  history: Array<{
+    id: string;
+    fromStatus: string | null;
+    toStatus: string;
+    reasonCode: string | null;
+    note: string | null;
+    createdAt: string;
+  }>;
+  notes: Array<{
+    id: string;
+    visibility: 'INTERNAL' | 'CUSTOMER_VISIBLE';
+    body: string;
+    createdAt: string;
+  }>;
+  delivery: { id: string; status: string; version: number } | null;
+  cashCollections: Array<{
+    id: string;
+    status: string;
+    expectedMillimes: number;
+    collectedMillimes: number;
+  }>;
 }
 
 export interface AdminStockTotals {
@@ -245,6 +352,51 @@ export interface AdminInventoryItem extends AdminStockTotals {
   updatedAt: string;
 }
 
+export interface AdminInventoryVariantDetail {
+  id: string;
+  productId: string;
+  productNameFr: string;
+  productNameAr: string;
+  nameFr: string;
+  nameAr: string;
+  sku: string;
+  lowStockThreshold: number;
+  version: number;
+  onHandQuantity: number;
+  reservedQuantity: number;
+  availableQuantity: number;
+  committedQuantity: number;
+  commitmentPolicy: 'DEDUCT_ON_CONFIRMATION';
+  asOf: string;
+  items: Array<{
+    id: string;
+    lotKey: string;
+    location: { id: string; code: string; name: string; active: boolean };
+    batch: {
+      id: string;
+      batchNumber: string;
+      expiryDate: string | null;
+      archivedAt: string | null;
+    } | null;
+    onHandQuantity: number;
+    reservedQuantity: number;
+    availableQuantity: number;
+    committedQuantity: number;
+    version: number;
+    updatedAt: string;
+  }>;
+}
+
+export interface AdminInventoryLocation {
+  id: string;
+  code: string;
+  name: string;
+  address: string | null;
+  active: boolean;
+  fulfillsOrders: boolean;
+  updatedAt: string;
+}
+
 export interface AdminInventoryPage extends Pagination<AdminInventoryItem> {
   asOf: string;
   availabilityDefinition: string;
@@ -264,6 +416,111 @@ export interface AdminInventoryPage extends Pagination<AdminInventoryItem> {
 }
 
 export type AdminRecord = Record<string, unknown> & { id: string };
+
+export interface AdminSettingRecord {
+  id: string;
+  sourceId: string;
+  scope: 'STORE' | 'COMPLIANCE';
+  key: string;
+  valueType: 'BOOLEAN' | 'INTEGER' | 'STRING' | 'JSON';
+  value: unknown;
+  redacted: boolean;
+  description: string | null;
+  legallyReviewed: boolean | null;
+  reviewedAt: string | null;
+  version: number;
+  updatedAt: string;
+}
+
+export interface AdminDeliveryZoneConfig {
+  id: string;
+  code: string;
+  nameFr: string;
+  nameAr: string;
+  priority: number;
+  active: boolean;
+  supported: boolean;
+  localityCount: number;
+  activeRateCount: number;
+  updatedAt: string;
+}
+
+export interface AdminDeliveryRateConfig {
+  id: string;
+  type: string;
+  name: string;
+  feeMillimes: number;
+  priority: number;
+  active: boolean;
+  version: number;
+}
+
+export interface AdminPickupConfig {
+  id: string;
+  code: string;
+  nameFr: string;
+  nameAr: string;
+  address: string;
+  active: boolean;
+  stateToken: string;
+}
+
+export interface AdminCashCollection {
+  id: string;
+  orderNumber: string;
+  courierName: string | null;
+  status: string;
+  paymentStatus: string;
+  expectedMillimes: number;
+  collectedMillimes: number;
+  collectedAt: string | null;
+  createdAt: string;
+}
+
+export interface AdminCashCollectionDetail extends AdminCashCollection {
+  orderId: string;
+  orderStatus: string;
+  orderVersion: number;
+  deliveryId: string | null;
+  delivery: { id?: string; version?: number } | null;
+  courierId: string | null;
+}
+
+export interface AdminCashRemittance {
+  id: string;
+  remittanceNumber: string;
+  courierName: string;
+  status: string;
+  declaredMillimes: number;
+  verifiedMillimes: number | null;
+  differenceMillimes: number | null;
+  createdAt: string;
+}
+
+export interface AdminCourierOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export interface AdminDeliveryDetail {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  orderStatus: string;
+  paymentStatus: string;
+  expectedCodMillimes: number;
+  status: string;
+  courier: AdminCourierOption | null;
+  trackingNumber: string | null;
+  courierFeeMillimes: number | null;
+  ageVerificationResult: string;
+  ageVerificationRequired: boolean;
+  cashCollectedResult: boolean | null;
+  version: number;
+  attempts: Array<{ id: string; outcome: string; attemptedAt: string }>;
+  events: Array<{ id: string; fromStatus: string | null; toStatus: string; occurredAt: string }>;
+}
 
 export type ManagedAccountStatus =
   'PENDING_VERIFICATION' | 'ACTIVE' | 'SUSPENDED' | 'DISABLED' | 'ANONYMIZED';
@@ -344,6 +601,25 @@ export interface AdminProductRead {
   minimumAge: number | null;
   publicationStatus: AdminProductPublicationStatus;
   featured: boolean;
+  version: number;
+}
+
+export interface AdminProductVariantRead {
+  id: string;
+  productId: string;
+  nameFr: string;
+  nameAr: string;
+  sku: string;
+  barcode: string | null;
+  color: string | null;
+  costMillimes: number;
+  priceMillimes: number;
+  promotionalPriceMillimes: number | null;
+  taxRateBps: number;
+  weightGrams: number;
+  lowStockThreshold: number;
+  publicationStatus: 'DRAFT' | 'PUBLISHED' | 'SUSPENDED' | 'ARCHIVED';
+  archivedAt: string | null;
   version: number;
 }
 

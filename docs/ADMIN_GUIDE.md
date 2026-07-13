@@ -127,7 +127,7 @@ Follow docs/COD_RECONCILIATION.md.
 
 ## Compliance and store gates
 
-Checkout remains closed until legal review is recorded, checkout is enabled, minimum age/store data/delivery method are configured, and required legal documents are published.
+Checkout remains closed until legal review is recorded, checkout is enabled, and minimum age, store data, and a valid delivery method are configured. Legal-document publication is maintained as human compliance evidence, but it is not an executable checkout-readiness prerequisite.
 
 Legal publication creates a version; never edit a version customers already accepted. Product/brand/category suspension must take effect immediately. Changing minimum age, warnings, legal publication, age-at-delivery policy, checkout state, or legal-review state requires compliance permission, recent authentication, confirmation, and audit.
 

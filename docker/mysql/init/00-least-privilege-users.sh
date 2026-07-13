@@ -8,6 +8,18 @@ case "$MYSQL_DATABASE" in
     ;;
 esac
 
+if [ -n "${MYSQL_MIGRATION_PASSWORD_FILE:-}" ]; then
+  if [ -n "${MYSQL_MIGRATION_PASSWORD:-}" ]; then
+    echo "Set only one of MYSQL_MIGRATION_PASSWORD or MYSQL_MIGRATION_PASSWORD_FILE" >&2
+    exit 1
+  fi
+  if [ ! -f "$MYSQL_MIGRATION_PASSWORD_FILE" ]; then
+    echo "MYSQL_MIGRATION_PASSWORD_FILE is unavailable" >&2
+    exit 1
+  fi
+  MYSQL_MIGRATION_PASSWORD=$(cat "$MYSQL_MIGRATION_PASSWORD_FILE")
+fi
+
 if [ -z "${MYSQL_MIGRATION_PASSWORD:-}" ]; then
   echo "MYSQL_MIGRATION_PASSWORD is required" >&2
   exit 1

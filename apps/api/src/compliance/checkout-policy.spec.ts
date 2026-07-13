@@ -9,7 +9,6 @@ describe('checkout compliance policy', () => {
       maintenanceMode: false,
       prelaunchMode: false,
       minimumAge: 18,
-      hasPublishedRequiredLegalDocuments: true,
       hasStoreInformation: true,
       hasDeliveryMethod: true,
     });
@@ -24,10 +23,23 @@ describe('checkout compliance policy', () => {
         maintenanceMode: false,
         prelaunchMode: false,
         minimumAge: 18,
-        hasPublishedRequiredLegalDocuments: true,
         hasStoreInformation: true,
         hasDeliveryMethod: true,
       }),
     ).toEqual([]);
+  });
+
+  it('keeps genuine operational prerequisites fail-closed', () => {
+    expect(
+      evaluateCheckoutPolicy({
+        checkoutEnabled: true,
+        legalReviewCompleted: true,
+        maintenanceMode: false,
+        prelaunchMode: false,
+        minimumAge: 18,
+        hasStoreInformation: false,
+        hasDeliveryMethod: false,
+      }),
+    ).toEqual(['STORE_INFORMATION_MISSING', 'DELIVERY_METHOD_MISSING']);
   });
 });

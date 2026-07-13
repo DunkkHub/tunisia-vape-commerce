@@ -1,9 +1,10 @@
 import { z } from 'zod';
 
-const booleanFromEnvironment = z
-  .enum(['true', 'false'])
-  .default('false')
-  .transform((value) => value === 'true');
+const booleanFromEnvironment = (defaultValue: 'true' | 'false') =>
+  z
+    .enum(['true', 'false'])
+    .default(defaultValue)
+    .transform((value) => value === 'true');
 
 const environmentSchema = z
   .object({
@@ -12,15 +13,20 @@ const environmentSchema = z
     WEB_URL: z.url().default('http://localhost:5173'),
     DATABASE_URL: z.string().min(1).default('mysql://app_user:change_me@localhost:3306/vape_store'),
     REDIS_URL: z.url().default('redis://localhost:6379'),
+    HEALTHCHECK_TIMEOUT_MS: z.coerce.number().int().min(250).max(10_000).default(2_000),
+    WORKER_HEARTBEAT_MAX_AGE_SECONDS: z.coerce.number().int().min(10).max(3_600).default(60),
+    EXPECTED_MIGRATION_NAME: z
+      .string()
+      .min(1)
+      .max(200)
+      .regex(/^\d{14}_[a-z0-9_]+$/)
+      .default('20260713010000_durable_outbox'),
     COOKIE_SECRET: z.string().default('development-only-cookie-secret-change-me'),
     FIELD_ENCRYPTION_KEY: z.string().default('development-only-field-key-change-me'),
-    CHECKOUT_ENABLED: booleanFromEnvironment,
-    LEGAL_REVIEW_COMPLETED: booleanFromEnvironment,
-    MAINTENANCE_MODE: booleanFromEnvironment,
-    PRELAUNCH_MODE: z
-      .enum(['true', 'false'])
-      .default('true')
-      .transform((value) => value === 'true'),
+    CHECKOUT_ENABLED: booleanFromEnvironment('true'),
+    LEGAL_REVIEW_COMPLETED: booleanFromEnvironment('true'),
+    MAINTENANCE_MODE: booleanFromEnvironment('false'),
+    PRELAUNCH_MODE: booleanFromEnvironment('false'),
     MINIMUM_PURCHASE_AGE: z.coerce.number().int().min(18).max(99).default(18),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     ADMIN_SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(120).default(30),

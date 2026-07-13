@@ -7,11 +7,17 @@ import { AppController } from './app.controller';
 import { AdminAccessModule } from './access/admin-access.module';
 import { AuthModule } from './auth/auth.module';
 import { CacheModule } from './cache/cache.module';
+import { AdminCashModule } from './cash/admin-cash.module';
 import { CommerceModule } from './commerce/commerce.module';
 import { validateEnvironment } from './config/environment';
 import { DatabaseModule } from './database/database.module';
+import { AdminDeliveriesModule } from './delivery/admin-deliveries.module';
+import { DeliveryConfigModule } from './delivery-config/delivery-config.module';
 import { HealthModule } from './health/health.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { AdminReadModule } from './operations/admin-read.module';
+import { AdminOrdersModule } from './orders/admin-orders.module';
+import { SettingsModule } from './settings/settings.module';
 
 @Module({
   imports: [
@@ -45,6 +51,12 @@ import { AdminReadModule } from './operations/admin-read.module';
     AdminAccessModule,
     CommerceModule,
     AdminReadModule,
+    AdminOrdersModule,
+    AdminDeliveriesModule,
+    DeliveryConfigModule,
+    AdminCashModule,
+    InventoryModule,
+    SettingsModule,
     HealthModule,
   ],
   controllers: [AppController],

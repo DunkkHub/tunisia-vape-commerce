@@ -165,7 +165,9 @@ export function AdminResourcePage({ resource }: { resource: Resource }) {
                     {column.label}
                   </th>
                 ))}
-                {resource === 'catalog' ? <th scope="col">{t('common.actions')}</th> : null}
+                {resource === 'catalog' || resource === 'orders' ? (
+                  <th scope="col">{t('common.actions')}</th>
+                ) : null}
               </tr>
             </thead>
             <tbody>
@@ -179,6 +181,10 @@ export function AdminResourcePage({ resource }: { resource: Resource }) {
                   {resource === 'catalog' ? (
                     <td>
                       <Link to={`/admin/catalog/${record.id}/edit`}>{t('common.edit')}</Link>
+                    </td>
+                  ) : resource === 'orders' ? (
+                    <td>
+                      <Link to={`/admin/orders/${record.id}`}>{t('common.details')}</Link>
                     </td>
                   ) : null}
                 </tr>

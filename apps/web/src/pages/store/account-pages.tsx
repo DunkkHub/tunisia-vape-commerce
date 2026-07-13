@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Heart, Home, LogOut, PackageCheck, UserRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link, NavLink, Outlet, useNavigate, useParams } from 'react-router-dom';
@@ -8,6 +8,7 @@ import { useCustomerAuth } from '../../auth/customer-auth-context';
 import { ProductCard } from '../../components/catalog/product-card';
 import { Button } from '../../components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
+import { FormField } from '../../components/ui/form-field';
 import { LocalDate, Price } from '../../components/ui/price';
 
 const accountNav = [
@@ -151,10 +152,19 @@ export function OrdersPage() {
 export function OrderTrackingPage() {
   const { orderNumber = '' } = useParams();
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const order = useQuery({
     queryKey: ['customer', 'order', orderNumber],
     queryFn: () => storefrontClient.order(orderNumber),
     retry: false,
+  });
+  const cancel = useMutation({
+    mutationFn: (reason: string) =>
+      storefrontClient.cancelOrder(orderNumber, order.data!.version, reason),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['customer', 'order', orderNumber], data);
+      void queryClient.invalidateQueries({ queryKey: ['customer', 'orders'] });
+    },
   });
   if (order.isPending) return <LoadingState label={t('common.loading')} />;
   if (order.isError) return <ErrorState onRetry={() => void order.refetch()} />;
@@ -181,6 +191,29 @@ export function OrderTrackingPage() {
           </dd>
         </div>
       </dl>
+      {order.data.cancellable ? (
+        <form
+          className="profile-data"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const value = new FormData(event.currentTarget).get('reason');
+            const reason = typeof value === 'string' ? value.trim() : '';
+            if (reason.length >= 4) cancel.mutate(reason);
+          }}
+        >
+          <FormField
+            name="reason"
+            label="Motif obligatoire d’annulation"
+            minLength={4}
+            maxLength={500}
+            required
+          />
+          <Button type="submit" variant="secondary" loading={cancel.isPending}>
+            Annuler cette commande
+          </Button>
+        </form>
+      ) : null}
+      {cancel.isError ? <ErrorState compact /> : null}
     </div>
   );
 }

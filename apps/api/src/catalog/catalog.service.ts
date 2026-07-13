@@ -1,7 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import type { Request } from 'express';
 import { AgeGateService } from '../compliance/age-gate.service';
+import type { Environment } from '../config/environment';
 import { PrismaService } from '../database/prisma.service';
 import {
   buildPublicProductWhere,
@@ -211,6 +213,7 @@ export class CatalogService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly ageGate: AgeGateService,
+    private readonly config: ConfigService<Environment, true>,
   ) {}
 
   async status(request: Request) {
@@ -237,10 +240,19 @@ export class CatalogService {
     return {
       data: {
         storeName: jsonString(store.get('store.name')),
-        maintenanceMode: jsonBoolean(store.get('maintenance.mode')),
-        prelaunchMode: jsonBoolean(store.get('prelaunch.mode')) || !minimumAgeConfigured,
-        checkoutEnabled: jsonBoolean(store.get('checkout.enabled')),
-        legalReviewCompleted: jsonBoolean(compliance.get('legal_review.completed')),
+        maintenanceMode:
+          this.config.get('MAINTENANCE_MODE', { infer: true }) ||
+          jsonBoolean(store.get('maintenance.mode')),
+        prelaunchMode:
+          this.config.get('PRELAUNCH_MODE', { infer: true }) ||
+          jsonBoolean(store.get('prelaunch.mode')) ||
+          !minimumAgeConfigured,
+        checkoutEnabled:
+          this.config.get('CHECKOUT_ENABLED', { infer: true }) &&
+          jsonBoolean(store.get('checkout.enabled')),
+        legalReviewCompleted:
+          this.config.get('LEGAL_REVIEW_COMPLETED', { infer: true }) &&
+          jsonBoolean(compliance.get('legal_review.completed')),
         minimumAge,
         ageGateRequired: minimumAgeConfigured && !ageConfirmed,
         ageConfirmed,
