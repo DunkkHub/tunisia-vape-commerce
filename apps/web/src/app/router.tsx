@@ -15,6 +15,8 @@ import {
   AccountLayout,
   AddressesPage,
   AdminDashboardPage,
+  AdminAdministratorsPage,
+  AdminCustomersPage,
   AdminInventoryPage,
   AdminLoginPage,
   AdminProductEditorPage,
@@ -65,8 +67,9 @@ export const appRoutes: RouteObject[] = [
               },
               {
                 path: 'customers',
-                element: routeElement(<AdminResourcePage resource="customers" />),
+                element: routeElement(<AdminCustomersPage />),
               },
+              { path: 'admins', element: routeElement(<AdminAdministratorsPage />) },
               {
                 path: 'delivery',
                 element: routeElement(<AdminResourcePage resource="delivery" />),

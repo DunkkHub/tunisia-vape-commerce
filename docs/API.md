@@ -117,6 +117,25 @@ Eligible inventory has no batch or belongs to a non-archived, non-expired batch.
 
 `grouping.scope` is `FILTERED_RESULT`: `byBrand`, `byProductType`, `byFlavor`, and `byBrandAndFlavor` aggregate the entire filter match, not only the paginated rows. The grouped query is parameterized and fails closed if it would exceed 5,000 groups. These values are operational/advisory; they do not reserve stock or replace checkout-time row locking.
 
+### Exact Super Administrator account lifecycle slice
+
+Administrator-account management and customer-account lifecycle actions are intentionally separate. Every route in this section requires a full TOTP-verified administrator session, the exact active `super-administrator` role from the server-side session, the listed seeded permissions, and a no-store response. An `administrator` role or matching permissions alone is insufficient. Every mutation also requires the administrator CSRF token, a recent-authentication assertion, explicit confirmation, a reason, and optimistic user/profile versions.
+
+| Method | Route                                        | Permission(s)                        | Contract                                                                                                    |
+| ------ | -------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/admin/access/admins`                | `users.manage`, `system.manage`      | Bounded administrator list; accepts `page`, `limit`, `q`, and optional account `status`                     |
+| POST   | `/api/v1/admin/access/admins`                | `users.manage`, `system.manage`      | Create a named non-super administrator; TOTP enrollment is mandatory before the account becomes operational |
+| POST   | `/api/v1/admin/access/admins/:id/suspend`    | `users.manage`, `system.manage`      | Suspend an administrator and revoke that user's active administrator-realm sessions                         |
+| POST   | `/api/v1/admin/access/admins/:id/reactivate` | `users.manage`, `system.manage`      | Reactivate a suspended administrator without creating a session                                             |
+| POST   | `/api/v1/admin/access/admins/:id/anonymize`  | `users.manage`, `system.manage`      | Irreversibly anonymize an already suspended administrator while preserving referential and audit history    |
+| POST   | `/api/v1/admin/customers/:id/suspend`        | `customers.suspend`, `system.manage` | Suspend a customer profile and revoke only that user's active customer-realm sessions                       |
+| POST   | `/api/v1/admin/customers/:id/reactivate`     | `customers.suspend`, `system.manage` | Reactivate a suspended customer without creating a session                                                  |
+| POST   | `/api/v1/admin/customers/:id/disable`        | `customers.suspend`, `system.manage` | Disable an already suspended customer without destroying historical commercial records                      |
+
+The administrator routes address a `User` ID; the customer lifecycle routes address the customer-profile ID returned by `GET /api/v1/admin/customers`. Lifecycle bodies contain `expectedUserVersion`, `expectedProfileVersion`, `reason`, and `confirmed: true`. Administrator anonymization additionally requires `confirmation: "ANONYMIZE_ADMIN"`; customer disabling requires `confirmation: "DISABLE_CUSTOMER"`. Creation requires a unique administrator email, display name, a policy-compliant initial password, `confirmed: true`, and optional employee/job metadata and system role keys. The protected API rejects `super-administrator` in the creation role list because promotion to that role requires a separate approval workflow.
+
+Self-suspension, self-reactivation, and self-anonymization are rejected. Suspending or anonymizing an operational Super Administrator is also rejected unless another operational, TOTP-enrolled Super Administrator remains. Successful lifecycle actions write audit and security events; denied lifecycle actions write safe audit events. `Disable customer` is an access-control action, not a completed privacy erasure; privacy requests still follow retention review and a separate anonymization workflow.
+
 ## Safe errors
 
 Errors have one stable envelope:

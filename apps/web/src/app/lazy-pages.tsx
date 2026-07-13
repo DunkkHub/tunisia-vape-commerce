@@ -66,6 +66,12 @@ export const AdminProductEditorPage = lazy(async () => ({
 export const AdminInventoryPage = lazy(async () => ({
   default: (await import('../pages/admin/admin-inventory-page')).AdminInventoryPage,
 }));
+export const AdminAdministratorsPage = lazy(async () => ({
+  default: (await import('../pages/admin/admin-access-pages')).AdminAdministratorsPage,
+}));
+export const AdminCustomersPage = lazy(async () => ({
+  default: (await import('../pages/admin/admin-access-pages')).AdminCustomersPage,
+}));
 export const AdminResourcePage = lazy(async () => ({
   default: (await import('../pages/admin/admin-resource-page')).AdminResourcePage,
 }));

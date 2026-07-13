@@ -265,6 +265,57 @@ export interface AdminInventoryPage extends Pagination<AdminInventoryItem> {
 
 export type AdminRecord = Record<string, unknown> & { id: string };
 
+export type ManagedAccountStatus =
+  'PENDING_VERIFICATION' | 'ACTIVE' | 'SUSPENDED' | 'DISABLED' | 'ANONYMIZED';
+
+export interface AdminAccount {
+  id: string;
+  email: string | null;
+  displayName: string;
+  employeeCode: string | null;
+  jobTitle: string | null;
+  status: ManagedAccountStatus;
+  roles: Array<{ key: string; name: string }>;
+  twoFactorEnrolled: boolean;
+  suspendedAt: string | null;
+  suspensionReason: string | null;
+  userVersion: number;
+  profileVersion: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedCustomerAccount {
+  id: string;
+  userId: string;
+  fullName: string;
+  normalizedPhone: string;
+  email: string | null;
+  status: ManagedAccountStatus;
+  suspendedAt: string | null;
+  suspensionReason: string | null;
+  userVersion: number;
+  profileVersion: number;
+  createdAt: string;
+}
+
+export interface AccountLifecyclePayload {
+  expectedUserVersion: number;
+  expectedProfileVersion: number;
+  reason: string;
+  confirmed: true;
+}
+
+export interface CreateAdminAccountPayload {
+  email: string;
+  displayName: string;
+  employeeCode?: string;
+  jobTitle?: string;
+  password: string;
+  roleKeys: string[];
+  confirmed: true;
+}
+
 export type AdminProductType = ProductType;
 export type AdminProductPublicationStatus = 'DRAFT' | 'PUBLISHED' | 'SUSPENDED';
 

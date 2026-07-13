@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Construction, RadioTower } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 
 import { storefrontClient } from '../../api/storefront-client';
 import { StorefrontShell } from '../layout/storefront-shell';
@@ -44,6 +44,7 @@ export function ServiceModePage({ mode }: { mode: 'maintenance' | 'prelaunch' })
 
 export function ComplianceBoundary() {
   const { t } = useTranslation();
+  const { pathname } = useLocation();
   const queryClient = useQueryClient();
   const statusQuery = useQuery({
     queryKey: STOREFRONT_STATUS_QUERY_KEY,
@@ -62,8 +63,16 @@ export function ComplianceBoundary() {
   if (statusQuery.isPending) return <LoadingState label={t('common.loading')} />;
   if (statusQuery.isError || !statusQuery.data)
     return <ErrorState onRetry={() => void statusQuery.refetch()} />;
+
+  const landingPreviewAllowed =
+    import.meta.env.DEV &&
+    import.meta.env.VITE_STOREFRONT_DESIGN_PREVIEW === 'true' &&
+    pathname === '/' &&
+    statusQuery.data.minimumAge >= 18;
+
   if (statusQuery.data.maintenanceMode) return <ServiceModePage mode="maintenance" />;
-  if (statusQuery.data.prelaunchMode) return <ServiceModePage mode="prelaunch" />;
+  if (statusQuery.data.prelaunchMode && !landingPreviewAllowed)
+    return <ServiceModePage mode="prelaunch" />;
 
   const ageOpen = statusQuery.data.ageGateRequired && !statusQuery.data.ageConfirmed;
   if (ageOpen) {

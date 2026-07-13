@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { AppController } from './app.controller';
+import { AdminAccessModule } from './access/admin-access.module';
 import { AuthModule } from './auth/auth.module';
 import { CacheModule } from './cache/cache.module';
 import { CommerceModule } from './commerce/commerce.module';
@@ -41,6 +42,7 @@ import { AdminReadModule } from './operations/admin-read.module';
     DatabaseModule,
     CacheModule,
     AuthModule,
+    AdminAccessModule,
     CommerceModule,
     AdminReadModule,
     HealthModule,

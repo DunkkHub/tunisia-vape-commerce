@@ -1,6 +1,6 @@
 # Implementation plan
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 ## Delivery policy
 
@@ -21,7 +21,7 @@ The direct dependency baseline selected in the manifests on 2026-07-11 is:
 | Accessible UI          | Radix Dialog 1.1.19, Radix Slot 1.3.0, Lucide React 1.24.0                                                                                                                   |
 | Tests                  | Vitest 4.1.10, Testing Library React 16.3.2/User Event 14.6.1/jest-dom 6.9.1, Playwright 1.61.1, Supertest 7.2.2, jsdom 29.1.1                                               |
 | Worker                 | BullMQ 5.80.2, ioredis 5.11.1, Pino 10.3.1, Zod 4.4.3                                                                                                                        |
-| Local containers       | MySQL 8.4, Redis 7.4 Alpine, MinIO RELEASE.2025-04-22T22-12-26Z, MinIO client RELEASE.2025-04-16T18-13-26Z, Mailpit v1.27, Nginx unprivileged 1.28 Alpine                    |
+| Local containers       | MySQL 8.4, Redis 7.4 Alpine, MinIO RELEASE.2025-04-22T22-12-26Z, MinIO client RELEASE.2025-04-16T18-13-26Z, Mailpit v1.27, Nginx unprivileged 1.30.2 Alpine slim             |
 
 The lockfile, not this summary, resolves transitive versions. Before controlled staging, review runtime compatibility and security advisories, pin container digests and CI action commit SHAs, generate an SBOM, and record any approved exception.
 
@@ -43,6 +43,10 @@ The lockfile, not this summary, resolves transitive versions. Before controlled 
 | 12. Hardening                     | Security, accessibility, load, backup/restore, staging deployment             | Planned     | All definition-of-done evidence recorded and independently reviewed      |
 
 Do not change a status to complete based on unrecorded local results. Link CI runs, test reports, migration checks, restore evidence, and human sign-offs in this file or the readiness report.
+
+The exact Super Administrator account-lifecycle slice is implemented and has local static, unit, negative-policy, UI, build, and route-separation evidence, but it does not complete phases 3 or 11. It adds separated administrator/customer management surfaces, exact-role and permission gates, recent authentication and CSRF on writes, transactional actor revalidation, optimistic versions, self/last-super protections, realm-scoped session revocation, and audit/security events. Database-backed authorization, concurrency, recovery, privacy-retention, and full real-session end-to-end verification remain exit evidence, so both phase statuses stay unchanged.
+
+This slice deliberately leaves the release controls at `checkout.enabled=false`, `legal_review.completed=false`, and `prelaunch.mode=true`. The policy still reports closed-gate prerequisites including disabled checkout, missing legal review, prelaunch mode, missing required published legal documents, incomplete store information, and no valid delivery method. Atomic idempotent order creation and final-stock locking are also incomplete. Account administration is not authority to bypass those gates.
 
 ## Phase details
 
@@ -72,12 +76,16 @@ Do not change a status to complete based on unrecorded local results. Link CI ru
 - Keep the admin UI entry at /admin/login and customer entry at /login.
 - Implement Argon2id hashing, generic errors, progressive delay, reset/verification token hashing, rotation, idle and absolute expiry, and full revocation.
 - Create the first Super Administrator through a secure interactive CLI; never seed one.
+- Restrict that interactive CLI to the first administrator only. Subsequent named non-super administrators are created through the exact-super protected API and must enroll TOTP before becoming operational.
+- Separate administrator and customer lifecycle commands. Require exact Super Administrator role plus permissions, CSRF, recent authentication, confirmation, reason, optimistic versions, realm-scoped revocation, and audit; forbid self-lifecycle changes and loss of the last operational Super Administrator.
 - Enforce permissions on the NestJS API and add a deny-by-default RBAC matrix.
 
 ### Phases 4–7 — commerce core
 
 - Complete catalog, upload quarantine, inventory, Tunisia geography/rates, cart, promotion, and checkout slices.
 - The current commerce API slice exposes bounded published catalog reads, guarded/audited product create-update-archive-restore operations, authoritative checkout-policy evaluation, and a non-reserving integer-millime quote. Atomic idempotent order creation remains planned and must not be represented by the quote endpoint.
+- The public home surface uses a responsive French/Arabic dark-neon presentation with API-derived featured products, prices, availability, flavors, and categories. Decorative device artwork is code-native; empty catalogs remain explicit and no demonstration product claims, ratings, nicotine levels, stock, or delivery promises are fabricated.
+- A local-only landing-page preview may render that surface during prelaunch only in Vite development, only when explicitly enabled, and only after a configured minimum-age confirmation. It does not change the stored prelaunch, checkout, legal-review, maintenance, API, or production-build gates.
 - Resolve delivery rate precedence deterministically: explicit locality rule, delegation rule, governorate rule, zone rule, then eligible store-wide base; apply documented surcharges in stable priority order. A missing or ambiguous result blocks checkout.
 - In one transaction, claim idempotency, lock inventory, validate publication/age/quantity, calculate promotions/delivery/totals, create snapshots/reservations/order/history, then commit.
 - Publish notification jobs through an outbox or equivalent commit-safe mechanism; workers are idempotent.
@@ -88,6 +96,7 @@ Do not change a status to complete based on unrecorded local results. Link CI ru
 - Make a failed age-verification result terminal for delivery until a separately authorized return/override workflow.
 - Track COD expected, collected, held, remitted, discrepant, and reconciled as separate events and amounts.
 - Require recent authentication and elevated permission for reconciliation, inventory corrections, role changes, compliance publication, and other dangerous actions.
+- Treat administrator anonymization and customer disabling as distinct suspended-first workflows. Preserve append-only audit and historical commerce references; customer disabling is not a substitute for legally reviewed privacy erasure.
 - Bound every list/export; enqueue large exports; minimize personal data and neutralize CSV formulas.
 
 ### Phase 12 — hardening and release

@@ -1,11 +1,17 @@
-import { ArrowUpRight, ShieldCheck } from 'lucide-react';
+import { ArrowUpRight, Plus, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 
 import type { ProductSummary } from '../../api/types';
 import { Price } from '../ui/price';
 
-export function ProductCard({ product }: { product: ProductSummary }) {
+export function ProductCard({
+  product,
+  variant = 'default',
+}: {
+  product: ProductSummary;
+  variant?: 'default' | 'featured';
+}) {
   const { t } = useTranslation();
   const price = product.promotionalPriceMillimes ?? product.priceMillimes;
   const availability =
@@ -16,7 +22,10 @@ export function ProductCard({ product }: { product: ProductSummary }) {
         : t('catalog.stockAvailable');
 
   return (
-    <article className="product-card">
+    <article
+      className={`product-card ${variant === 'featured' ? 'product-card--featured' : ''}`}
+      data-product-type={product.productType}
+    >
       <Link
         to={`/products/${product.slug}`}
         aria-label={t('catalog.openProduct', { name: product.name })}
@@ -65,7 +74,11 @@ export function ProductCard({ product }: { product: ProductSummary }) {
             to={`/products/${product.slug}`}
             aria-label={t('catalog.openProduct', { name: product.name })}
           >
-            <ArrowUpRight aria-hidden="true" size={19} />
+            {variant === 'featured' ? (
+              <Plus aria-hidden="true" size={20} />
+            ) : (
+              <ArrowUpRight aria-hidden="true" size={19} />
+            )}
           </Link>
         </div>
       </div>

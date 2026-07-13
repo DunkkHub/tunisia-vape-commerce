@@ -32,6 +32,16 @@ Every protected controller declares an authenticated principal type and permissi
 
 Dangerous actions require permission plus recent authentication, explicit confirmation input, reason, and audit. Cash reconciliation and the most sensitive role/compliance changes should support separate approver policy. Super Administrator does not bypass domain state machines or immutable history.
 
+### Exact Super Administrator account lifecycle boundary
+
+The account-lifecycle controllers use an exact server-derived `super-administrator` role guard in addition to normal permission checks. Possessing `users.manage`, `customers.suspend`, or `system.manage`, or sending a role name from the browser, never satisfies this role gate. Mutations add administrator CSRF and recent-authentication guards, and the service revalidates that the actor is an active, non-suspended administrator with verified TOTP and the exact role inside the database transaction.
+
+Role-row locking serializes the super-administrator availability decision. An administrator cannot change their own lifecycle state, and a super-administrator cannot be suspended or anonymized unless another active, non-suspended, TOTP-enrolled super-administrator remains. Expected user/profile versions prevent stale confirmations from overwriting a concurrent account change. Creation through the management API cannot assign `super-administrator`; that escalation requires a separate approved workflow.
+
+Suspending an administrator revokes only active `ADMIN` sessions for that user. Suspending or disabling a customer revokes only active `CUSTOMER` sessions for that user, preserving the authentication-realm boundary. Reactivation never issues a session. Administrator anonymization is suspended-first and removes role assignments, MFA/recovery/reset material and direct identifiers while retaining stable record identifiers needed by append-only audit and historical references. Customer disable is also suspended-first, but preserves customer and commerce records; it must not be represented as privacy erasure or anonymization. Successful actions write audit and security events; denials write safe audit events.
+
+The first administrator remains a bootstrap exception performed only with `pnpm admin:create` in an interactive trusted TTY. The command refuses to run once any administrator exists, locks the Super Administrator role row, assigns the seeded exact role, requires TOTP enrollment at first login, and appends a system audit event. It has no default password, command-line password, or seeded account.
+
 ## Request and response safety
 
 - Globally reject unknown fields, transform only declared types, and cap nesting, array length, text size, and request body.

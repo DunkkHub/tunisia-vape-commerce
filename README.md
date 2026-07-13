@@ -52,6 +52,13 @@ Default development URLs:
 - API: `http://localhost:3000/api/v1`
 - OpenAPI: `http://localhost:3000/api/docs`
 
+For local visual review while the stored prelaunch gate remains enabled, set
+`VITE_STOREFRONT_DESIGN_PREVIEW=true` in `apps/web/.env.local` and configure an explicit
+development minimum age of at least 18. The exception is honored only by the Vite development
+server, only on the landing route, and only after the normal signed age confirmation. Production
+builds continue to show the blocking prelaunch page; checkout and legal-release gates are never
+enabled by this switch.
+
 ## Implemented catalog and administration reads
 
 The public catalog can combine text/category, brand, product type, flavor, and inclusive minimum/maximum effective-price filters. Prices cross the API boundary as integer millimes; the storefront converts user-entered TND values before requesting the API. `GET /api/v1/catalog/facets` returns bounded public brand, product-type, flavor-count, and effective-price-range values after the age gate.
@@ -75,7 +82,7 @@ pnpm test:load
 
 Prisma validation needs a syntactically valid `DATABASE_URL`; it does not require a live database unless a migration or integration test is executed.
 
-The latest recorded local application test run on 2026-07-12 reported 58 passing API tests and 11 passing web tests, for 69 total. The four Playwright route-separation checks are recorded separately. These local results do not establish production readiness.
+The latest recorded local application test run on 2026-07-12 reported 58 passing API/security tests and 15 passing web tests, for 73 total. Playwright separately reported eight passing checks and two deliberate duplicate-project skips. These local results do not establish production readiness.
 
 ## Safety and compliance defaults
 

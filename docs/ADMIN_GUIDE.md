@@ -17,7 +17,7 @@ There is no seeded/default administrator. From a trusted one-off environment wit
 
     pnpm admin:create
 
-The command must prompt for email, name, and password without echoing the password; validate strength; assign Super Administrator; and require TOTP enrollment at first login. Never pass the password on the command line, paste it into logs/tickets, or automate a default password.
+The command prompts for email, name, and password without echoing the password, validates strength, locks and assigns the seeded Super Administrator role, writes a system audit event, and requires TOTP enrollment at first login. It is bootstrap-only: if any administrator already exists, it refuses and directs the operator to the protected account-management API. Never pass the password on the command line, paste it into logs/tickets, automate a default password, or rerun the bootstrap command to create an ordinary administrator.
 
 After creation:
 
@@ -41,6 +41,26 @@ After creation:
 - Read-Only Analyst: bounded reports and explicitly allowed reads.
 
 Permissions are additive through active roles and enforced by the API. Review the exact matrix before staging. Catalog Manager cannot manage roles, Support cannot change prices, Delivery Coordinator cannot reconcile cash, and analysts cannot export unless explicitly granted.
+
+## Administrator and customer account lifecycle
+
+Use the separate administration surfaces for the two account realms:
+
+- `/admin/admins` manages administrator accounts.
+- `/admin/customers` manages customer accounts.
+
+Only an active, TOTP-enrolled account with the exact `super-administrator` role and the matching permissions can use these lifecycle actions. Broad Administrator permissions alone are not enough. Before every mutation, complete recent authentication, review the current versions/status, enter a specific operational reason, and confirm the action. Refresh instead of retrying blindly after a version conflict.
+
+For administrator accounts:
+
+1. Create a named, non-super account with a unique email and strong initial password. The new administrator must enroll TOTP before becoming operational. The management API deliberately cannot assign the Super Administrator role.
+2. Suspend first when access must stop. Suspension revokes the target's administrator sessions without affecting customer-realm sessions.
+3. Reactivate only after reviewing the reason and security state. Reactivation does not sign the person in.
+4. Use irreversible anonymization only for an already suspended administrator, after retention and incident requirements have been checked. It removes direct credentials, role assignments, MFA/recovery material and identifying profile fields while preserving stable audit/history references.
+
+You cannot suspend, reactivate, or anonymize your own administrator account. The system also refuses to suspend or anonymize the last operational Super Administrator. Do not work around either control in the database.
+
+For customer accounts, suspension revokes only customer sessions and is reversible. Permanent disable is suspended-first and prevents future access while preserving order, payment, delivery, consent, audit, and other required historical records. It is not privacy erasure. Route a customer's erasure/anonymization request through the legally reviewed privacy workflow and retention policy.
 
 ## Login and recovery
 
