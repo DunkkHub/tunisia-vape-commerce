@@ -480,7 +480,14 @@ export const fr = {
       totpBody: 'Saisissez le code à 6 chiffres de votre application TOTP. Il expire rapidement.',
       enrollmentTitle: 'Finaliser l’activation 2FA',
       enrollmentBody:
-        'Enregistrez le secret fourni par le serveur dans votre application, puis saisissez un premier code.',
+        'Scannez le code QR actuel dans votre application d’authentification, puis saisissez le premier code généré.',
+      qrAlt: 'Code QR de configuration de l’authentification à deux facteurs',
+      qrCaption:
+        'Scannez avec Google Authenticator, Microsoft Authenticator, Authy ou une application TOTP compatible.',
+      qrLoading: 'Génération sécurisée du code QR…',
+      qrUnavailable:
+        'Le code QR ne peut pas être affiché. Utilisez la clé de saisie manuelle ci-dessous.',
+      manualKeyLabel: 'Clé de saisie manuelle',
       totpCode: 'Code à 6 chiffres',
       verify: 'Vérifier et ouvrir la session',
       verifyingTotp: 'Vérification du code…',
@@ -488,6 +495,10 @@ export const fr = {
       securityNotice: 'Session courte · Cookies HTTP-only · 2FA obligatoire',
       genericError:
         'Accès refusé. Vérifiez vos informations ou contactez un administrateur habilité.',
+      invalidTotp:
+        'Code incorrect ou expiré. Activez la date et l’heure automatiques sur votre téléphone, puis saisissez le code du QR actuellement affiché.',
+      challengeExpired:
+        'Cette vérification a expiré. Utilisez un autre compte, reconnectez-vous et scannez le code QR affiché.',
       returnStore: 'Retour à la boutique',
       dashboard: 'Tableau de bord',
       catalog: 'Catalogue',

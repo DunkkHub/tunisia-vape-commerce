@@ -23,6 +23,7 @@ Production cookies are host-only, Secure, HttpOnly, SameSite=Lax unless a docume
 - Normalize email/phone for lookup but preserve display values separately.
 - Verification, invitation, reset, and pending-2FA tokens are high entropy, short lived, single use, and stored as hashes. Completing a customer password reset atomically consumes every outstanding customer reset token for that account before revoking its customer sessions.
 - Encrypt TOTP seeds with the field-encryption key and bind associated data to the admin ID/purpose.
+- Generate enrollment QR codes locally from the server-issued `otpauth://` URI. Keep an encrypted, unverified seed stable across password retries so a scanned enrollment cannot be invalidated implicitly; replace it only after verification or through an authorized reset flow.
 - Hash individual recovery codes, show them once, consume atomically, and notify/log their use.
 - Rotate the session on login, MFA completion, password change, privilege change, and recent-auth completion.
 

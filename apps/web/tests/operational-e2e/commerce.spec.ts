@@ -178,6 +178,9 @@ const loginAdmin = async (page: Page, email: string, password: string) => {
   await page.locator('.admin-login__card form button[type="submit"]').click();
   expect((await passwordResponse).status()).toBe(200);
   await expect(page.getByRole('heading', { name: /activation 2FA$/ })).toBeVisible();
+  await expect(
+    page.getByRole('img', { name: /Code QR de configuration de l.authentification/ }),
+  ).toBeVisible();
   const enrollmentSecret = (await page.locator('.enrollment-key').textContent())?.trim();
   expect(enrollmentSecret).toMatch(/^[A-Z2-7]+$/);
   await page.locator('input[name="code"]').fill(currentTotp(enrollmentSecret!));

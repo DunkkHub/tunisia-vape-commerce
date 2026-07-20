@@ -42,12 +42,14 @@ export interface AdminSessionResponse {
   expiresAt?: string;
 }
 
-export interface AdminChallengeResponse {
-  state: 'TOTP_REQUIRED' | 'ENROLLMENT_REQUIRED';
-  challengeId: string;
-  enrollmentUri?: string;
-  manualEntryKey?: string;
-}
+export type AdminChallengeResponse =
+  | { state: 'TOTP_REQUIRED'; challengeId: string }
+  | {
+      state: 'ENROLLMENT_REQUIRED';
+      challengeId: string;
+      enrollmentUri: string;
+      manualEntryKey: string;
+    };
 
 export interface StorefrontStatus {
   storeName: string;

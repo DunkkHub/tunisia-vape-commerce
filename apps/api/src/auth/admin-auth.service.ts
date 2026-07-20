@@ -111,21 +111,30 @@ export class AdminAuthService {
       user.adminProfile.mustEnrollTwoFactor || !user.twoFactorSecret?.verifiedAt;
     let enrollmentSecret: string | undefined;
     if (enrollmentRequired) {
-      enrollmentSecret = otp.generateSecret();
-      await this.prisma.twoFactorSecret.upsert({
-        where: { userId: user.id },
-        create: {
-          userId: user.id,
-          encryptedSecret: this.crypto.encrypt(enrollmentSecret),
-          encryptionKeyId: 'env-v1',
-        },
-        update: {
-          encryptedSecret: this.crypto.encrypt(enrollmentSecret),
-          encryptionKeyId: 'env-v1',
-          verifiedAt: null,
-          lastUsedStep: null,
-        },
-      });
+      const pendingSecret =
+        user.twoFactorSecret &&
+        user.twoFactorSecret.verifiedAt === null &&
+        user.twoFactorSecret.lastUsedStep === null
+          ? this.crypto.decrypt(user.twoFactorSecret.encryptedSecret)
+          : null;
+      enrollmentSecret = pendingSecret ?? otp.generateSecret();
+
+      if (!pendingSecret) {
+        await this.prisma.twoFactorSecret.upsert({
+          where: { userId: user.id },
+          create: {
+            userId: user.id,
+            encryptedSecret: this.crypto.encrypt(enrollmentSecret),
+            encryptionKeyId: 'env-v1',
+          },
+          update: {
+            encryptedSecret: this.crypto.encrypt(enrollmentSecret),
+            encryptionKeyId: 'env-v1',
+            verifiedAt: null,
+            lastUsedStep: null,
+          },
+        });
+      }
     }
 
     const challengeId = this.crypto.randomToken();

@@ -75,6 +75,7 @@ Fresh-database operational defaults are `checkout.enabled=true` and `prelaunch.m
 - Implement customer endpoints only under /api/v1/auth/customer/* and admin endpoints only under /api/v1/auth/admin/*.
 - Use distinct cookie names, Redis session prefixes, CSRF tokens, throttles, guards, login audit events, revocation, and timeouts.
 - A successful admin password check creates only a short-lived pending challenge. Mandatory TOTP promotes it to a full admin session; a recovery endpoint is not currently exposed.
+- During first-login enrollment, return an `otpauth://` URI and render its QR code locally in the admin UI with a manual-key fallback. Reuse the same encrypted, unverified TOTP seed across password retries until enrollment succeeds or an authorized reset explicitly replaces it.
 - Keep the admin UI entry at /admin/login and customer entry at /login.
 - Implement Argon2id hashing, generic errors, progressive delay, reset/verification token hashing, rotation, idle and absolute expiry, and full revocation.
 - Create the first Super Administrator through a secure interactive CLI; never seed one.

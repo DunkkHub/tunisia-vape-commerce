@@ -2731,10 +2731,68 @@ h2 {
   color: var(--admin-muted);
   font-size: 0.8rem;
 }
+.admin-login__enrollment {
+  display: grid;
+  gap: 14px;
+}
+.admin-login__qr {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin: 0;
+}
+.admin-login__qr-image {
+  width: min(100%, 248px);
+  min-height: 248px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--admin-line);
+  border-radius: 16px;
+  background: #fff;
+  padding: 12px;
+  color: #18221f;
+  text-align: center;
+}
+.admin-login__qr-image img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+}
+.admin-login__qr-image span {
+  max-width: 24ch;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.admin-login__qr figcaption {
+  max-width: 38ch;
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  text-align: center;
+}
+.admin-login__manual-key {
+  border: 1px dashed var(--admin-line);
+  border-radius: 10px;
+  background: var(--admin-bg);
+  padding: 0 12px 12px;
+}
+.admin-login__manual-key summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--admin-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.admin-login__manual-key summary:focus-visible {
+  outline: 2px solid var(--admin-accent);
+  outline-offset: 3px;
+}
 .enrollment-key {
   display: block;
   overflow-wrap: anywhere;
-  border: 1px dashed var(--admin-line);
+  border: 1px solid var(--admin-line);
   border-radius: 8px;
   background: var(--admin-bg);
   padding: 10px;

@@ -48,6 +48,8 @@ Customer and admin authentication have separate controllers and trust boundaries
 
 Customer UI login is /login. Admin UI login is /admin/login. The API never accepts a customer cookie in an admin credential extractor, never grants a pending challenge general access, and never treats a role value supplied by React as authority.
 
+When an administrator must enroll TOTP, `POST /api/v1/auth/admin/login` returns the pending challenge plus an `otpauth://` enrollment URI and manual-entry key. The admin UI creates the QR code locally; it does not send TOTP material to an external QR service. Repeating the password step reuses the existing encrypted, unverified seed so a QR already scanned by the administrator remains valid until enrollment succeeds or an authorized reset replaces it.
+
 Customer and admin cookies have distinct names and signing contexts; their Redis session prefixes, CSRF tokens, rate-limit buckets, session timeouts, logout, and revocation paths are separate. Staging/production should use separate hostnames with host-only cookies.
 
 ## Resource route groups
