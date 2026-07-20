@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Banknote, RefreshCw } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { Banknote, Download, RefreshCw } from 'lucide-react';
+import { useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { adminDataClient } from '../../api/admin-data-client';
+import { useAdminAuth } from '../../auth/admin-auth-context';
 import { Button } from '../../components/ui/button';
 import { ErrorState, LoadingState } from '../../components/ui/feedback';
 import { FormField, SelectField } from '../../components/ui/form-field';
 import { LocalDate, Price } from '../../components/ui/price';
+import { downloadText } from '../../utils/download-text';
 
 const text = (form: FormData, key: string): string => {
   const entry = form.get(key);
@@ -17,7 +19,15 @@ const text = (form: FormData, key: string): string => {
 export function AdminCashPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const { user } = useAdminAuth();
+  const canReconcile = Boolean(user?.permissions.includes('cash.reconcile'));
+  const canExport = Boolean(
+    user?.permissions.includes('cash.read') && user.permissions.includes('reports.export'),
+  );
+  const [exportMessage, setExportMessage] = useState('');
   const [selectedCollectionId, setSelectedCollectionId] = useState('');
+  const [selectedRemittanceId, setSelectedRemittanceId] = useState('');
+  const collectionIdempotency = useRef<{ collectionId: string; key: string } | null>(null);
   const collections = useQuery({
     queryKey: ['admin', 'cash', 'collections'],
     queryFn: adminDataClient.cashCollections,
@@ -31,6 +41,11 @@ export function AdminCashPage() {
     queryKey: ['admin', 'cash', 'remittances'],
     queryFn: adminDataClient.cashRemittances,
   });
+  const remittance = useQuery({
+    queryKey: ['admin', 'cash', 'remittance', selectedRemittanceId],
+    queryFn: () => adminDataClient.cashRemittance(selectedRemittanceId),
+    enabled: Boolean(selectedRemittanceId),
+  });
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['admin', 'cash'] });
   };
@@ -38,13 +53,42 @@ export function AdminCashPage() {
     mutationFn: (run: () => Promise<unknown>) => run(),
     onSuccess: refresh,
   });
+  const exportCollections = useMutation({
+    mutationFn: () => adminDataClient.downloadCashCollections(),
+    onSuccess: (result) => {
+      downloadText(result.content, result.filename, 'text/csv;charset=utf-8');
+      setExportMessage(t('admin.cashOps.exportReadyRows', { count: result.rowCount ?? 0 }));
+    },
+  });
+  const exportRemittances = useMutation({
+    mutationFn: () => adminDataClient.downloadCashRemittances(),
+    onSuccess: (result) => {
+      downloadText(result.content, result.filename, 'text/csv;charset=utf-8');
+      setExportMessage(t('admin.cashOps.exportReadyRows', { count: result.rowCount ?? 0 }));
+    },
+  });
   const record = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!collection.data?.delivery?.version) return;
+    const currentCollection = collection.data;
+    if (!currentCollection?.delivery?.version) return;
     const form = new FormData(event.currentTarget);
     const amount = Number(text(form, 'collectedMillimes'));
     const reason = text(form, 'reasonDetail');
-    action.mutate(() => adminDataClient.recordCashCollection(collection.data, amount, reason));
+    if (collectionIdempotency.current?.collectionId !== currentCollection.id) {
+      collectionIdempotency.current = {
+        collectionId: currentCollection.id,
+        key: globalThis.crypto.randomUUID(),
+      };
+    }
+    const key = collectionIdempotency.current.key;
+    action.mutate(
+      () => adminDataClient.recordCashCollection(currentCollection, amount, key, reason),
+      {
+        onSuccess: () => {
+          collectionIdempotency.current = null;
+        },
+      },
+    );
   };
   const createRemittance = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -66,16 +110,33 @@ export function AdminCashPage() {
         <div>
           <span className="admin-kicker">COD</span>
           <h1>{t('admin.cash')}</h1>
-          <p>Encaissements, remises et rapprochement en millimes.</p>
+          <p>{t('admin.cashOps.subtitle')}</p>
         </div>
         <Button type="button" variant="ghost" onClick={refresh}>
           <RefreshCw aria-hidden="true" size={18} /> {t('admin.refresh')}
         </Button>
       </header>
+      {exportMessage ? (
+        <p className="form-success" role="status">
+          {exportMessage}
+        </p>
+      ) : null}
       <section className="admin-panel">
-        <h2>
-          <Banknote aria-hidden="true" size={18} /> Encaissements attendus
-        </h2>
+        <div className="admin-panel__heading">
+          <h2>
+            <Banknote aria-hidden="true" size={18} /> {t('admin.cashOps.collectionsTitle')}
+          </h2>
+          {canExport ? (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => exportCollections.mutate()}
+              loading={exportCollections.isPending}
+            >
+              <Download aria-hidden="true" size={17} /> {t('admin.cashOps.exportCollections')}
+            </Button>
+          ) : null}
+        </div>
         {collections.isPending ? <LoadingState label={t('common.loading')} tone="admin" /> : null}
         <div className="admin-table-wrap">
           <table className="admin-table">
@@ -84,7 +145,7 @@ export function AdminCashPage() {
                 <th>{t('admin.columns.order')}</th>
                 <th>{t('admin.columns.courier')}</th>
                 <th>{t('admin.columns.expected')}</th>
-                <th>Encaissé</th>
+                <th>{t('admin.cashOps.collected')}</th>
                 <th>{t('common.status')}</th>
                 <th>{t('common.actions')}</th>
               </tr>
@@ -100,18 +161,25 @@ export function AdminCashPage() {
                   <td>
                     <Price millimes={item.collectedMillimes} />
                   </td>
-                  <td>{item.status}</td>
+                  <td>
+                    {t(`admin.cashOps.statuses.${item.status}`, { defaultValue: item.status })}
+                  </td>
                   <td>
                     <Button
                       type="button"
                       variant="ghost"
                       onClick={() => setSelectedCollectionId(item.id)}
                     >
-                      Ouvrir
+                      {t('common.details')}
                     </Button>
                   </td>
                 </tr>
               ))}
+              {collections.data?.items.length === 0 ? (
+                <tr>
+                  <td colSpan={6}>{t('admin.cashOps.noCollections')}</td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>
@@ -120,7 +188,7 @@ export function AdminCashPage() {
             <h3>{collection.data.orderNumber}</h3>
             <FormField
               name="collectedMillimes"
-              label="Montant physiquement encaissé (millimes)"
+              label={t('admin.cashOps.collectedMillimes')}
               type="number"
               min={0}
               defaultValue={collection.data.expectedMillimes}
@@ -128,22 +196,22 @@ export function AdminCashPage() {
             />
             <FormField
               name="reasonDetail"
-              label="Motif obligatoire si le montant diffère"
+              label={t('admin.cashOps.differenceReason')}
               maxLength={1000}
             />
             <Button type="submit" variant="admin" loading={action.isPending}>
-              Enregistrer l’encaissement
+              {t('admin.cashOps.recordCollection')}
             </Button>
           </form>
         ) : null}
       </section>
 
       <section className="admin-panel">
-        <h2>Nouvelle remise de livreur</h2>
+        <h2>{t('admin.cashOps.newRemittance')}</h2>
         <form className="admin-form-grid" onSubmit={createRemittance}>
-          <FormField name="courierId" label="Identifiant du livreur" required />
-          <FormField name="remittanceNumber" label="Numéro unique de remise" required />
-          <SelectField name="collectionId" label="Encaissement" required>
+          <FormField name="courierId" label={t('admin.cashOps.courierId')} required />
+          <FormField name="remittanceNumber" label={t('admin.cashOps.remittanceNumber')} required />
+          <SelectField name="collectionId" label={t('admin.cashOps.collection')} required>
             <option value="">—</option>
             {collections.data?.items
               .filter((item) => item.status === 'COLLECTED')
@@ -153,26 +221,47 @@ export function AdminCashPage() {
                 </option>
               ))}
           </SelectField>
-          <FormField name="amountMillimes" label="Montant alloué" type="number" min={1} required />
+          <FormField
+            name="amountMillimes"
+            label={t('admin.cashOps.allocatedMillimes')}
+            type="number"
+            min={1}
+            required
+          />
           <FormField
             name="declaredMillimes"
-            label="Montant déclaré"
+            label={t('admin.cashOps.declaredMillimes')}
             type="number"
             min={1}
             required
           />
           <Button type="submit" variant="admin">
-            Créer le brouillon
+            {t('admin.cashOps.createDraft')}
           </Button>
         </form>
       </section>
 
       <section className="admin-panel">
-        <h2>Remises et rapprochement</h2>
+        <div className="admin-panel__heading">
+          <h2>{t('admin.cashOps.remittancesTitle')}</h2>
+          {canExport ? (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => exportRemittances.mutate()}
+              loading={exportRemittances.isPending}
+            >
+              <Download aria-hidden="true" size={17} /> {t('admin.cashOps.exportRemittances')}
+            </Button>
+          ) : null}
+        </div>
         {remittances.data?.items.map((remittance) => (
           <article className="admin-panel" key={remittance.id}>
             <strong>{remittance.remittanceNumber}</strong> · {remittance.courierName} ·{' '}
-            <Price millimes={remittance.declaredMillimes} /> · {remittance.status}
+            <Price millimes={remittance.declaredMillimes} /> ·{' '}
+            {t(`admin.cashOps.statuses.${remittance.status}`, {
+              defaultValue: remittance.status,
+            })}
             {remittance.createdAt ? <LocalDate value={remittance.createdAt} /> : null}
             {remittance.status === 'DRAFT' ? (
               <Button
@@ -182,7 +271,7 @@ export function AdminCashPage() {
                   action.mutate(() => adminDataClient.submitCashRemittance(remittance.id))
                 }
               >
-                Soumettre
+                {t('admin.cashOps.submit')}
               </Button>
             ) : null}
             {remittance.status === 'SUBMITTED' || remittance.status === 'RECEIVED' ? (
@@ -199,22 +288,109 @@ export function AdminCashPage() {
               >
                 <FormField
                   name="verifiedMillimes"
-                  label="Montant vérifié"
+                  label={t('admin.cashOps.verifiedMillimes')}
                   type="number"
                   min={0}
                   defaultValue={remittance.declaredMillimes}
                   required
                 />
-                <FormField name="reasonDetail" label="Motif si différence" />
+                <FormField name="reasonDetail" label={t('admin.cashOps.differenceReason')} />
                 <Button type="submit" variant="admin">
-                  Rapprocher
+                  {t('admin.cashOps.reconcile')}
                 </Button>
               </form>
             ) : null}
+            {remittance.status === 'DISCREPANCY' && canReconcile ? (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setSelectedRemittanceId(remittance.id)}
+              >
+                {t('admin.cashOps.openDiscrepancy')}
+              </Button>
+            ) : null}
           </article>
         ))}
+        {remittances.data?.items.length === 0 ? <p>{t('admin.cashOps.noRemittances')}</p> : null}
       </section>
-      {collections.isError || collection.isError || remittances.isError || action.isError ? (
+      {remittance.data?.status === 'DISCREPANCY' ? (
+        <section className="admin-panel">
+          <h2>{t('admin.cashOps.discrepancyTitle')}</h2>
+          <p>
+            {remittance.data.remittanceNumber} · {t('admin.cashOps.declared')}{' '}
+            <Price millimes={remittance.data.declaredMillimes} /> · {t('admin.cashOps.verified')}{' '}
+            <Price millimes={remittance.data.verifiedMillimes ?? 0} />
+          </p>
+          {remittance.data.discrepancies
+            .filter((item) => item.status === 'OPEN')
+            .map((discrepancy) => (
+              <form
+                className="admin-form-grid"
+                key={discrepancy.id}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const form = new FormData(event.currentTarget);
+                  const resolution = text(form, 'resolution') as 'RESOLVED' | 'WRITTEN_OFF';
+                  const reasonDetail = text(form, 'reasonDetail');
+                  const finalVerifiedMillimes = Number(text(form, 'finalVerifiedMillimes'));
+                  action.mutate(() =>
+                    adminDataClient.resolveCashDiscrepancy(
+                      discrepancy.id,
+                      resolution,
+                      reasonDetail,
+                      resolution === 'RESOLVED' ? finalVerifiedMillimes : undefined,
+                    ),
+                  );
+                }}
+              >
+                <p>
+                  {discrepancy.reasonCode} ·{' '}
+                  <Price millimes={Math.abs(discrepancy.differenceMillimes)} />
+                </p>
+                <SelectField
+                  name="resolution"
+                  label={t('admin.cashOps.resolution')}
+                  defaultValue="RESOLVED"
+                >
+                  <option value="RESOLVED">{t('admin.cashOps.resolved')}</option>
+                  <option value="WRITTEN_OFF">{t('admin.cashOps.writtenOff')}</option>
+                </SelectField>
+                <FormField
+                  name="finalVerifiedMillimes"
+                  label={t('admin.cashOps.finalVerified')}
+                  type="number"
+                  min={0}
+                  defaultValue={remittance.data?.declaredMillimes ?? 0}
+                  required
+                />
+                <FormField
+                  name="reasonDetail"
+                  label={t('admin.cashOps.resolutionReason')}
+                  minLength={4}
+                  maxLength={1000}
+                  required
+                />
+                <Button
+                  type="submit"
+                  variant="admin"
+                  loading={action.isPending}
+                  disabled={discrepancy.openedByUserId === user?.id}
+                >
+                  {discrepancy.openedByUserId === user?.id
+                    ? t('admin.cashOps.secondAdminRequired')
+                    : t('admin.cashOps.resolve')}
+                </Button>
+              </form>
+            ))}
+        </section>
+      ) : null}
+      {collections.isError ||
+      collection.isError ||
+      remittances.isError ||
+      remittance.isError ||
+      action.isError ||
+      exportCollections.isError ||
+      exportRemittances.isError ? (
         <ErrorState compact />
       ) : null}
     </div>

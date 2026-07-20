@@ -486,8 +486,8 @@ export class AdminOrderDetailDto {
   @ApiProperty()
   minimumAge!: number;
 
-  @ApiProperty({ format: 'date-time' })
-  ageConfirmedAt!: string;
+  @ApiPropertyOptional({ nullable: true, format: 'date-time' })
+  ageConfirmedAt!: string | null;
 
   @ApiProperty()
   ageVerificationAtDeliveryRequired!: boolean;

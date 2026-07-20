@@ -1,12 +1,12 @@
 # Threat model
 
-Last reviewed: 2026-07-11
+Last reviewed: 2026-07-20
 
 ## Scope and method
 
 This model covers the storefront, administration UI, REST API, worker, MySQL, Redis, S3-compatible storage, Nginx, CI/CD, backups, and integrations. It uses trust-boundary and misuse-case analysis informed by STRIDE. It must be updated when a new provider, data class, privileged action, or deployment path is added.
 
-This is an engineering risk model, not a Tunisian legal opinion.
+Legal and regulatory suitability is the responsibility of the purchaser/operator and is outside the software production-readiness assessment.
 
 ## Assets
 
@@ -29,7 +29,7 @@ This is an engineering risk model, not a Tunisian legal opinion.
 - Couriers falsifying status, age checks, cash collection, or remittance
 - Supply-chain attackers compromising packages, images, CI actions, or build artifacts
 - Network/provider attackers returning malicious content or intercepting weak connections
-- Accidental operators causing destructive migration, inventory, compliance, or cash errors
+- Accidental operators causing destructive migration, inventory, customer-requirement, or cash errors
 
 ## Trust boundaries
 
@@ -79,22 +79,22 @@ An admin password success produces a pending challenge containing only admin ID,
 
 Separate admin and storefront hostnames are required for the intended controlled staging/production topology. Host-only cookies and explicit Nginx virtual hosts add defense in depth. API authorization remains decisive if the proxy is bypassed or misconfigured.
 
-## Privacy and legal-risk controls
+## Privacy and data-minimization controls
 
-- Collect only data needed for fulfillment, consent evidence, fraud prevention, treasury, and legal obligations.
+- Collect only data needed for the enabled application workflows and the purchaser/operator's documented retention purpose.
 - Do not store national identity-document images by default.
 - Store delivery age result and minimal evidence reference, not excessive identity data.
-- Restrict, audit, and asynchronously prepare customer exports; anonymization preserves lawful financial/history integrity.
-- Retention periods require Tunisian legal/privacy approval and must be configurable.
-- Age confirmation is not asserted to equal legally sufficient age verification; the legal checklist controls launch.
+- Restrict, audit, and asynchronously prepare customer exports; anonymization preserves required order, financial, and audit history.
+- Retention periods are purchaser/operator configuration and must not be invented by the software.
+- Entry/checkout confirmation and delivery verification are separately configurable. A self-attestation is evidence only of the implemented interaction; the software makes no claim about its legal sufficiency.
+- Legal approval metadata and document publication do not control startup, checkout, health, or the engineering readiness verdict.
 
 ## Residual and open risks
 
-- Tunisian sales/import/customs/advertising/age/privacy legality is unconfirmed until qualified written review.
 - TOTP does not prevent a fully compromised admin browser; phishing-resistant MFA should be evaluated after baseline delivery.
 - Provider and courier security cannot be assessed until integrations are selected.
 - Self-hosted Compose lacks production high availability and managed key custody.
 - Capacity, RPO, and RTO are claims only after controlled load and restore tests.
 - Malware scanning, WAF policy, SIEM routing, and immutable audit export need production provider decisions.
 
-All open risks must have an owner and disposition before the readiness verdict can advance.
+All engineering and operational open risks must have an owner and disposition before the readiness verdict can advance. Any purchaser/operator legal work is tracked separately and does not change that verdict.

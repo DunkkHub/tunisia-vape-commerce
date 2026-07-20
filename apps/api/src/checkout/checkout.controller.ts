@@ -27,7 +27,7 @@ export class CheckoutController {
   ) {}
 
   @Get('policy')
-  @ApiOperation({ summary: 'Evaluate every authoritative legal and operational checkout gate' })
+  @ApiOperation({ summary: 'Evaluate authoritative operational checkout readiness and fields' })
   policy() {
     return this.policies.response();
   }

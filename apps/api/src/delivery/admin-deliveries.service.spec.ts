@@ -1,6 +1,7 @@
 import { AgeVerificationResult, DeliveryAttemptOutcome, DeliveryStatus } from '@prisma/client';
 import type { Request } from 'express';
 import { describe, expect, it, vi } from 'vitest';
+import type { CryptoService } from '../common/security/crypto.service';
 import type { PrismaService } from '../database/prisma.service';
 import { AdminDeliveriesService } from './admin-deliveries.service';
 
@@ -11,6 +12,11 @@ const request = {
   socket: {},
   get: vi.fn().mockReturnValue('vitest'),
 } as unknown as Request;
+
+const crypto = {
+  hashToken: vi.fn().mockReturnValue('a'.repeat(64)),
+  encrypt: vi.fn().mockReturnValue('encrypted-recipient'),
+} as unknown as CryptoService;
 
 const operationDelivery = (status: DeliveryStatus = DeliveryStatus.PREPARING) => ({
   id: 'delivery-id',
@@ -25,6 +31,8 @@ const operationDelivery = (status: DeliveryStatus = DeliveryStatus.PREPARING) =>
   order: {
     id: 'order-id',
     orderNumber: 'TN-000001',
+    customerEmailSnapshot: 'customer@example.test',
+    customerPhoneSnapshot: '+21620111222',
     customerId: 'customer-id',
     status,
     paymentStatus: 'CASH_EXPECTED',
@@ -32,6 +40,7 @@ const operationDelivery = (status: DeliveryStatus = DeliveryStatus.PREPARING) =>
     minimumAgeSnapshot: 18,
     deliveryMethodType: 'COURIER',
     version: 7,
+    customer: { locale: 'fr' },
   },
   attempts: [],
   cashCollections: [],
@@ -93,13 +102,22 @@ const transactionBase = (
     count: vi.fn().mockResolvedValue(0),
   },
   auditLog: { create: vi.fn().mockResolvedValue({}) },
+  storeSetting: { findUnique: vi.fn().mockResolvedValue(null) },
+  notification: {
+    create: vi.fn().mockResolvedValue({
+      id: 'notification-id',
+      channel: 'EMAIL',
+      event: 'DELIVERY_FAILED',
+    }),
+  },
+  outboxEvent: { create: vi.fn().mockResolvedValue({}) },
 });
 
 const serviceFor = <T extends ReturnType<typeof transactionBase>>(transaction: T) => {
   const prisma = {
     $transaction: vi.fn((callback: (tx: T) => unknown) => Promise.resolve(callback(transaction))),
   } as unknown as PrismaService;
-  return new AdminDeliveriesService(prisma);
+  return new AdminDeliveriesService(prisma, crypto);
 };
 
 describe('manual administrator delivery service', () => {

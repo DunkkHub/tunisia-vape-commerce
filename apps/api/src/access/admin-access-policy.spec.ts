@@ -88,6 +88,8 @@ describe('super-administrator access policy', () => {
       CustomerAccountActionsController.prototype.reactivate,
       // eslint-disable-next-line @typescript-eslint/unbound-method
       CustomerAccountActionsController.prototype.disable,
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      CustomerAccountActionsController.prototype.anonymize,
     ];
 
     for (const handler of [...adminMutations, ...customerMutations]) {

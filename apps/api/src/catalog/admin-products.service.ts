@@ -348,7 +348,7 @@ export class AdminProductsService {
         : input.promotionalPriceMillimes;
     this.validatePrices(basePrice, promotionalPrice);
     if (targetStatus === 'PUBLISHED') {
-      await this.validatePublication(current, input, basePrice);
+      await this.validatePublication(current, basePrice);
     }
 
     const data = this.buildUpdateData(input, current);
@@ -490,14 +490,7 @@ export class AdminProductsService {
     }
   }
 
-  private async validatePublication(
-    current: Product,
-    input: UpdateProductDto,
-    basePrice: number | null,
-  ): Promise<void> {
-    const minimumAge = input.minimumAge === undefined ? current.minimumAge : input.minimumAge;
-    const warningFr = input.warningFr === undefined ? current.warningFr : input.warningFr;
-    const warningAr = input.warningAr === undefined ? current.warningAr : input.warningAr;
+  private async validatePublication(current: Product, basePrice: number | null): Promise<void> {
     const publishedVariantCount = await this.prisma.productVariant.count({
       where: {
         productId: current.id,
@@ -506,16 +499,10 @@ export class AdminProductsService {
         deletedAt: null,
       },
     });
-    if (
-      minimumAge === null ||
-      minimumAge < 18 ||
-      !warningFr?.trim() ||
-      !warningAr?.trim() ||
-      (basePrice === null && publishedVariantCount === 0)
-    ) {
+    if (basePrice === null && publishedVariantCount === 0) {
       throw new ConflictException({
         code: 'PRODUCT_PUBLICATION_REQUIREMENTS_MISSING',
-        message: 'A product needs approved warnings, minimum age, and a price before publication.',
+        message: 'A product needs a price or a published priced variant before publication.',
       });
     }
   }

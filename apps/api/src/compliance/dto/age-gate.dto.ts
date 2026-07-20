@@ -7,9 +7,9 @@ export class ConfirmAgeGateDto {
   @Equals(true)
   confirmed!: true;
 
-  @ApiProperty({ minimum: 18, maximum: 120 })
+  @ApiProperty({ minimum: 1, maximum: 120 })
   @IsInt()
-  @Min(18)
+  @Min(1)
   @Max(120)
   minimumAge!: number;
 }

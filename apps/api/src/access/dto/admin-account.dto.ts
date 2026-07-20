@@ -131,6 +131,13 @@ export class DisableCustomerAccountDto extends AccountLifecycleDto {
   confirmation!: 'DISABLE_CUSTOMER';
 }
 
+export class AnonymizeCustomerAccountDto extends AccountLifecycleDto {
+  @ApiProperty({ enum: ['ANONYMIZE_CUSTOMER'] })
+  @IsString()
+  @Equals('ANONYMIZE_CUSTOMER')
+  confirmation!: 'ANONYMIZE_CUSTOMER';
+}
+
 export class AdminRoleSummaryDto {
   @ApiProperty()
   key!: string;

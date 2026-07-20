@@ -3,9 +3,11 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma, type SettingValueType } from '@prisma/client';
 import type { Request } from 'express';
+import { createHash } from 'node:crypto';
 import { PrismaService } from '../database/prisma.service';
 import type { SettingScope, UpdateOperationalSettingDto } from './dto/admin-settings.dto';
 
@@ -13,6 +15,23 @@ type SettingRule = {
   valueType: SettingValueType;
   validate: (value: unknown) => boolean;
   message: string;
+};
+
+const CONFIGURATION_EXPORT_RECORD_LIMIT = 500;
+const CONFIGURATION_EXPORT_BYTE_LIMIT = 1_048_576;
+const SENSITIVE_SETTING_KEY =
+  /(^|[._-])(secret|password|token|credential|api[._-]?key|private[._-]?key|encryption|database|redis|smtp|webhook)([._-]|$)/i;
+
+const canonicalJsonValue = (value: Prisma.JsonValue): Prisma.JsonValue => {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort((left, right) => left.localeCompare(right))
+        .map((key) => [key, canonicalJsonValue(value[key]!)]),
+    );
+  }
+  return value;
 };
 
 const boolRule: SettingRule = {
@@ -44,15 +63,36 @@ const storeRules: Readonly<Record<string, SettingRule>> = {
   'store.default_locale': stringRule(2, (value) => value === 'fr' || value === 'ar'),
   'notifications.admin_order_created.enabled': boolRule,
   'notifications.customer_order_created.enabled': boolRule,
+  'notifications.customer_order_sms.enabled': boolRule,
+  'notifications.security_alert_email': stringRule(
+    320,
+    (value) => value === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
+  ),
+  'notifications.order_alert_email': stringRule(
+    320,
+    (value) => value === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
+  ),
+  'notifications.low_stock_alert_email': stringRule(
+    320,
+    (value) => value === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
+  ),
+  'notifications.operational_alert_locale': stringRule(
+    2,
+    (value) => value === 'fr' || value === 'ar',
+  ),
 };
 
 const complianceRules: Readonly<Record<string, SettingRule>> = {
-  'legal_review.completed': boolRule,
   minimum_purchase_age: {
     valueType: 'INTEGER',
-    validate: (value) => Number.isInteger(value) && Number(value) >= 18 && Number(value) <= 120,
-    message: 'The minimum purchase age must be an integer between 18 and 120.',
+    validate: (value) => Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 120,
+    message: 'The minimum purchase age must be an integer between 1 and 120.',
   },
+  'age_gate.entry.enabled': boolRule,
+  'age_gate.checkout.enabled': boolRule,
+  'consent.terms.required': boolRule,
+  'consent.privacy.required': boolRule,
+  'consent.recording.enabled': boolRule,
   'delivery.age_verification_required': boolRule,
 };
 
@@ -71,6 +111,90 @@ const metadata = (request: Request) => {
 @Injectable()
 export class AdminSettingsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async exportConfiguration(request: Request) {
+    const result = await this.prisma.$transaction(async (transaction) => {
+      const [storeRows, complianceRows] = await Promise.all([
+        transaction.storeSetting.findMany({
+          orderBy: [{ key: 'asc' }, { id: 'asc' }],
+          take: CONFIGURATION_EXPORT_RECORD_LIMIT + 1,
+          select: { id: true, key: true, valueType: true, value: true, secret: true },
+        }),
+        transaction.complianceSetting.findMany({
+          where: { key: { not: 'legal_review.completed' } },
+          orderBy: [{ key: 'asc' }, { id: 'asc' }],
+          take: CONFIGURATION_EXPORT_RECORD_LIMIT + 1,
+          select: { id: true, key: true, valueType: true, value: true },
+        }),
+      ]);
+
+      if (
+        storeRows.length > CONFIGURATION_EXPORT_RECORD_LIMIT ||
+        complianceRows.length > CONFIGURATION_EXPORT_RECORD_LIMIT
+      ) {
+        throw new ServiceUnavailableException({
+          code: 'SETTINGS_EXPORT_TOO_LARGE',
+          message: 'The configuration contains too many records to export safely.',
+        });
+      }
+
+      const excludedStore = storeRows.filter(
+        (setting) => setting.secret || SENSITIVE_SETTING_KEY.test(setting.key),
+      );
+      const excludedCompliance = complianceRows.filter((setting) =>
+        SENSITIVE_SETTING_KEY.test(setting.key),
+      );
+      const safeRecord = (setting: {
+        key: string;
+        valueType: SettingValueType;
+        value: Prisma.JsonValue;
+      }) => ({
+        key: setting.key,
+        valueType: setting.valueType,
+        value: canonicalJsonValue(setting.value),
+      });
+      const document = {
+        format: 'tunisia-vape-store-configuration' as const,
+        schemaVersion: 1 as const,
+        store: storeRows
+          .filter((setting) => !setting.secret && !SENSITIVE_SETTING_KEY.test(setting.key))
+          .map(safeRecord),
+        compliance: complianceRows
+          .filter((setting) => !SENSITIVE_SETTING_KEY.test(setting.key))
+          .map(safeRecord),
+        excludedSecretCount: excludedStore.length + excludedCompliance.length,
+      };
+      const canonical = JSON.stringify(document);
+      if (Buffer.byteLength(canonical, 'utf8') > CONFIGURATION_EXPORT_BYTE_LIMIT) {
+        throw new ServiceUnavailableException({
+          code: 'SETTINGS_EXPORT_TOO_LARGE',
+          message: 'The configuration export exceeds the supported response size.',
+        });
+      }
+      const checksumSha256 = createHash('sha256').update(canonical).digest('hex');
+
+      await transaction.auditLog.create({
+        data: {
+          ...metadata(request),
+          action: 'store.configuration.export',
+          resourceType: 'StoreConfiguration',
+          resourceId: 'safe-settings-v1',
+          afterSummary: {
+            format: document.format,
+            schemaVersion: document.schemaVersion,
+            storeSettingCount: document.store.length,
+            complianceSettingCount: document.compliance.length,
+            excludedSecretCount: document.excludedSecretCount,
+            checksumSha256,
+          },
+        },
+      });
+
+      return { ...document, checksumSha256 };
+    });
+
+    return { data: result };
+  }
 
   async update(
     scope: SettingScope,
@@ -121,7 +245,6 @@ export class AdminSettingsService {
       }
 
       const nextValue = input.value as Prisma.InputJsonValue;
-      const now = new Date();
       const updated =
         scope === 'store'
           ? await transaction.storeSetting.updateMany({
@@ -137,13 +260,6 @@ export class AdminSettingsService {
               data: {
                 value: nextValue,
                 version: { increment: 1 },
-                ...(key === 'legal_review.completed'
-                  ? {
-                      legallyReviewed: input.value === true,
-                      reviewedBy: input.value === true ? request.auth!.userId : null,
-                      reviewedAt: input.value === true ? now : null,
-                    }
-                  : {}),
               },
             });
       if (updated.count !== 1) throw this.versionConflict();
@@ -170,19 +286,10 @@ export class AdminSettingsService {
         valueType: current.valueType,
         value: input.value,
         version: current.version + 1,
-        legallyReviewed:
-          scope === 'compliance' && key === 'legal_review.completed'
-            ? input.value === true
-            : 'legallyReviewed' in current
-              ? current.legallyReviewed
-              : null,
-        reviewedAt:
-          scope === 'compliance' && key === 'legal_review.completed' && input.value === true
-            ? now.toISOString()
-            : null,
+        legallyReviewed: 'legallyReviewed' in current ? current.legallyReviewed : null,
+        reviewedAt: 'reviewedAt' in current ? current.reviewedAt?.toISOString() : null,
         effectiveMayBeStricterByEnvironment: [
           'checkout.enabled',
-          'legal_review.completed',
           'maintenance.mode',
           'prelaunch.mode',
         ].includes(key),

@@ -15,6 +15,11 @@ import {
   Prisma,
 } from '@prisma/client';
 import type { Request } from 'express';
+import {
+  createOrderNotificationsWithOutbox,
+  notificationEventForDeliveryStatus,
+} from '../common/outbox/order-notifications';
+import { CryptoService } from '../common/security/crypto.service';
 import { PrismaService } from '../database/prisma.service';
 import type {
   AssignDeliveryDto,
@@ -100,6 +105,8 @@ const DELIVERY_OPERATION_SELECT = {
     select: {
       id: true,
       orderNumber: true,
+      customerEmailSnapshot: true,
+      customerPhoneSnapshot: true,
       customerId: true,
       status: true,
       paymentStatus: true,
@@ -107,6 +114,7 @@ const DELIVERY_OPERATION_SELECT = {
       minimumAgeSnapshot: true,
       deliveryMethodType: true,
       version: true,
+      customer: { select: { locale: true } },
     },
   },
   attempts: {
@@ -154,7 +162,10 @@ const CASH_PAYMENT_STATUSES = new Set<PaymentStatus>([
 
 @Injectable()
 export class AdminDeliveriesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly crypto: CryptoService,
+  ) {}
 
   async listCouriers() {
     const couriers = await this.prisma.courier.findMany({
@@ -589,7 +600,7 @@ export class AdminDeliveriesService {
     target: DeliveryStatus,
     input: { reasonCode: string; note: string | null; action: string },
   ): Promise<void> {
-    await Promise.all([
+    const events: Promise<unknown>[] = [
       transaction.deliveryEvent.create({
         data: {
           deliveryId: delivery.id,
@@ -617,7 +628,25 @@ export class AdminDeliveriesService {
         before: { status: delivery.status, version: delivery.version },
         after: { status: target, version: delivery.version + 1 },
       }),
-    ]);
+    ];
+    const notificationEvent = notificationEventForDeliveryStatus(target);
+    if (notificationEvent) {
+      events.push(
+        createOrderNotificationsWithOutbox(transaction, this.crypto, {
+          order: {
+            id: delivery.order.id,
+            orderNumber: delivery.order.orderNumber,
+            customerEmailSnapshot: delivery.order.customerEmailSnapshot,
+            customerPhoneSnapshot: delivery.order.customerPhoneSnapshot,
+            locale: delivery.order.customer?.locale === 'ar' ? 'ar-TN' : 'fr-TN',
+          },
+          event: notificationEvent,
+          scheduledAt: new Date(),
+          idempotencyDiscriminator: `delivery:${target.toLocaleLowerCase('en-US')}:v${delivery.order.version + 1}`,
+        }),
+      );
+    }
+    await Promise.all(events);
   }
 
   private audit(

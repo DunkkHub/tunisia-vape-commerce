@@ -10,8 +10,12 @@ export const statusPayload = {
   maintenanceMode: false,
   prelaunchMode: false,
   checkoutEnabled: true,
-  legalReviewCompleted: true,
   minimumAge: 18,
+  ageGateEnabled: true,
+  checkoutAgeConfirmationRequired: true,
+  termsAcceptanceRequired: true,
+  privacyAcceptanceRequired: true,
+  consentRecordingEnabled: true,
   ageGateRequired: false,
   ageConfirmed: true,
 };

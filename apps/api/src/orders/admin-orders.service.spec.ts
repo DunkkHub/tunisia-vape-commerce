@@ -17,9 +17,11 @@ const operationOrder = (status: OrderStatus = OrderStatus.PENDING_CONFIRMATION) 
   id: 'order-id',
   orderNumber: 'TN-000001',
   customerPhoneSnapshot: '+21620111222',
+  customerEmailSnapshot: 'customer@example.test',
   status,
   paymentStatus: 'CASH_EXPECTED',
   version: 3,
+  customer: { locale: 'fr' },
   delivery: { id: 'delivery-id', status, version: 2 },
   items: [{ id: 'order-item-id', variantId: 'variant-id', quantity: 2 }],
   cashCollections: [{ id: 'cash-id', status: 'EXPECTED' }],
@@ -126,11 +128,31 @@ const successfulTransaction = (targetStatus: OrderStatus) => {
       updateMany: inventoryUpdate,
     },
     stockMovement: { create: vi.fn().mockResolvedValue({}) },
+    storeSetting: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    productVariant: { findMany: vi.fn().mockResolvedValue([]) },
     delivery: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     cashCollection: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     orderStatusHistory: { create: vi.fn().mockResolvedValue({}) },
     deliveryEvent: { create: vi.fn().mockResolvedValue({}) },
-    notification: { create: vi.fn().mockResolvedValue({}) },
+    notification: {
+      create: vi.fn().mockResolvedValue({
+        id: 'notification-id',
+        channel: 'EMAIL',
+        event: 'ORDER_CONFIRMED',
+      }),
+      upsert: vi.fn().mockResolvedValue({
+        id: 'low-stock-notification-id',
+        channel: 'EMAIL',
+        event: 'LOW_STOCK_ALERT',
+      }),
+    },
+    outboxEvent: {
+      create: vi.fn().mockResolvedValue({}),
+      upsert: vi.fn().mockResolvedValue({}),
+    },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
   };
   const prisma = {
@@ -169,6 +191,7 @@ describe('administrator order intake service', () => {
     };
     expect(consumeCall.data).toMatchObject({ state: 'CONSUMED', activeKey: null });
     expect(transaction.notification.create).toHaveBeenCalledOnce();
+    expect(transaction.outboxEvent.create).toHaveBeenCalledOnce();
     expect(transaction.auditLog.create).toHaveBeenCalledOnce();
   });
 
@@ -209,6 +232,44 @@ describe('administrator order intake service', () => {
     ).rejects.toMatchObject({ response: { code: 'INSUFFICIENT_STOCK' } });
     expect(inventoryUpdate).not.toHaveBeenCalled();
     expect(transaction.stockReservation.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('coalesces an email alert when confirmed stock is at or below its threshold', async () => {
+    const { service, transaction } = successfulTransaction(OrderStatus.CONFIRMED);
+    transaction.storeSetting.findUnique.mockImplementation(
+      ({ where }: { where: { key: string } }) =>
+        Promise.resolve({
+          value: where.key === 'notifications.low_stock_alert_email' ? 'stock@example.test' : false,
+        }),
+    );
+    transaction.storeSetting.findMany.mockResolvedValue([
+      { key: 'notifications.low_stock_alert_email', value: 'stock@example.test' },
+      { key: 'notifications.operational_alert_locale', value: 'fr' },
+    ]);
+    transaction.productVariant.findMany.mockResolvedValue([
+      {
+        id: 'variant-id',
+        sku: 'SKU-1',
+        nameFr: 'Menthe',
+        nameAr: 'نعناع',
+        lowStockThreshold: 3,
+        inventoryItems: [{ onHandQuantity: 3, reservations: [{ quantity: 1 }] }],
+      },
+    ]);
+
+    await service.confirm('order-id', { expectedVersion: 3, confirmed: true }, request);
+
+    const alert = transaction.notification.upsert.mock.calls[0]![0] as {
+      create: { event: string; channel: string; payload: Record<string, unknown> };
+    };
+    expect(alert.create).toMatchObject({
+      event: 'LOW_STOCK_ALERT',
+      channel: 'EMAIL',
+      payload: { sku: 'SKU-1', remainingQuantity: 2, threshold: 3 },
+    });
+    expect(JSON.stringify(transaction.outboxEvent.upsert.mock.calls)).not.toContain(
+      'stock@example.test',
+    );
   });
 
   it('cancels an early order, releases reservations, voids cash, and does not alter on-hand', async () => {

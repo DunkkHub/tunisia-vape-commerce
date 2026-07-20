@@ -7,7 +7,7 @@ const config = {
   get: vi.fn((key: string) => {
     if (key === 'HEALTHCHECK_TIMEOUT_MS') return 1_000;
     if (key === 'WORKER_HEARTBEAT_MAX_AGE_SECONDS') return 60;
-    if (key === 'EXPECTED_MIGRATION_NAME') return '20260713010000_durable_outbox';
+    if (key === 'EXPECTED_MIGRATION_NAME') return '20260720160000_cash_collection_idempotency';
     return undefined;
   }),
 };

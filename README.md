@@ -1,98 +1,104 @@
 # Tunisia Vape Commerce
 
-Production-oriented React + NestJS modular-monolith foundation for an age-restricted Tunisian retailer. The store is cash-on-delivery only, bilingual (French/Arabic with RTL), stores money as integer millimes, and starts with checkout disabled.
+Production-oriented React, NestJS, BullMQ, MySQL, and Redis commerce software for an age-restricted Tunisian cash-on-delivery retailer. The storefront and administration UI are bilingual (French/Arabic with RTL), money is stored as integer TND millimes, and customer and administrator authentication are separate security realms.
 
-> This repository is **not approved for production use**. Tunisian legal review, real infrastructure credentials, live migration/restore exercises, courier integrations, payment/COD operating procedures, security review, and measured load tests are still external launch gates. See `PRODUCTION_READINESS_REPORT.md`.
+The current engineering verdict is **NOT READY**. See [PRODUCTION_READINESS_REPORT.md](PRODUCTION_READINESS_REPORT.md) for verified evidence and remaining technical and operational blockers.
+
+Legal and regulatory suitability is the responsibility of the purchaser/operator and is outside the software production-readiness assessment.
 
 ## Authentication separation
 
-Customer and administrator authentication are intentionally different security realms:
+| Realm         | Browser route  | API namespace             | Session cookie          | Policy                                                                                           |
+| ------------- | -------------- | ------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------ |
+| Customer      | `/login`       | `/api/v1/auth/customer/*` | `vape_customer_session` | Customer-only session                                                                            |
+| Administrator | `/admin/login` | `/api/v1/auth/admin/*`    | `vape_admin_session`    | Password creates a five-minute challenge; verified TOTP is mandatory before a full admin session |
 
-| Realm         | Browser route  | API namespace             | Session cookie          | Policy                                                                                          |
-| ------------- | -------------- | ------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------- |
-| Customer      | `/login`       | `/api/v1/auth/customer/*` | `vape_customer_session` | Standard customer session; optional 2FA architecture                                            |
-| Administrator | `/admin/login` | `/api/v1/auth/admin/*`    | `vape_admin_session`    | Password creates only a five-minute challenge; verified TOTP is mandatory before a full session |
-
-The realms use separate React providers, query keys, API clients, cookies, CSRF cookies, rate-limit scopes, guards, session audiences, and idle timeouts. An admin session is never accepted by a customer guard, and a customer session is never accepted by an admin guard. No authentication token is stored in browser storage.
+The realms use separate providers, API clients, cookies, CSRF contexts, rate-limit scopes, guards, Redis prefixes, timeouts, and revocation flows. Neither realm accepts the other's credential. Authentication tokens are never stored in browser storage.
 
 ## Stack
 
-- React 19, TypeScript 5.9, Vite 8, React Router 7, TanStack Query, React Hook Form, Zod, Tailwind CSS, Radix UI, i18next
-- NestJS 11, Prisma 6.19, MySQL 8, Redis, BullMQ, Argon2id, opaque server-managed sessions, TOTP
+- React 19, TypeScript 5.9, Vite 8, React Router 7, TanStack Query, React Hook Form, Zod, Tailwind CSS, Radix UI, and i18next
+- NestJS 11, Prisma 6.19, MySQL 8.4, Redis, BullMQ, Argon2id, opaque server-managed sessions, and TOTP
 - Docker Compose with MySQL, Redis, MinIO, Mailpit, API, worker, web, and Nginx
-- Vitest, Testing Library, Playwright, Supertest-compatible API tooling, ESLint, Prettier
+- Vitest, Testing Library, Playwright, Supertest-compatible API tooling, ESLint, and Prettier
 
-All dependency versions are pinned exactly in the package manifests and lockfile.
+Exact dependency versions are recorded in the package manifests and `pnpm-lock.yaml`.
 
-## Local setup
+## Start locally
 
-Requirements: Node.js 22.12+, Corepack, Docker Compose, and pnpm 11.11.
+Requirements: Node.js 22.12+, Corepack, and pnpm 11.11.0. The supported dependency path uses Docker Compose:
 
 ```bash
 corepack enable
-pnpm install --frozen-lockfile
-cp .env.example .env
+corepack pnpm install --frozen-lockfile
+copy .env.example .env
 docker compose up -d mysql redis minio mailpit
-pnpm prisma:generate
-pnpm prisma:migrate:dev
-pnpm prisma:seed
-pnpm admin:create
-pnpm dev
+corepack pnpm prisma:generate
+corepack pnpm prisma:migrate:dev
+corepack pnpm prisma:seed
+corepack pnpm admin:create
+corepack pnpm dev
 ```
 
-On a locked-down Windows installation where Corepack cannot install its global shim, run `corepack pnpm <command>`; the repository also contains `pnpm.cmd` for package subprocesses.
+Use `cp .env.example .env` on macOS/Linux. On Windows, `corepack pnpm <command>` avoids requiring a global pnpm shim. Detailed Docker, Dockerless Windows, migration, and start procedures are in [Local setup](docs/LOCAL_SETUP.md).
 
-The structural seed creates roles, permissions, Tunisia's 24 governorates, and fail-closed settings. It creates no users, administrator, products, or default credentials. `pnpm admin:create` prompts securely and forces first-login TOTP enrollment.
+For production-shaped deployment, use `.env.production.example` as the variable contract, replace every placeholder through the operator's secret manager, and keep populated environment and secret files outside Git. See the [Deployment guide](docs/DEPLOYMENT.md).
+
+The structural seed creates roles, permissions, Tunisia's 24 governorates, and settings. It creates no user, administrator, customer, product, stock, delivery method, or provider credential. `pnpm admin:create` is the only first-administrator bootstrap and forces TOTP enrollment.
 
 Default development URLs:
 
 - Storefront: `http://localhost:5173`
 - Customer login: `http://localhost:5173/login`
-- Admin login: `http://localhost:5173/admin/login`
+- Administrator login: `http://localhost:5173/admin/login`
 - API: `http://localhost:3000/api/v1`
 - OpenAPI: `http://localhost:3000/api/docs`
+- Docker gateway: `http://localhost:8080`
 
-For local visual review while the stored prelaunch gate remains enabled, set
-`VITE_STOREFRONT_DESIGN_PREVIEW=true` in `apps/web/.env.local` and configure an explicit
-development minimum age of at least 18. The exception is honored only by the Vite development
-server, only on the landing route, and only after the normal signed age confirmation. Production
-builds continue to show the blocking prelaunch page; checkout and legal-release gates are never
-enabled by this switch.
+## Checkout configuration
 
-## Implemented catalog and administration reads
+The fresh configuration has `CHECKOUT_ENABLED=true`, `checkout.enabled=true`, `PRELAUNCH_MODE=false`, and `prelaunch.mode=false`. That does not make a fresh install sellable: the seed intentionally leaves store identity/contact values empty and creates no delivery method, so the API reports `STORE_INFORMATION_MISSING` and `DELIVERY_METHOD_MISSING` until an operator configures them.
 
-The public catalog can combine text/category, brand, product type, flavor, and inclusive minimum/maximum effective-price filters. Prices cross the API boundary as integer millimes; the storefront converts user-entered TND values before requesting the API. `GET /api/v1/catalog/facets` returns bounded public brand, product-type, flavor-count, and effective-price-range values after the age gate.
+Legal approval and legal-document publication are not executable checkout prerequisites. The API continues to fail closed for operational conditions, request validation, authorization, server-authoritative pricing, delivery resolution, stock, idempotency, and database/service failures.
 
-The administration UI now has read-only API support for dashboard, products, inventory, orders, customers, deliveries, cash reconciliations, settings, and audit pages. These routes require a full TOTP-verified administrator session plus the exact seeded permission for the resource. List responses are no-store, deterministically ordered, and capped at 50 records per page. Setting secrets are redacted and audit responses use a privacy-minimized allowlist.
+The configurable age, consent, and delivery controls are:
 
-Inventory rows represent product variants. Their displayed remaining quantity is calculated at an `asOf` time as eligible physical on-hand minus active, unexpired reservations. Archived or expired batches are excluded. The response also provides full-filter totals by brand, product type, flavor, and brand-plus-flavor; these totals cover the complete filtered result, not only the current page. This is an operational read projection, not an authoritative checkout reservation: checkout must still recalculate stock under database locks.
+- `age_gate.entry.enabled`
+- `age_gate.checkout.enabled`
+- `consent.terms.required`
+- `consent.privacy.required`
+- `consent.recording.enabled`
+- `delivery.age_verification_required`
+
+All six default to `true` in a fresh structural seed and can be changed only through the typed, permission-protected, recent-authenticated, audited settings API. See [Store configuration](docs/STORE_CONFIGURATION.md).
+
+## Catalog and administration
+
+The public catalog supports combined search, category, brand, product type, flavor, featured, price-range, and allowlisted sort filters. Prices cross the API boundary as integer millimes. Public facets are bounded and follow the same publication and restriction policy as product reads.
+
+Administrator surfaces include writable product/variant and taxonomy operations, secure product media, batch inventory receipt and dual-controlled adjustments, transfers and movement history, orders, manual courier/manifests/status CSV operations, COD reconciliation and discrepancy resolution, customer lifecycle actions, settings transfer, access control, and audit/security reads. Capabilities that still lack complete production evidence are listed in the readiness report; documentation does not imply that an unfinished external provider is configured.
 
 ## Verification
 
+For a complete release gate, provide isolated test MySQL/Redis URLs and run:
+
 ```bash
-pnpm format:check
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm test:e2e
-pnpm test:security
-pnpm test:load
+corepack pnpm verify:release
 ```
 
-Prisma validation needs a syntactically valid `DATABASE_URL`; it does not require a live database unless a migration or integration test is executed.
+The gate performs frozen installation, Prisma generation and validation, formatting, linting, type checking, unit/integration/security/operations tests, production builds, dependency audit, fast Playwright regressions, and a disposable non-mocked MySQL/Redis/Chromium commerce/TOTP/RBAC path. CI additionally owns container builds/scans, CodeQL, secret scanning, Trivy, and SBOM evidence. See [Release verification](docs/RELEASE_VERIFICATION.md).
 
-The latest recorded local application test run on 2026-07-12 reported 58 passing API/security tests and 15 passing web tests, for 73 total. Playwright separately reported eight passing checks and two deliberate duplicate-project skips. These local results do not establish production readiness.
+## Buyer and operator documentation
 
-## Safety and compliance defaults
+- [Buyer handoff](docs/BUYER_HANDOFF.md)
+- [Local and Docker setup](docs/LOCAL_SETUP.md)
+- [Store configuration](docs/STORE_CONFIGURATION.md)
+- [Checkout and order lifecycle](docs/CHECKOUT_AND_ORDER_LIFECYCLE.md)
+- [Inventory operations](docs/INVENTORY_OPERATIONS.md)
+- [Notifications](docs/NOTIFICATIONS.md)
+- [Administrator guide](docs/ADMIN_GUIDE.md)
+- [Deployment guide](docs/DEPLOYMENT.md)
+- [Backup and recovery](docs/BACKUP_AND_RECOVERY.md)
+- [Production checklist](docs/PRODUCTION_CHECKLIST.md)
 
-- `CHECKOUT_ENABLED=false`, `LEGAL_REVIEW_COMPLETED=false`, and `PRELAUNCH_MODE=true`
-- Mandatory store-entry and checkout age confirmation architecture
-- Required legal-document and delivery-method gates before checkout
-- TND values stored as integer millimes; delivery fees and prices are server-authoritative
-- No identity-document photographs stored by default
-- No default administrator and no hardcoded password
-- Opaque session tokens are hashed at rest; TOTP secrets and notification recipients are encrypted
-- Immutable order snapshots, audited inventory movements, delivery histories, and COD reconciliation records
-
-Start with `docs/IMPLEMENTATION_PLAN.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and `docs/LEGAL_AND_COMPLIANCE_CHECKLIST.md`.
+The optional [Legal and compliance checklist](docs/LEGAL_AND_COMPLIANCE_CHECKLIST.md) is an operator-owned reference and is not an executable software-readiness gate.

@@ -1,17 +1,19 @@
 # Production checklist
 
-No box may be checked without linked evidence, owner, date, and environment. Not applicable requires written justification and approval. This checklist does not replace qualified Tunisian legal or independent human security review.
+No box may be checked without linked evidence, owner, date, and environment. Not applicable requires written justification and approval. This is an engineering and operational readiness checklist; it does not replace an independent human security review.
 
-## Legal and business gate
+Legal and regulatory suitability is the responsibility of the purchaser/operator and is outside the software production-readiness assessment.
 
-- [ ] Qualified Tunisian legal/regulatory written review is complete for every item in the legal checklist.
-- [ ] Minimum legal purchasing age and delivery verification method are approved/configured.
-- [ ] Store legal identity, tax/invoice, consumer, return/refund, contact and address data are approved.
-- [ ] French and Arabic legal documents/warnings are reviewed, published and versioned.
-- [ ] Consent and retention wording/process are approved.
-- [ ] Products, imports, labels, nicotine restrictions and advertising are approved.
-- [ ] Delivery zones, rates, COD limits, blackout dates and unsupported areas are approved.
-- [ ] Checkout gate rejects every missing prerequisite in production.
+The optional [legal and compliance checklist](LEGAL_AND_COMPLIANCE_CHECKLIST.md) is maintained separately by the purchaser/operator. Its completion, legal approval metadata, and document publication are not executable software-readiness or checkout gates.
+
+## Store and checkout operations
+
+- [ ] Store name, phone, email, and address are configured with production values.
+- [ ] At least one active supported delivery zone/current rate or active pickup is configured.
+- [ ] Every configured delivery area resolves one valid, unambiguous price.
+- [ ] `CHECKOUT_ENABLED=true`, `checkout.enabled=true`, maintenance is false, and prelaunch is false for the release environment.
+- [ ] Every checkout policy blocker is exercised independently and the result is recorded.
+- [ ] Database, Redis, worker heartbeat, and expected migration readiness pass.
 
 ## Build and supply chain
 
@@ -61,7 +63,7 @@ No box may be checked without linked evidence, owner, date, and environment. Not
 - [ ] No Float is used for monetary storage/calculation.
 - [ ] Normalized Tunisia phone uniqueness/search behavior passes.
 
-## Commerce and compliance
+## Commerce and configurable customer requirements
 
 - [ ] Server recalculates all prices, promotion, tax, delivery fee and totals.
 - [ ] Integer-millime unit/property tests pass.
@@ -72,8 +74,10 @@ No box may be checked without linked evidence, owner, date, and environment. Not
 - [ ] Reservation expiry/cancel/release and return inspection pass.
 - [ ] Archived/unpublished product cannot be purchased and remains in history.
 - [ ] Order/address/item/warning/promotion/consent/age snapshots are complete.
-- [ ] Maintenance, checkout-disabled, prelaunch and missing-legal gates block order creation.
-- [ ] Age entry/checkout confirmation and delivery-required result are preserved.
+- [ ] Maintenance, checkout-disabled, prelaunch, required minimum-age, missing-store, and missing-delivery gates block order creation.
+- [ ] Missing legal approval metadata and unpublished legal documents do not block checkout.
+- [ ] Entry/checkout age, terms, privacy, recording, and delivery-age controls are each tested enabled and disabled without bypassing unrelated controls.
+- [ ] Enabled age entry/checkout confirmation and delivery-required results are preserved.
 - [ ] Failed delivery age verification can never become delivered.
 
 ## Catalog, upload and frontend
@@ -108,7 +112,7 @@ No box may be checked without linked evidence, owner, date, and environment. Not
 - [ ] CSP/HSTS/nosniff/frame/referrer/permissions policies are verified over TLS.
 - [ ] Structured logs redact every required secret/PII class and production stacks.
 - [ ] Audit/security histories are complete and immutable through normal APIs.
-- [ ] Customer export/deletion/anonymization and retention procedures are approved/tested.
+- [ ] Customer export/deletion/anonymization and operator retention procedures are tested.
 - [ ] No national identity-document photos are stored by default.
 - [ ] Independent human application/infrastructure security review is accepted.
 
@@ -140,7 +144,7 @@ No box may be checked without linked evidence, owner, date, and environment. Not
 - [ ] Protected environment requires passing CI and manual human approval.
 - [ ] Migration job, immutable image promotion, health rollout and rollback are rehearsed.
 - [ ] Storefront/admin smoke tests and monitoring verification are scripted.
-- [ ] Legal/checkout flags default closed and cannot be bypassed by deployment.
+- [ ] Checkout/maintenance/prelaunch settings and stricter environment overrides cannot be bypassed by deployment.
 - [ ] Operator/admin/delivery/COD guides are trained and owners are named.
 - [ ] Support, privacy, cash, inventory, security and release handoffs are staffed.
 
@@ -151,5 +155,4 @@ No box may be checked without linked evidence, owner, date, and environment. Not
 - [ ] Business-logic review has no unresolved release blocker.
 - [ ] Production-readiness review lists every failure, limitation, risk and credential.
 - [ ] Human security approver signs.
-- [ ] Qualified Tunisian legal/regulatory approver signs.
 - [ ] Business owner accepts measured operational, RPO/RTO and residual risks.

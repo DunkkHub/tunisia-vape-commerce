@@ -4,6 +4,7 @@ coverage/
 .env
 .env.*
 !.env.example
+!.env.production.example
 *.log
 .DS_Store
 Thumbs.db
@@ -16,4 +17,5 @@ uploads/
 backups/
 work/
 outputs/
+secrets/
 prisma/dev.db

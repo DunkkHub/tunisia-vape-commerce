@@ -10,7 +10,9 @@ import { Prisma } from '@prisma/client';
 import type { Request } from 'express';
 import { buildPublicProductWhere } from '../catalog/catalog-policy';
 import { addMillimes, calculateBasisPoints } from '../common/money/money';
+import { createOperationalAlertWithOutbox } from '../common/outbox/operational-alerts';
 import { CryptoService } from '../common/security/crypto.service';
+import { createOrderNotificationsWithOutbox } from '../common/outbox/order-notifications';
 import { PrismaService } from '../database/prisma.service';
 import {
   allocateInventory,
@@ -25,7 +27,7 @@ import {
   selectSurchargeRate,
   type RateContext,
 } from './checkout-pricing';
-import { CheckoutPolicyService } from './checkout-policy.service';
+import { CheckoutPolicyService, type CheckoutRequirements } from './checkout-policy.service';
 import type { CheckoutOrderDto } from './dto/checkout-order.dto';
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1_000;
@@ -47,6 +49,13 @@ interface IdempotencyClaim {
   orderId: string | null;
   completedAt: Date | null;
   expiresAt: Date;
+}
+
+interface LockedCheckoutCart {
+  id: string;
+  version: number;
+  expiresAt: Date | null;
+  items: Array<{ variantId: string; quantity: number }>;
 }
 
 interface ResolvedCourierAddress {
@@ -170,11 +179,12 @@ export class CheckoutOrderService {
     const policy = await this.policies.evaluate(now, transaction);
     if (!policy.allowed || policy.minimumAge === null) {
       throw new ConflictException({
-        code: 'LEGAL_GATE_CLOSED',
+        code: 'CHECKOUT_UNAVAILABLE',
         message: 'Checkout is not currently available.',
         blockers: policy.blockers,
       });
     }
+    this.assertConfiguredConsent(input, policy.requirements);
 
     const customerUser = await transaction.user.findFirst({
       where: {
@@ -217,6 +227,13 @@ export class CheckoutOrderService {
         message: 'The customer account cannot place an order.',
       });
     }
+
+    const cart = await this.lockCheckoutCart(
+      transaction,
+      customerUser.customerProfile.id,
+      input.items,
+      now,
+    );
 
     const variantIds = input.items.map((item) => item.variantId);
     const inventoryCandidates = await transaction.inventoryItem.findMany({
@@ -420,6 +437,7 @@ export class CheckoutOrderService {
       data: {
         orderNumber,
         customerId: customerUser.customerProfile.id,
+        cartId: cart.id,
         customerNameSnapshot: input.customerName,
         customerPhoneSnapshot: input.phone,
         ...(customerEmail ? { customerEmailSnapshot: customerEmail } : {}),
@@ -441,9 +459,11 @@ export class CheckoutOrderService {
         ...(input.address?.instructions
           ? { deliveryInstructions: input.address.instructions }
           : {}),
-        ageConfirmedAt: now,
+        ...(policy.requirements.ageConfirmationRequired && input.consent.ageConfirmed
+          ? { ageConfirmedAt: now }
+          : {}),
         minimumAgeSnapshot: policy.minimumAge,
-        ageVerificationAtDeliveryRequired: true,
+        ageVerificationAtDeliveryRequired: policy.requirements.deliveryAgeVerificationRequired,
         phoneConfirmationRequired: fulfillment.phoneConfirmationRequired,
         manualReviewRequired: fulfillment.manualReviewRequired,
       },
@@ -553,46 +573,58 @@ export class CheckoutOrderService {
     }
 
     await this.createAddressSnapshot(transaction, order.id, input, fulfillment);
-    await transaction.orderConsentSnapshot.createMany({
-      data: [
-        {
+    const consentSnapshots: Prisma.OrderConsentSnapshotCreateManyInput[] = [];
+    if (policy.requirements.consentRecordingEnabled) {
+      if (input.consent.ageConfirmed) {
+        consentSnapshots.push({
           orderId: order.id,
           consentType: 'CHECKOUT_AGE_CONFIRMATION',
           granted: true,
           consentedAt: now,
           ...this.requestEvidence(request),
-        },
-        {
+        });
+      }
+      if (input.consent.termsAccepted) {
+        consentSnapshots.push({
           orderId: order.id,
           consentType: 'TERMS',
           granted: true,
           consentedAt: now,
           ...this.consentVersionSnapshot(consentVersions.terms),
           ...this.requestEvidence(request),
-        },
-        {
+        });
+      }
+      if (input.consent.privacyAccepted) {
+        consentSnapshots.push({
           orderId: order.id,
           consentType: 'PRIVACY',
           granted: true,
           consentedAt: now,
           ...this.consentVersionSnapshot(consentVersions.privacy),
           ...this.requestEvidence(request),
+        });
+      }
+    }
+    if (consentSnapshots.length > 0) {
+      await transaction.orderConsentSnapshot.createMany({ data: consentSnapshots });
+    }
+    if (policy.requirements.consentRecordingEnabled && input.consent.ageConfirmed) {
+      await transaction.ageVerificationEvent.create({
+        data: {
+          customerId: customerUser.customerProfile.id,
+          orderId: order.id,
+          phase: 'CHECKOUT',
+          result: 'PENDING',
+          minimumAge: policy.minimumAge,
+          method: 'self_attestation',
+          reasonCode: policy.requirements.deliveryAgeVerificationRequired
+            ? 'DELIVERY_VERIFICATION_REQUIRED'
+            : 'SELF_ATTESTED_NOT_IDENTITY_VERIFIED',
+          occurredAt: now,
+          ...this.requestEvidence(request),
         },
-      ],
-    });
-    await transaction.ageVerificationEvent.create({
-      data: {
-        customerId: customerUser.customerProfile.id,
-        orderId: order.id,
-        phase: 'CHECKOUT',
-        result: 'PENDING',
-        minimumAge: policy.minimumAge,
-        method: 'self_attestation',
-        reasonCode: 'DELIVERY_VERIFICATION_REQUIRED',
-        occurredAt: now,
-        ...this.requestEvidence(request),
-      },
-    });
+      });
+    }
     await transaction.orderStatusHistory.create({
       data: {
         orderId: order.id,
@@ -607,8 +639,10 @@ export class CheckoutOrderService {
       data: {
         orderId: order.id,
         status: 'PENDING_CONFIRMATION',
-        ageVerificationRequired: true,
-        ageVerificationResult: 'PENDING',
+        ageVerificationRequired: policy.requirements.deliveryAgeVerificationRequired,
+        ageVerificationResult: policy.requirements.deliveryAgeVerificationRequired
+          ? 'PENDING'
+          : 'NOT_REQUIRED',
       },
       select: { id: true },
     });
@@ -633,24 +667,26 @@ export class CheckoutOrderService {
         method: 'CASH',
       },
     });
-    await transaction.notification.create({
-      data: {
-        orderId: order.id,
-        idempotencyKey: `order:${order.id}:received:console`,
-        event: 'ORDER_RECEIVED',
-        channel: 'CONSOLE',
-        recipientHash: this.crypto.hashToken(input.phone),
-        encryptedRecipient: this.crypto.encrypt(input.phone),
-        locale: customerUser.customerProfile.locale,
-        payload: {
-          schemaVersion: 1,
-          orderId: order.id,
+    if (policy.requirements.customerOrderCreatedNotificationEnabled) {
+      await createOrderNotificationsWithOutbox(transaction, this.crypto, {
+        order: {
+          id: order.id,
           orderNumber: order.orderNumber,
-          event: 'ORDER_RECEIVED',
+          customerEmailSnapshot: customerEmail ?? null,
+          customerPhoneSnapshot: input.phone,
+          locale: customerUser.customerProfile.locale,
         },
-        status: 'QUEUED',
+        event: 'ORDER_RECEIVED',
         scheduledAt: now,
-      },
+      });
+    }
+    await createOperationalAlertWithOutbox(transaction, this.crypto, {
+      kind: 'order',
+      event: 'ADMIN_ORDER_CREATED',
+      idempotencyKey: `admin-order-created:${order.id}`,
+      payload: { orderNumber: order.orderNumber },
+      scheduledAt: now,
+      enabledKey: 'notifications.admin_order_created.enabled',
     });
     await transaction.auditLog.create({
       data: {
@@ -677,8 +713,78 @@ export class CheckoutOrderService {
       where: { id: claim.id },
       data: { orderId: order.id, completedAt: now },
     });
+    const converted = await transaction.cart.updateMany({
+      where: { id: cart.id, status: 'ACTIVE', version: cart.version },
+      data: { status: 'CONVERTED', convertedAt: now, version: { increment: 1 } },
+    });
+    if (converted.count !== 1) {
+      throw new ConflictException({
+        code: 'CART_CHANGED',
+        message: 'The cart changed before the order could be completed. Refresh and try again.',
+      });
+    }
 
     return this.orderResponse(order);
+  }
+
+  private async lockCheckoutCart(
+    transaction: Transaction,
+    customerId: string,
+    requestedItems: CheckoutOrderDto['items'],
+    now: Date,
+  ): Promise<LockedCheckoutCart> {
+    await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT \`id\` FROM \`CustomerProfile\` WHERE \`id\` = ${customerId} FOR UPDATE
+    `);
+    const candidate = await transaction.cart.findFirst({
+      where: { customerId, status: 'ACTIVE' },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+      select: { id: true },
+    });
+    if (!candidate) {
+      throw new ConflictException({
+        code: 'CART_EMPTY',
+        message: 'Add an available product to the cart before checkout.',
+      });
+    }
+    await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT \`id\` FROM \`Cart\` WHERE \`id\` = ${candidate.id} FOR UPDATE
+    `);
+    const cart = await transaction.cart.findFirst({
+      where: { id: candidate.id, customerId, status: 'ACTIVE' },
+      select: {
+        id: true,
+        version: true,
+        expiresAt: true,
+        items: {
+          orderBy: [{ variantId: 'asc' }, { id: 'asc' }],
+          select: { variantId: true, quantity: true },
+        },
+      },
+    });
+    if (!cart || (cart.expiresAt !== null && cart.expiresAt <= now)) {
+      throw new ConflictException({
+        code: 'CART_EXPIRED',
+        message: 'The active cart expired. Refresh it before checkout.',
+      });
+    }
+    const requested = [...requestedItems].sort((left, right) =>
+      left.variantId.localeCompare(right.variantId),
+    );
+    const matches =
+      requested.length === cart.items.length &&
+      requested.every(
+        (item, index) =>
+          item.variantId === cart.items[index]?.variantId &&
+          item.quantity === cart.items[index]?.quantity,
+      );
+    if (!matches) {
+      throw new ConflictException({
+        code: 'CART_CHANGED',
+        message: 'The cart changed after pricing. Refresh the cart and quote before checkout.',
+      });
+    }
+    return cart;
   }
 
   private assertRequestShape(input: CheckoutOrderDto): void {
@@ -706,15 +812,27 @@ export class CheckoutOrderService {
         message: 'Express service is only valid for courier delivery.',
       });
     }
-    if (
-      !input.consent ||
-      !input.consent.ageConfirmed ||
-      !input.consent.termsAccepted ||
-      !input.consent.privacyAccepted
-    ) {
+  }
+
+  private assertConfiguredConsent(
+    input: CheckoutOrderDto,
+    requirements: CheckoutRequirements,
+  ): void {
+    const missing: string[] = [];
+    if (requirements.ageConfirmationRequired && !input.consent.ageConfirmed) {
+      missing.push('ageConfirmed');
+    }
+    if (requirements.termsAcceptanceRequired && !input.consent.termsAccepted) {
+      missing.push('termsAccepted');
+    }
+    if (requirements.privacyAcceptanceRequired && !input.consent.privacyAccepted) {
+      missing.push('privacyAccepted');
+    }
+    if (missing.length > 0) {
       throw new BadRequestException({
         code: 'CONSENT_REQUIRED',
-        message: 'Checkout age, terms, and privacy confirmations are required.',
+        message: 'Complete the confirmations configured for this checkout.',
+        fields: missing,
       });
     }
   }

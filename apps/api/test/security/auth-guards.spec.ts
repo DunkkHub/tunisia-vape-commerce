@@ -14,6 +14,7 @@ import type { Environment } from '../../src/config/environment';
 const environment = {
   NODE_ENV: 'test',
   WEB_URL: 'http://localhost:5173',
+  ADMIN_WEB_URL: 'http://admin.localhost:5173',
   FIELD_ENCRYPTION_KEY: 'a'.repeat(48),
   ADMIN_RECENT_AUTH_MINUTES: 10,
 } as Environment;
@@ -23,15 +24,37 @@ const executionContext = (request: object): ExecutionContext =>
   ({ switchToHttp: () => ({ getRequest: () => request }) }) as unknown as ExecutionContext;
 
 describe('authentication security guards', () => {
-  it('rejects cross-site login attempts while permitting the configured web origin', () => {
+  it('accepts only the configured origin for each browser realm', () => {
     const guard = new TrustedOriginGuard(config);
-    const request = (origin: string, fetchSite = 'same-site') => ({
+    const request = (path: string, origin: string, fetchSite = 'same-site') => ({
+      originalUrl: path,
       get: (name: string) =>
         name === 'origin' ? origin : name === 'sec-fetch-site' ? fetchSite : undefined,
     });
-    expect(guard.canActivate(executionContext(request('http://localhost:5173')))).toBe(true);
+    expect(
+      guard.canActivate(
+        executionContext(request('/api/v1/auth/customer/login', 'http://localhost:5173')),
+      ),
+    ).toBe(true);
+    expect(
+      guard.canActivate(
+        executionContext(request('/api/v1/auth/admin/login', 'http://admin.localhost:5173')),
+      ),
+    ).toBe(true);
     expect(() =>
-      guard.canActivate(executionContext(request('https://attacker.example', 'cross-site'))),
+      guard.canActivate(
+        executionContext(request('/api/v1/auth/customer/login', 'http://admin.localhost:5173')),
+      ),
+    ).toThrow();
+    expect(() =>
+      guard.canActivate(executionContext(request('/api/v1/admin/orders', 'http://localhost:5173'))),
+    ).toThrow();
+    expect(() =>
+      guard.canActivate(
+        executionContext(
+          request('/api/v1/auth/admin/login', 'https://attacker.example', 'cross-site'),
+        ),
+      ),
     ).toThrow();
   });
 

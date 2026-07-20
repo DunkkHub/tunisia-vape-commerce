@@ -4,7 +4,9 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import {
   CashCollectionStatus,
   CashDiscrepancyStatus,
@@ -14,6 +16,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import type { Request } from 'express';
+import { serializeCsv } from '../common/export/csv';
 import { PrismaService } from '../database/prisma.service';
 import { cashDifference, sumMillimes } from './cash-calculations';
 import {
@@ -171,6 +174,8 @@ const COLLECTION_OPERATION_SELECT = {
   status: true,
   expectedMillimes: true,
   collectedMillimes: true,
+  recordIdempotencyKeyHash: true,
+  recordRequestHash: true,
   order: {
     select: {
       id: true,
@@ -247,6 +252,8 @@ const COLLECTABLE_PAYMENT_STATUSES = new Set<PaymentStatus>([
   PaymentStatus.PAYMENT_PENDING,
   PaymentStatus.CASH_EXPECTED,
 ]);
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._~:+-]{16,128}$/;
+const CASH_EXPORT_LIMIT = 500;
 
 @Injectable()
 export class AdminCashService {
@@ -303,6 +310,96 @@ export class AdminCashService {
     };
   }
 
+  async exportCollections(query: AdminCollectionListQueryDto, request: Request) {
+    const search = query.q?.trim().replace(/\s+/g, ' ');
+    const where = {
+      ...(query.status ? { status: query.status } : {}),
+      ...(search
+        ? {
+            OR: [
+              { order: { is: { orderNumber: { contains: search } } } },
+              { courier: { is: { name: { contains: search } } } },
+            ],
+          }
+        : {}),
+    } satisfies Prisma.CashCollectionWhereInput;
+    const records = await this.prisma.$transaction(async (transaction) => {
+      const found = await transaction.cashCollection.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        take: CASH_EXPORT_LIMIT + 1,
+        select: {
+          id: true,
+          status: true,
+          method: true,
+          expectedMillimes: true,
+          collectedMillimes: true,
+          collectedAt: true,
+          createdAt: true,
+          order: { select: { orderNumber: true, status: true, paymentStatus: true } },
+          courier: { select: { code: true, name: true } },
+        },
+      });
+      if (found.length > CASH_EXPORT_LIMIT) {
+        throw new ServiceUnavailableException({
+          code: 'CASH_EXPORT_TOO_LARGE',
+          message: 'Narrow the cash filters before exporting more than 500 rows.',
+        });
+      }
+      await this.audit(transaction, request, {
+        action: 'cash.collection.csv_exported',
+        resourceType: 'CashCollectionExport',
+        resourceId: request.requestId.slice(0, 80),
+        before: null,
+        after: {
+          schemaVersion: 'COD_COLLECTIONS_V1',
+          rowCount: found.length,
+          filters: { status: query.status ?? null, q: search ?? null },
+        },
+      });
+      return found;
+    });
+    const csv = serializeCsv(
+      [
+        'schemaVersion',
+        'collectionId',
+        'orderNumber',
+        'orderStatus',
+        'paymentStatus',
+        'courierCode',
+        'courierName',
+        'collectionStatus',
+        'method',
+        'expectedMillimes',
+        'collectedMillimes',
+        'differenceMillimes',
+        'collectedAt',
+        'createdAt',
+      ],
+      records.map((record) => [
+        'COD_COLLECTIONS_V1',
+        record.id,
+        record.order.orderNumber,
+        record.order.status,
+        record.order.paymentStatus,
+        record.courier?.code,
+        record.courier?.name,
+        record.status,
+        record.method,
+        record.expectedMillimes,
+        record.collectedMillimes,
+        cashDifference(record.expectedMillimes, record.collectedMillimes),
+        record.collectedAt?.toISOString(),
+        record.createdAt.toISOString(),
+      ]),
+    );
+    return {
+      csv,
+      filename: `cod-collections-${new Date().toISOString().slice(0, 10)}.csv`,
+      rowCount: records.length,
+    };
+  }
+
   async getCollection(id: string) {
     const collection = await this.prisma.cashCollection.findUnique({
       where: { id },
@@ -312,9 +409,46 @@ export class AdminCashService {
     return { data: this.serializeCollection(collection) };
   }
 
-  async recordCollection(id: string, input: RecordCashCollectionDto, request: Request) {
+  async recordCollection(
+    id: string,
+    input: RecordCashCollectionDto,
+    idempotencyKey: string | undefined,
+    request: Request,
+  ) {
+    const normalizedKey = this.requireIdempotencyKey(idempotencyKey);
+    const keyHash = createHash('sha256')
+      .update(`cash-collection\0${request.auth!.userId}\0${id}\0${normalizedKey}`)
+      .digest('hex');
+    const requestHash = createHash('sha256')
+      .update(
+        JSON.stringify({
+          collectedMillimes: input.collectedMillimes,
+          confirmation: input.confirmation,
+          expectedDeliveryVersion: input.expectedDeliveryVersion,
+          expectedOrderVersion: input.expectedOrderVersion,
+          reasonCode: input.reasonCode?.trim() ?? null,
+          reasonDetail: input.reasonDetail?.trim() ?? null,
+        }),
+      )
+      .digest('hex');
     return this.prisma.$transaction(async (transaction) => {
       const collection = await this.lockCollection(transaction, id);
+      if (collection.recordIdempotencyKeyHash) {
+        if (
+          collection.recordIdempotencyKeyHash === keyHash &&
+          collection.recordRequestHash === requestHash
+        ) {
+          return {
+            data: this.serializeCollection(await this.requireCollectionDetail(transaction, id)),
+          };
+        }
+        if (collection.recordIdempotencyKeyHash === keyHash) {
+          throw this.conflict(
+            'IDEMPOTENCY_KEY_REUSED',
+            'The Idempotency-Key was already used with different cash collection data.',
+          );
+        }
+      }
       if (collection.order.version !== input.expectedOrderVersion) throw this.versionConflict();
       if (!collection.delivery || collection.delivery.version !== input.expectedDeliveryVersion) {
         throw this.versionConflict();
@@ -377,7 +511,11 @@ export class AdminCashService {
 
       const now = new Date();
       const collectionUpdated = await transaction.cashCollection.updateMany({
-        where: { id: collection.id, status: CashCollectionStatus.EXPECTED },
+        where: {
+          id: collection.id,
+          status: CashCollectionStatus.EXPECTED,
+          recordIdempotencyKeyHash: null,
+        },
         data: {
           status: target,
           collectedMillimes: input.collectedMillimes,
@@ -388,6 +526,8 @@ export class AdminCashService {
               ? collection.delivery.courierId
               : null,
           note: input.reasonDetail?.trim() ?? null,
+          recordIdempotencyKeyHash: keyHash,
+          recordRequestHash: requestHash,
         },
       });
       const paymentStatus =
@@ -519,6 +659,96 @@ export class AdminCashService {
         query,
         total,
       ),
+    };
+  }
+
+  async exportRemittances(query: AdminRemittanceListQueryDto, request: Request) {
+    const search = query.q?.trim().replace(/\s+/g, ' ');
+    const where = {
+      ...(query.status ? { status: query.status } : {}),
+      ...(search
+        ? {
+            OR: [
+              { remittanceNumber: { contains: search } },
+              { courier: { is: { name: { contains: search } } } },
+            ],
+          }
+        : {}),
+    } satisfies Prisma.CashRemittanceWhereInput;
+    const records = await this.prisma.$transaction(async (transaction) => {
+      const found = await transaction.cashRemittance.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        take: CASH_EXPORT_LIMIT + 1,
+        select: {
+          id: true,
+          remittanceNumber: true,
+          status: true,
+          declaredMillimes: true,
+          verifiedMillimes: true,
+          differenceMillimes: true,
+          submittedAt: true,
+          remittedAt: true,
+          verifiedAt: true,
+          createdAt: true,
+          courier: { select: { code: true, name: true } },
+        },
+      });
+      if (found.length > CASH_EXPORT_LIMIT) {
+        throw new ServiceUnavailableException({
+          code: 'CASH_EXPORT_TOO_LARGE',
+          message: 'Narrow the cash filters before exporting more than 500 rows.',
+        });
+      }
+      await this.audit(transaction, request, {
+        action: 'cash.remittance.csv_exported',
+        resourceType: 'CashRemittanceExport',
+        resourceId: request.requestId.slice(0, 80),
+        before: null,
+        after: {
+          schemaVersion: 'COD_REMITTANCES_V1',
+          rowCount: found.length,
+          filters: { status: query.status ?? null, q: search ?? null },
+        },
+      });
+      return found;
+    });
+    const csv = serializeCsv(
+      [
+        'schemaVersion',
+        'remittanceId',
+        'remittanceNumber',
+        'courierCode',
+        'courierName',
+        'status',
+        'declaredMillimes',
+        'verifiedMillimes',
+        'differenceMillimes',
+        'submittedAt',
+        'remittedAt',
+        'verifiedAt',
+        'createdAt',
+      ],
+      records.map((record) => [
+        'COD_REMITTANCES_V1',
+        record.id,
+        record.remittanceNumber,
+        record.courier.code,
+        record.courier.name,
+        record.status,
+        record.declaredMillimes,
+        record.verifiedMillimes,
+        record.differenceMillimes,
+        record.submittedAt?.toISOString(),
+        record.remittedAt?.toISOString(),
+        record.verifiedAt?.toISOString(),
+        record.createdAt.toISOString(),
+      ]),
+    );
+    return {
+      csv,
+      filename: `cod-remittances-${new Date().toISOString().slice(0, 10)}.csv`,
+      rowCount: records.length,
     };
   }
 
@@ -1218,6 +1448,16 @@ export class AdminCashService {
         'A reason code and meaningful detail are required for a cash difference.',
       );
     }
+  }
+
+  private requireIdempotencyKey(value: string | undefined): string {
+    if (!value || !IDEMPOTENCY_KEY_PATTERN.test(value)) {
+      throw this.badRequest(
+        'INVALID_IDEMPOTENCY_KEY',
+        'A valid Idempotency-Key header is required.',
+      );
+    }
+    return value;
   }
 
   private collectionNotFound(): NotFoundException {

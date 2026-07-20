@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { CartService } from '../../src/cart/cart.service';
 import { CheckoutOrderService } from '../../src/checkout/checkout-order.service';
 import { CheckoutPolicyService } from '../../src/checkout/checkout-policy.service';
 import { CryptoService } from '../../src/common/security/crypto.service';
@@ -33,7 +34,6 @@ const environment = validateEnvironment({
   ...process.env,
   NODE_ENV: 'test',
   CHECKOUT_ENABLED: 'true',
-  LEGAL_REVIEW_COMPLETED: 'true',
   MAINTENANCE_MODE: 'false',
   PRELAUNCH_MODE: 'false',
   FIELD_ENCRYPTION_KEY: 'integration-field-key-32-bytes-minimum',
@@ -46,6 +46,7 @@ const key = (label: string) => `integration-${label}-${Date.now().toString(36)}`
 describe.sequential('commerce integration on disposable MySQL and isolated Redis', () => {
   const prisma = new PrismaService();
   const crypto = new CryptoService(config);
+  const carts = new CartService(prisma);
   const checkoutPolicy = new CheckoutPolicyService(prisma, config);
   const checkout = new CheckoutOrderService(prisma, checkoutPolicy, crypto);
   const customerOrders = new CustomerOrdersService(prisma, crypto);
@@ -109,7 +110,7 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
     const customer = await createCustomer(prisma);
     const product = await createSellableVariant(prisma, foundation, { onHand: 3 });
     const result = await checkout.create(
-      checkoutInput(product.variant.id, foundation.validGeography),
+      await checkoutInput(prisma, customer.id, product.variant.id, foundation.validGeography),
       key('success-order'),
       customer.id,
       requestFixture(),
@@ -148,42 +149,164 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
       expect.objectContaining({ status: 'EXPECTED', expectedMillimes: 18_900 }),
     ]);
     expect(order.notifications).toHaveLength(1);
+    expect(order.cartId).not.toBeNull();
+    await expect(
+      prisma.cart.findUniqueOrThrow({ where: { id: order.cartId! } }),
+    ).resolves.toMatchObject({ status: 'CONVERTED' });
+    expect(
+      await prisma.outboxEvent.count({
+        where: {
+          aggregateType: 'Notification',
+          aggregateId: order.notifications[0]!.id,
+          eventType: 'notification.dispatch.requested',
+        },
+      }),
+    ).toBe(1);
     expect(
       (await prisma.inventoryItem.findUniqueOrThrow({ where: { id: product.inventory.id } }))
         .onHandQuantity,
     ).toBe(3);
   });
 
+  it('prunes an archived persisted cart line while preserving valid lines for checkout', async () => {
+    const customer = await createCustomer(prisma);
+    const valid = await createSellableVariant(prisma, foundation, { onHand: 3 });
+    const stale = await createSellableVariant(prisma, foundation, { onHand: 3 });
+    const input = await checkoutInput(
+      prisma,
+      customer.id,
+      valid.variant.id,
+      foundation.validGeography,
+    );
+    const customerProfileId = customer.customerProfile!.id;
+    const cart = await prisma.cart.findFirstOrThrow({
+      where: { customerId: customerProfileId, status: 'ACTIVE' },
+      select: { id: true, version: true },
+    });
+    await prisma.cartItem.create({
+      data: { cartId: cart.id, variantId: stale.variant.id, quantity: 1 },
+    });
+    await prisma.productVariant.update({
+      where: { id: stale.variant.id },
+      data: { archivedAt: new Date() },
+    });
+
+    const response = await carts.get(customer.id, 'fr');
+
+    expect(response.data.items).toHaveLength(1);
+    expect(response.data.items[0]?.variant.id).toBe(valid.variant.id);
+    expect(
+      await prisma.cartItem.findMany({
+        where: { cartId: cart.id },
+        select: { variantId: true },
+      }),
+    ).toEqual([{ variantId: valid.variant.id }]);
+    await expect(prisma.cart.findUniqueOrThrow({ where: { id: cart.id } })).resolves.toMatchObject({
+      version: cart.version + 1,
+    });
+
+    const created = await checkout.create(
+      input,
+      key('stale-line-cleanup'),
+      customer.id,
+      requestFixture(),
+    );
+    expect(created.data).toMatchObject({ status: 'PENDING_CONFIRMATION', currency: 'TND' });
+    await expect(prisma.cart.findUniqueOrThrow({ where: { id: cart.id } })).resolves.toMatchObject({
+      status: 'CONVERTED',
+    });
+  });
+
+  it('creates checkout without legal-style confirmations when the operator disables them', async () => {
+    const configurableKeys = [
+      'age_gate.checkout.enabled',
+      'consent.terms.required',
+      'consent.privacy.required',
+      'consent.recording.enabled',
+      'delivery.age_verification_required',
+    ];
+    await prisma.complianceSetting.updateMany({
+      where: { key: { in: configurableKeys } },
+      data: { value: false },
+    });
+    try {
+      const customer = await createCustomer(prisma);
+      const product = await createSellableVariant(prisma, foundation, { onHand: 2 });
+      const input = await checkoutInput(
+        prisma,
+        customer.id,
+        product.variant.id,
+        foundation.validGeography,
+      );
+      input.consent = { ageConfirmed: false, termsAccepted: false, privacyAccepted: false };
+
+      const result = await checkout.create(
+        input,
+        key('configurable-consent'),
+        customer.id,
+        requestFixture(),
+      );
+      const order = await prisma.order.findUniqueOrThrow({
+        where: { id: result.data.id },
+        include: { consentSnapshots: true, ageVerificationEvents: true },
+      });
+
+      expect(order.ageConfirmedAt).toBeNull();
+      expect(order.ageVerificationAtDeliveryRequired).toBe(false);
+      expect(order.consentSnapshots).toEqual([]);
+      expect(order.ageVerificationEvents).toEqual([]);
+    } finally {
+      await prisma.complianceSetting.updateMany({
+        where: { key: { in: configurableKeys } },
+        data: { value: true },
+      });
+    }
+  });
+
   it('rejects missing, unpublished, and insufficient products without partial orders', async () => {
     const missingCustomer = await createCustomer(prisma);
     const unpublishedCustomer = await createCustomer(prisma);
     const insufficientCustomer = await createCustomer(prisma);
+    const removed = await createSellableVariant(prisma, foundation, { onHand: 5 });
+    const removedInput = await checkoutInput(
+      prisma,
+      missingCustomer.id,
+      removed.variant.id,
+      foundation.validGeography,
+    );
+    await prisma.productVariant.update({
+      where: { id: removed.variant.id },
+      data: { deletedAt: new Date() },
+    });
     const unpublished = await createSellableVariant(prisma, foundation, {
       published: false,
       onHand: 5,
     });
     const insufficient = await createSellableVariant(prisma, foundation, { onHand: 1 });
+    const unpublishedInput = await checkoutInput(
+      prisma,
+      unpublishedCustomer.id,
+      unpublished.variant.id,
+      foundation.validGeography,
+    );
+    const insufficientInput = await checkoutInput(
+      prisma,
+      insufficientCustomer.id,
+      insufficient.variant.id,
+      foundation.validGeography,
+      2,
+    );
     const before = await prisma.order.count();
 
     const missing = await checkout
-      .create(
-        checkoutInput('missing-variant-id', foundation.validGeography),
-        key('missing-product'),
-        missingCustomer.id,
-        requestFixture(),
-      )
+      .create(removedInput, key('missing-product'), missingCustomer.id, requestFixture())
       .catch((reason: unknown) => reason);
     const inactive = await checkout
-      .create(
-        checkoutInput(unpublished.variant.id, foundation.validGeography),
-        key('inactive-product'),
-        unpublishedCustomer.id,
-        requestFixture(),
-      )
+      .create(unpublishedInput, key('inactive-product'), unpublishedCustomer.id, requestFixture())
       .catch((reason: unknown) => reason);
     const outOfStock = await checkout
       .create(
-        checkoutInput(insufficient.variant.id, foundation.validGeography, 2),
+        insufficientInput,
         key('insufficient-product'),
         insufficientCustomer.id,
         requestFixture(),
@@ -204,7 +327,12 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
   it('rejects unsupported localities and configured zones with no applicable rate', async () => {
     const customer = await createCustomer(prisma);
     const product = await createSellableVariant(prisma, foundation, { onHand: 5 });
-    const invalidLocalityInput = checkoutInput(product.variant.id, foundation.validGeography);
+    const invalidLocalityInput = await checkoutInput(
+      prisma,
+      customer.id,
+      product.variant.id,
+      foundation.validGeography,
+    );
     invalidLocalityInput.localityId = 'missing-locality-id';
 
     const unsupported = await checkout
@@ -212,7 +340,7 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
       .catch((reason: unknown) => reason);
     const noRate = await checkout
       .create(
-        checkoutInput(product.variant.id, foundation.noRateGeography),
+        { ...invalidLocalityInput, localityId: foundation.noRateGeography.localityId },
         key('missing-rate'),
         customer.id,
         requestFixture(),
@@ -226,22 +354,31 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
   it('replays identical idempotent checkout and rejects a conflicting payload', async () => {
     const customer = await createCustomer(prisma);
     const product = await createSellableVariant(prisma, foundation, { onHand: 5 });
-    const input = checkoutInput(product.variant.id, foundation.validGeography);
+    const input = await checkoutInput(
+      prisma,
+      customer.id,
+      product.variant.id,
+      foundation.validGeography,
+    );
     const idempotencyKey = key('idempotency-replay');
 
     const first = await checkout.create(input, idempotencyKey, customer.id, requestFixture());
     const replay = await checkout.create(input, idempotencyKey, customer.id, requestFixture());
     const conflict = await checkout
       .create(
-        checkoutInput(product.variant.id, foundation.validGeography, 2),
+        { ...input, items: [{ variantId: product.variant.id, quantity: 2 }] },
         idempotencyKey,
         customer.id,
         requestFixture(),
       )
       .catch((reason: unknown) => reason);
+    const duplicateConversion = await checkout
+      .create(input, key('different-key-same-cart'), customer.id, requestFixture())
+      .catch((reason: unknown) => reason);
 
     expect(replay.data.id).toBe(first.data.id);
     expect(exceptionCode(conflict)).toBe('IDEMPOTENCY_CONFLICT');
+    expect(exceptionCode(duplicateConversion)).toBe('CART_EMPTY');
     expect(await prisma.order.count({ where: { customerId: customer.customerProfile!.id } })).toBe(
       1,
     );
@@ -254,11 +391,14 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
       createCustomer(prisma),
     ]);
     const product = await createSellableVariant(prisma, foundation, { onHand: 1 });
-    const input = checkoutInput(product.variant.id, foundation.validGeography);
+    const [firstInput, secondInput] = await Promise.all([
+      checkoutInput(prisma, firstCustomer.id, product.variant.id, foundation.validGeography),
+      checkoutInput(prisma, secondCustomer.id, product.variant.id, foundation.validGeography),
+    ]);
 
     const outcomes = await Promise.allSettled([
-      checkout.create(input, key('final-unit-a'), firstCustomer.id, requestFixture()),
-      checkout.create(input, key('final-unit-b'), secondCustomer.id, requestFixture()),
+      checkout.create(firstInput, key('final-unit-a'), firstCustomer.id, requestFixture()),
+      checkout.create(secondInput, key('final-unit-b'), secondCustomer.id, requestFixture()),
     ]);
     const successes = outcomes.filter((outcome) => outcome.status === 'fulfilled');
     const failures = outcomes.filter((outcome) => outcome.status === 'rejected');
@@ -291,7 +431,7 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
     const customer = await createCustomer(prisma);
     const product = await createSellableVariant(prisma, foundation, { onHand: 2 });
     const created = await checkout.create(
-      checkoutInput(product.variant.id, foundation.validGeography),
+      await checkoutInput(prisma, customer.id, product.variant.id, foundation.validGeography),
       key('customer-cancel'),
       customer.id,
       requestFixture(),
@@ -333,7 +473,7 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
     const customer = await createCustomer(prisma);
     const product = await createSellableVariant(prisma, foundation, { onHand: 1 });
     const created = await checkout.create(
-      checkoutInput(product.variant.id, foundation.validGeography),
+      await checkoutInput(prisma, customer.id, product.variant.id, foundation.validGeography),
       key('cancel-confirm-race'),
       customer.id,
       requestFixture(),
@@ -390,7 +530,7 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
     const customer = await createCustomer(prisma);
     const product = await createSellableVariant(prisma, foundation, { onHand: 2 });
     const created = await checkout.create(
-      checkoutInput(product.variant.id, foundation.validGeography),
+      await checkoutInput(prisma, customer.id, product.variant.id, foundation.validGeography),
       key('worker-expiry'),
       customer.id,
       requestFixture(),
@@ -430,9 +570,25 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
     const workerModuleUrl = pathToFileURL(
       path.resolve(process.cwd(), '..', 'worker', 'dist', 'outbox-processor.js'),
     ).href;
+    const workerEnvironmentModuleUrl = pathToFileURL(
+      path.resolve(process.cwd(), '..', 'worker', 'dist', 'environment.js'),
+    ).href;
     const workerModule = (await import(/* @vite-ignore */ workerModuleUrl)) as {
       OutboxProcessor: ProcessorConstructor;
     };
+    const workerEnvironmentModule = (await import(
+      /* @vite-ignore */ workerEnvironmentModuleUrl
+    )) as {
+      parseWorkerEnvironment: (input: Record<string, string | undefined>) => unknown;
+    };
+    const workerEnvironment = workerEnvironmentModule.parseWorkerEnvironment({
+      NODE_ENV: 'test',
+      DATABASE_URL: environment.DATABASE_URL,
+      REDIS_URL: environment.REDIS_URL,
+      WORKER_INSTANCE_ID: 'integration-worker',
+      OUTBOX_LEASE_MS: '30000',
+      NOTIFICATION_ADAPTER: 'disabled',
+    });
     let retryCount = 0;
     const processor = new workerModule.OutboxProcessor(
       prisma,
@@ -442,7 +598,7 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
           return Promise.resolve('RETRY');
         },
       },
-      { WORKER_INSTANCE_ID: 'integration-worker', OUTBOX_LEASE_MS: 30_000 },
+      workerEnvironment,
       { info: () => undefined, warn: () => undefined },
     );
     const job = {

@@ -5,6 +5,7 @@ import {
   OrderStatus,
   PaymentStatus,
 } from '@prisma/client';
+import { createHash } from 'node:crypto';
 import type { Request } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaService } from '../database/prisma.service';
@@ -18,6 +19,30 @@ const request = {
   get: vi.fn().mockReturnValue('vitest'),
 } as unknown as Request;
 
+const exactCollectionInput = {
+  collectedMillimes: 12_000,
+  expectedOrderVersion: 3,
+  expectedDeliveryVersion: 4,
+  confirmation: 'RECORD_COLLECTION' as const,
+};
+
+const collectionRequestHash = (input: typeof exactCollectionInput) =>
+  createHash('sha256')
+    .update(
+      JSON.stringify({
+        collectedMillimes: input.collectedMillimes,
+        confirmation: input.confirmation,
+        expectedDeliveryVersion: input.expectedDeliveryVersion,
+        expectedOrderVersion: input.expectedOrderVersion,
+        reasonCode: null,
+        reasonDetail: null,
+      }),
+    )
+    .digest('hex');
+
+const collectionKeyHash = (key: string) =>
+  createHash('sha256').update(`cash-collection\0cash-admin\0collection-id\0${key}`).digest('hex');
+
 const collectionOperation = () => ({
   id: 'collection-id',
   orderId: 'order-id',
@@ -26,6 +51,8 @@ const collectionOperation = () => ({
   status: CashCollectionStatus.EXPECTED,
   expectedMillimes: 12_000,
   collectedMillimes: 0,
+  recordIdempotencyKeyHash: null,
+  recordRequestHash: null,
   order: {
     id: 'order-id',
     orderNumber: 'TN-000001',
@@ -194,6 +221,7 @@ describe('administrator COD service', () => {
           expectedDeliveryVersion: 4,
           confirmation: 'RECORD_COLLECTION',
         },
+        'cash-record-key-0001',
         request,
       ),
     ).resolves.toMatchObject({ data: { status: 'COLLECTED', collectedMillimes: 12_000 } });
@@ -212,6 +240,66 @@ describe('administrator COD service', () => {
     expect(transaction.auditLog.create).toHaveBeenCalledOnce();
   });
 
+  it('returns the committed collection for an exact idempotent retry without duplicate writes', async () => {
+    const key = 'cash-record-replay-0001';
+    const operation = {
+      ...collectionOperation(),
+      status: CashCollectionStatus.COLLECTED,
+      recordIdempotencyKeyHash: collectionKeyHash(key),
+      recordRequestHash: collectionRequestHash(exactCollectionInput),
+    };
+    const transaction = collectionTransaction();
+    transaction.cashCollection.findUnique
+      .mockReset()
+      .mockResolvedValueOnce({ orderId: 'order-id', deliveryId: 'delivery-id' })
+      .mockResolvedValueOnce(operation)
+      .mockResolvedValueOnce(collectionDetail());
+    const service = serviceFor(transaction);
+
+    await expect(
+      service.recordCollection('collection-id', exactCollectionInput, key, request),
+    ).resolves.toMatchObject({ data: { status: 'COLLECTED', collectedMillimes: 12_000 } });
+    expect(transaction.cashCollection.updateMany).not.toHaveBeenCalled();
+    expect(transaction.cashReconciliationEvent.create).not.toHaveBeenCalled();
+    expect(transaction.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects reuse of a collection idempotency key with different request data', async () => {
+    const key = 'cash-record-replay-0002';
+    const transaction = collectionTransaction();
+    transaction.cashCollection.findUnique
+      .mockReset()
+      .mockResolvedValueOnce({ orderId: 'order-id', deliveryId: 'delivery-id' })
+      .mockResolvedValueOnce({
+        ...collectionOperation(),
+        status: CashCollectionStatus.COLLECTED,
+        recordIdempotencyKeyHash: collectionKeyHash(key),
+        recordRequestHash: collectionRequestHash(exactCollectionInput),
+      });
+    const service = serviceFor(transaction);
+
+    await expect(
+      service.recordCollection(
+        'collection-id',
+        { ...exactCollectionInput, collectedMillimes: 11_999 },
+        key,
+        request,
+      ),
+    ).rejects.toMatchObject({ response: { code: 'IDEMPOTENCY_KEY_REUSED' } });
+    expect(transaction.cashCollection.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('requires a valid idempotency key before opening a cash transaction', async () => {
+    const transaction = vi.fn();
+    const prisma = { $transaction: transaction } as unknown as PrismaService;
+    const service = new AdminCashService(prisma);
+
+    await expect(
+      service.recordCollection('collection-id', exactCollectionInput, 'short', request),
+    ).rejects.toMatchObject({ response: { code: 'INVALID_IDEMPOTENCY_KEY' } });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
   it('fails closed on partial collection while its feature flag is disabled', async () => {
     const transaction = collectionTransaction();
     const service = serviceFor(transaction);
@@ -227,6 +315,7 @@ describe('administrator COD service', () => {
           reasonDetail: 'Courier returned less cash than expected.',
           confirmation: 'RECORD_COLLECTION',
         },
+        'cash-record-key-0002',
         request,
       ),
     ).rejects.toMatchObject({ response: { code: 'PARTIAL_CASH_COLLECTION_DISABLED' } });

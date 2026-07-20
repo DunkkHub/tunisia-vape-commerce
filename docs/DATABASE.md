@@ -6,6 +6,8 @@ The authoritative data store is MySQL 8 or newer using InnoDB. Prisma is the app
 
 The schema is in `prisma/schema.prisma`. It is intentionally a normalized operational model rather than an analytics warehouse. Reporting queries must be bounded, indexed, and moved to background exports when they are large.
 
+Legal and regulatory suitability is the responsibility of the purchaser/operator and is outside the software production-readiness assessment.
+
 Database and connection requirements:
 
 - Create the database with `utf8mb4` and a Unicode collation appropriate to the deployed MySQL version. French and Arabic content must round-trip without transliteration.
@@ -19,19 +21,19 @@ Database and connection requirements:
 
 The short section comments in the Prisma schema correspond to these ownership boundaries:
 
-| Boundary                | Principal records                                                     | Important invariant                                                                  |
-| ----------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Authentication and RBAC | `User`, profiles, sessions, 2FA, roles and permissions                | An identity and every session have one immutable audience: customer or admin.        |
-| Customer management     | addresses, notes, tags, risk, blocklist and privacy requests          | Administrative risk signals do not silently become an automatic permanent block.     |
-| Catalog                 | product, variants, attributes, suppliers, batches and images          | Referenced products are archived/soft-deleted, not hard-deleted.                     |
-| Inventory               | locations, items, movements, reservations and adjustments             | Physical stock never becomes negative; availability is derived.                      |
-| Cart and promotions     | customer carts, wishlists, promotions, coupons and redemptions        | The backend reloads all prices and rules at checkout.                                |
-| Geography and delivery  | Tunisian geography, zones, rates, windows, blackouts and pickup       | No matching valid rate means checkout is blocked, not guessed.                       |
-| Orders                  | order header, item/address/consent/discount snapshots and idempotency | Historical commercial facts are immutable.                                           |
-| Delivery                | courier assignment, attempts, events, manifests, labels and proof     | Every state transition is validated and appended to history.                         |
-| COD and returns         | collection, remittance, discrepancy, reconciliation and inspection    | Created orders are not revenue; returned goods are not stock before inspection.      |
-| Compliance              | settings, legal versions, consent, age checks and restrictions        | Production checkout is fail-closed. No identity-document image is stored by default. |
-| Operations              | notifications, outbox, audit, security, health and settings           | Sensitive changes append an audit record in the same transaction when possible.      |
+| Boundary                | Principal records                                                         | Important invariant                                                              |
+| ----------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Authentication and RBAC | `User`, profiles, sessions, 2FA, roles and permissions                    | An identity and every session have one immutable audience: customer or admin.    |
+| Customer management     | addresses, notes, tags, risk, blocklist and privacy requests              | Administrative risk signals do not silently become an automatic permanent block. |
+| Catalog                 | product, variants, attributes, suppliers, batches and images              | Referenced products are archived/soft-deleted, not hard-deleted.                 |
+| Inventory               | locations, items, movements, reservations and adjustments                 | Physical stock never becomes negative; availability is derived.                  |
+| Cart and promotions     | customer carts, wishlists, promotions, coupons and redemptions            | The backend reloads all prices and rules at checkout.                            |
+| Geography and delivery  | Tunisian geography, zones, rates, windows, blackouts and pickup           | No matching valid rate means checkout is blocked, not guessed.                   |
+| Orders                  | order header, item/address/consent/discount snapshots and idempotency     | Historical commercial facts are immutable.                                       |
+| Delivery                | courier assignment, attempts, events, manifests, labels and proof         | Every state transition is validated and appended to history.                     |
+| COD and returns         | collection, remittance, discrepancy, reconciliation and inspection        | Created orders are not revenue; returned goods are not stock before inspection.  |
+| Operator policy         | settings, optional document references, consent, age checks, restrictions | Production checkout is fail-closed on configured and operational requirements.   |
+| Operations              | notifications, outbox, audit, security, health and settings               | Sensitive changes append an audit record in the same transaction when possible.  |
 
 ## Authentication realms are separated
 
@@ -84,7 +86,7 @@ An order keeps current workflow fields and immutable commercial snapshots:
 - delivery method, selected fee rule, zone/rate references, fee, preferred date/window and full `OrderAddressSnapshot` text;
 - product and variant names, SKU/barcode, unit price, discounts, tax, warnings, quantity, and complete line totals in `OrderItem`;
 - promotion/coupon name, code and rule JSON in `OrderDiscount` and the header promotion snapshot;
-- exact consent time, granted result, legal version number/title/hash, IP and user agent in `OrderConsentSnapshot`;
+- exact configured-confirmation time, granted result, optional document version number/title/hash, IP, and user agent in `OrderConsentSnapshot`;
 - subtotal, discount, delivery, tax, grand total, currency and expected COD amount.
 
 Product, variant, promotion, coupon, and geography foreign keys are optional or use restrictive deletion behavior where historical evidence must survive. Snapshot text and amounts are never regenerated from current catalog data. Normal application APIs must not update or delete order items, address snapshots, consent snapshots, discounts, status histories, delivery events, cash reconciliation events, audit logs, or stock movements. Corrections are compensating records with an audit trail.
@@ -111,23 +113,22 @@ A remittance becomes reconciled revenue only after an authorized user verifies i
 
 ## Production checkout gate
 
-The checkout service evaluates these launch prerequisites from authoritative records on every quote/order attempt:
+The checkout service evaluates these operational prerequisites from authoritative records on every quote/order attempt:
 
-- environment is valid and secrets/cookies/CORS are safe;
-- `StoreSetting['prelaunch.mode']` is false;
-- `StoreSetting['maintenance.mode']` is false;
-- `StoreSetting['checkout.enabled']` is true;
-- `ComplianceSetting['legal_review.completed']` is true;
-- `ComplianceSetting['minimum_purchase_age']` is a legally approved positive value;
-- store name, phone, email, and address are non-empty;
-- at least one currently valid supported delivery or pickup method exists;
-- required age and legal consent records are present for this checkout.
+- the environment is valid and secrets, cookies, and CORS are safe;
+- environment `CHECKOUT_ENABLED` and `StoreSetting['checkout.enabled']` are both true;
+- environment/stored prelaunch and maintenance modes are both false;
+- `ComplianceSetting['minimum_purchase_age']` is a positive integer when any enabled age control requires it;
+- store name, phone, email, and address are non-empty; and
+- at least one currently valid supported delivery or pickup method exists.
 
-Owner instruction records legal approval complete. A fresh structural seed and the environment defaults use `checkout.enabled=true`, `legal_review.completed=true`, and `prelaunch.mode=false`; re-running the seed does not overwrite an existing setting value, and environment overrides can only make the effective policy stricter. `LegalDocumentVersion` publication is not a global readiness prerequisite and no additional document is required. When the client supplies optional terms/privacy version IDs, checkout still requires those referenced records to be published, effective, locale-compatible, and of the correct type before snapshotting them.
+The executable blocker vocabulary is `CHECKOUT_DISABLED`, `MAINTENANCE_MODE`, `PRELAUNCH_MODE`, `MINIMUM_AGE_NOT_CONFIGURED`, `STORE_INFORMATION_MISSING`, and `DELIVERY_METHOD_MISSING`. Legal approval and publication of a `LegalDocumentVersion` do not participate in this policy. A legacy `legal_review.completed` row is ignored by checkout and omitted from normal administration reads. When the client supplies an optional terms/privacy version reference for an enabled confirmation, that record is still validated as request data before it is snapshotted.
+
+A fresh structural seed uses `checkout.enabled=true` and `prelaunch.mode=false`; rerunning the seed preserves existing values. Environment overrides can only make checkout stricter: environment `CHECKOUT_ENABLED=false`, `PRELAUNCH_MODE=true`, or `MAINTENANCE_MODE=true` stops checkout regardless of the stored switch.
 
 The seed still leaves checkout operationally closed because store name, phone, email, and address are empty and it creates no delivery zone/rate or pickup. MySQL, Redis, a fresh worker heartbeat, and the expected migration must also pass readiness before the deployment is operational.
 
-The current coarse policy check considers delivery present when an active pickup exists or when at least one active/supported/non-suspended zone and at least one current active base-geography rate exist. It does not prove that every active zone/locality resolves that rate. Zone activation/configuration checks reduce misconfiguration, and quote/order resolution still fails closed for a missing or ambiguous locality-specific result. Real-database coverage for mismatched legacy data remains required.
+The policy considers delivery present when an active pickup exists or when an active, supported, non-suspended zone owns a current active nonnegative zone-base rate. The zone/rate relationship is evaluated in one predicate, so a rate belonging to another zone cannot make checkout appear ready. Zone activation/configuration checks reduce misconfiguration, and quote/order resolution still fails closed for a missing or ambiguous locality-specific result.
 
 ## Critical NestJS transactions
 
@@ -136,12 +137,12 @@ The current coarse policy check considers delivery present when an active pickup
 The implemented authenticated-customer COD flow uses an interactive `READ COMMITTED` Prisma transaction with a five-second acquisition wait, a 15-second timeout, and at most three recognized `P2034` attempts with bounded delay:
 
 1. Insert or lock `OrderIdempotencyKey` by the SHA-256 hash of the customer audience/operation/key scope. Verify the request fingerprint. A completed matching row replays its order response; the same key with a different request is a conflict and an in-flight equivalent request fails closed.
-2. Reload the authoritative policy, active customer/blocklist state, published product/variant records, delivery rules, and any optional consent versions. Order creation currently accepts explicit item lines rather than trusting cart prices or totals.
+2. Reload the authoritative policy, active customer/blocklist state, published product/variant records, delivery rules, configured confirmation requirements, and any supplied optional version references. Order creation currently accepts explicit item lines rather than trusting cart prices or totals.
 3. Lock all needed `InventoryItem` rows in a stable ID order with parameterized `SELECT ... FOR UPDATE` through `Prisma.sql`/`$queryRaw`.
 4. Sum non-expired active reservations, validate all quantities, and insert reservations with deterministic `activeKey` values.
 5. Calculate prices, tax, discounts, and delivery fee using integer arithmetic. Explicitly define rounding when basis points are applied.
 6. Atomically increment `SequenceCounter` under a row lock and format the public order number. Never use `MAX(orderNumber) + 1`.
-7. Insert the order and every immutable item, address, consent, status, warning, and delivery-fee/rule snapshot.
+7. Insert the order and every immutable item, address, configured-confirmation, status, warning, and delivery-fee/rule snapshot.
 8. Insert active reservations and zero-physical-delta reservation movements, initial order/delivery histories, an `EXPECTED` COD collection, queued encrypted-recipient notification, and audit record.
 9. Link the idempotency row to the order and mark it completed, then commit.
 
@@ -167,9 +168,9 @@ Lock the order, delivery, collection, and remittance rows in a stable order. Val
 
 `OutboxEvent.deterministicKey` is unique. The worker claims bounded ordered `PENDING`/`RETRY` or expired-lease rows under `READ COMMITTED`, increments attempts, and leases them to one instance. BullMQ jobs contain only event identity/type/version and use a deterministic hash-derived job ID. The processor locks the outbox row, reloads and strictly validates the MySQL payload, performs reservation expiry or notification dispatch, and commits domain writes with the `PROCESSED` state. Failures store only an allowlisted error code, use bounded exponential backoff, and end in `DEAD_LETTER`; expired leases are recoverable.
 
-### Publish legal text or change a gate
+### Change operator-controlled settings
 
-Insert a new legal version rather than editing a published version. Publish/retire and compliance-setting changes must include authorization, recent authentication, version comparison, and an immutable audit log in the same transaction.
+Store and compliance-setting changes use an allowlisted type rule, authorization, recent authentication, optimistic version comparison, a reason, explicit confirmation, and an immutable audit log. Optional document publication is versioned rather than editing a previously published row, but document publication is not an executable checkout-readiness gate.
 
 ## Optimistic concurrency
 
@@ -214,7 +215,7 @@ Local development, after configuring a disposable MySQL database:
 pnpm install --frozen-lockfile
 pnpm prisma:generate
 pnpm prisma:validate
-pnpm prisma:migrate:dev --name initial_schema
+pnpm prisma:migrate:dev
 pnpm prisma:seed
 ```
 
@@ -229,23 +230,34 @@ pnpm prisma:migrate:deploy
 
 Never run `prisma migrate dev`, `prisma db push`, or automatic destructive resets in staging/production. Before deployment, review generated SQL, test it against an anonymized production-shaped restore, measure locking, take and verify a restorable backup, deploy compatible application code, apply migrations through the migration identity, and run post-migration health and invariant checks. Rollback is normally a forward corrective migration; restore is the last resort and must follow the documented incident process.
 
+### Configurable checkout-consent migration
+
+`20260720010000_configurable_checkout_consent` changes `Order.ageConfirmedAt` from required to nullable. This is needed because `age_gate.checkout.enabled=false` permits an order without checkout self-attestation. The configured minimum-age policy remains independently snapshotted. The migration does not create, require, or change legal documents. Test both a clean deploy and an upgrade containing existing orders before promotion.
+
+`20260720020000_inventory_operations` adds durable idempotency fingerprints for stock movements, complete dual-control adjustment snapshots and expiry, and paired inventory-transfer records. Existing incomplete approvals are expired during upgrade because their original stock/version snapshot cannot be reconstructed safely.
+
+`20260720143000_delivery_status_import_receipts` adds the durable, payload-bound receipt used to make delivery-status CSV dry-runs and applications replay-safe. It does not modify existing order or delivery statuses during migration.
+
+`20260720160000_cash_collection_idempotency` adds hashed request/key receipts for replay-safe physical COD collection. It extends the notification event vocabulary for internal new-order, security, and low-stock email; adds validated operational-alert settings through the structural seed; and backfills deterministic `media.object.delete.requested` events for already soft-deleted image objects that may still require cleanup. Existing notification rows and live catalog media are not rewritten. The nullable cash fields leave existing collections valid; a key is recorded only by a new collection operation.
+
 ## Structural seed safety
 
 `prisma/seed.ts` is idempotent and contains only:
 
 - nine system roles and granular permissions with role-permission links;
 - all 24 Tunisian governorates;
-- operational and compliance settings whose launch/legal defaults follow owner approval while missing store/delivery data still fails closed;
+- operational settings with `checkout.enabled=true`, `maintenance.mode=false`, and `prelaunch.mode=false`;
+- `minimum_purchase_age=18` and the six configurable age/consent/delivery controls, all enabled by default;
 - disabled-by-default sensitive feature flags;
 - the order-number sequence counter.
 
-It creates no user, administrator, customer, product, variant, stock, delivery rate, pickup, provider credential, or published legal document. On a fresh database it records `legal_review.completed=true`, `checkout.enabled=true`, and `prelaunch.mode=false`; later seed runs preserve existing values. Empty store identity/contact settings and missing delivery configuration continue to block checkout. Never add a default password or production administrator to this seed.
+The six controls are `age_gate.entry.enabled`, `age_gate.checkout.enabled`, `consent.terms.required`, `consent.privacy.required`, `consent.recording.enabled`, and `delivery.age_verification_required`. It creates no user, administrator, customer, product, variant, stock, delivery rate, pickup, provider credential, or published document. It does not seed `legal_review.completed`; a legacy row has no checkout effect. Empty store identity/contact settings and missing delivery configuration continue to block checkout. Never add a default password or production administrator to this seed.
 
 ## Backup and restore implementation status
 
-`pnpm backup:mysql` streams a UTC, single-transaction logical dump through AES-256-GCM and writes a sidecar manifest containing the ciphertext checksum, key identifier, database/tool versions, latest migration, selected table counts, and byte counts. Partial outputs are removed on failure. `pnpm restore:mysql` requires a separate restore URL, an explicit disposable-target flag and database-name confirmation, an empty schema, a matching manifest/checksum, and successful GCM authentication before it starts the MySQL restore process. Post-restore verification checks migrations, foreign-key integrity, impossible negative/overflow quantities and broken reservation/order/outbox references.
+`pnpm backup:mysql` streams a UTC, single-transaction logical dump through gzip and AES-256-GCM by default and writes a sidecar manifest containing the artifact checksum, key identifier, compression/encryption modes, database/tool versions, latest migration, selected table counts, and byte counts. Outputs are timestamped; partial outputs are removed on failure; age retention removes only recognized direct-child artifacts from a verified non-linked destination. An unencrypted gzip is an explicit disposable local/test exception, never the staging/production default. `pnpm restore:mysql` requires a separate restore URL, an explicit disposable-target flag and database-name confirmation, an empty schema, a matching manifest/checksum, authenticated decryption when enabled, and a bounded declared gzip expansion before it starts the MySQL restore process. Post-restore verification checks manifest/image migration state, foreign-key orphans, impossible negative/overflow quantities and broken reservation/order/notification references.
 
-This tooling is implemented and script-tested, but it is not restore evidence. Logical-backup row counts can change while writes continue and are advisory. A production-shaped isolated restore drill, measured duration/RPO/RTO, key-recovery exercise, and off-site retention/access-control verification remain required.
+`pnpm restore:drill` creates only a generated-name database through a drill-only admin URL, runs the guarded restore/verification, writes a restricted evidence report and removes the database by default. This tooling is implemented and script-tested, but it is not restore evidence until run against the chosen isolated MySQL service. Logical-backup row counts can change while writes continue and are advisory. A recorded production-shaped isolated restore, measured end-to-end RPO/RTO, key-recovery exercise, and off-site retention/access-control verification remain required.
 
 ## Required database tests
 
@@ -262,5 +274,7 @@ At minimum, integration tests against real MySQL must prove:
 - failed delivery age verification cannot become delivered;
 - returned stock is not restored before inspection;
 - collection, remittance, discrepancy, and reconciliation totals remain balanced;
-- production checkout remains blocked for every missing gate independently;
-- published legal versions and audit/ledger records are not mutated through normal repositories.
+- production checkout remains blocked for every operational gate independently;
+- disabling legal-document publication or omitting a document does not itself block checkout;
+- disabling each configurable confirmation changes only that requirement and preserves the remaining controls; and
+- published version rows and audit/ledger records are not mutated through normal repositories.

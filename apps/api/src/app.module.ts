@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, RequestMethod } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
@@ -6,6 +6,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { AppController } from './app.controller';
 import { AdminAccessModule } from './access/admin-access.module';
 import { AuthModule } from './auth/auth.module';
+import { TrustedOriginGuard } from './auth/guards/trusted-origin.guard';
 import { CacheModule } from './cache/cache.module';
 import { AdminCashModule } from './cash/admin-cash.module';
 import { CommerceModule } from './commerce/commerce.module';
@@ -27,6 +28,7 @@ import { SettingsModule } from './settings/settings.module';
       validate: validateEnvironment,
     }),
     LoggerModule.forRoot({
+      forRoutes: [{ path: '{*path}', method: RequestMethod.ALL }],
       pinoHttp: {
         level: process.env.LOG_LEVEL ?? 'info',
         redact: {
@@ -60,6 +62,9 @@ import { SettingsModule } from './settings/settings.module';
     HealthModule,
   ],
   controllers: [AppController],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: TrustedOriginGuard },
+  ],
 })
 export class AppModule {}

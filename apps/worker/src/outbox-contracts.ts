@@ -4,6 +4,7 @@ import { z } from 'zod';
 export const OUTBOX_EVENT_TYPES = {
   RESERVATION_EXPIRY: 'inventory.reservations.expire.requested',
   NOTIFICATION_DISPATCH: 'notification.dispatch.requested',
+  MEDIA_OBJECT_DELETE: 'media.object.delete.requested',
 } as const;
 
 export type SupportedOutboxEventType = (typeof OUTBOX_EVENT_TYPES)[keyof typeof OUTBOX_EVENT_TYPES];
@@ -31,8 +32,22 @@ const notificationDispatchPayloadSchema = z.strictObject({
     .regex(/^[A-Za-z0-9_-]+$/),
 });
 
+const mediaObjectDeletePayloadSchema = z.strictObject({
+  bucket: z
+    .string()
+    .min(3)
+    .max(63)
+    .regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/),
+  objectKey: z
+    .string()
+    .min(1)
+    .max(1_024)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9/_.-]*$/),
+});
+
 export type ReservationExpiryPayload = z.infer<typeof reservationExpiryPayloadSchema>;
 export type NotificationDispatchPayload = z.infer<typeof notificationDispatchPayloadSchema>;
+export type MediaObjectDeletePayload = z.infer<typeof mediaObjectDeletePayloadSchema>;
 
 export class WorkerDomainError extends Error {
   constructor(readonly safeCode: string) {
@@ -62,6 +77,11 @@ export const parseEventPayload = (eventType: string, eventVersion: number, paylo
       return {
         eventType,
         payload: notificationDispatchPayloadSchema.parse(payload),
+      } as const;
+    case OUTBOX_EVENT_TYPES.MEDIA_OBJECT_DELETE:
+      return {
+        eventType,
+        payload: mediaObjectDeletePayloadSchema.parse(payload),
       } as const;
     default:
       throw new WorkerDomainError('EVENT_TYPE_UNSUPPORTED');

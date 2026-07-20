@@ -22,6 +22,8 @@ describe('administrator settings access policy', () => {
     const updateStore = AdminSettingsController.prototype.updateStore;
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const updateCompliance = AdminSettingsController.prototype.updateCompliance;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const exportConfiguration = AdminSettingsController.prototype.exportConfiguration;
     expect(Reflect.getMetadata(GUARDS_METADATA, updateStore)).toEqual([
       CsrfGuard,
       RecentAuthenticationGuard,
@@ -33,6 +35,13 @@ describe('administrator settings access policy', () => {
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, updateStore)).toEqual(['settings.manage']);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, updateCompliance)).toEqual([
       'compliance.manage',
+    ]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, exportConfiguration)).toEqual([
+      CsrfGuard,
+      RecentAuthenticationGuard,
+    ]);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, exportConfiguration)).toEqual([
+      'settings.manage',
     ]);
   });
 });

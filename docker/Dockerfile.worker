@@ -12,6 +12,10 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --frozen-lo
 RUN pnpm prisma:generate
 RUN pnpm --filter @vape/worker... build
 RUN pnpm --filter @vape/worker deploy --prod --legacy /opt/worker
+RUN cp prisma/schema.prisma /opt/worker/prisma.schema \
+  && cd /opt/worker \
+  && node /workspace/node_modules/prisma/build/index.js generate --schema=prisma.schema \
+  && rm prisma.schema
 
 FROM ${NODE_IMAGE} AS runtime
 RUN npm install --global npm@11.18.0 --no-audit --no-fund && npm cache clean --force

@@ -12,12 +12,16 @@ import type {
   DeliveryWindowOption,
   GeographyOption,
   LegalDocument,
+  CreateCustomerAddressPayload,
+  CustomerOrderDetail,
   OrderSummary,
   Pagination,
   ProductDetail,
   ProductSummary,
   StoreContent,
   StorefrontStatus,
+  UpdateCustomerAddressPayload,
+  WishlistMutationResult,
 } from './types';
 
 function storeRequest<T>(path: string, init?: RequestInit) {
@@ -82,9 +86,9 @@ export const storefrontClient = {
     ),
   orders: () => storeRequest<Pagination<OrderSummary>>('/orders'),
   order: (orderNumber: string) =>
-    storeRequest<OrderSummary>(`/orders/${encodeURIComponent(orderNumber)}`),
+    storeRequest<CustomerOrderDetail>(`/orders/${encodeURIComponent(orderNumber)}`),
   cancelOrder: (orderNumber: string, expectedVersion: number, reason: string) =>
-    storeRequest<OrderSummary>(`/orders/${encodeURIComponent(orderNumber)}/cancel`, {
+    storeRequest<CustomerOrderDetail>(`/orders/${encodeURIComponent(orderNumber)}/cancel`, {
       method: 'POST',
       body: jsonBody({
         expectedVersion,
@@ -94,7 +98,31 @@ export const storefrontClient = {
       }),
     }),
   addresses: () => storeRequest<AddressSummary[]>('/customers/me/addresses'),
+  createAddress: (payload: CreateCustomerAddressPayload) =>
+    storeRequest<AddressSummary>('/customers/me/addresses', {
+      method: 'POST',
+      body: jsonBody(payload),
+    }),
+  updateAddress: (addressId: string, payload: UpdateCustomerAddressPayload) =>
+    storeRequest<AddressSummary>(`/customers/me/addresses/${encodeURIComponent(addressId)}`, {
+      method: 'PATCH',
+      body: jsonBody(payload),
+    }),
+  deleteAddress: (addressId: string, expectedVersion: number) =>
+    storeRequest<{ id: string; deleted: true }>(
+      `/customers/me/addresses/${encodeURIComponent(addressId)}?expectedVersion=${expectedVersion}`,
+      { method: 'DELETE' },
+    ),
   wishlist: () => storeRequest<Pagination<ProductSummary>>('/wishlist'),
+  addWishlistItem: (variantId: string) =>
+    storeRequest<WishlistMutationResult>('/wishlist/items', {
+      method: 'POST',
+      body: jsonBody({ variantId }),
+    }),
+  removeWishlistItem: (variantId: string) =>
+    storeRequest<WishlistMutationResult>(`/wishlist/items/${encodeURIComponent(variantId)}`, {
+      method: 'DELETE',
+    }),
   legal: (slug: string) =>
     storeRequest<LegalDocument>(`/legal/documents/${encodeURIComponent(slug)}`),
   content: (slug: string) =>

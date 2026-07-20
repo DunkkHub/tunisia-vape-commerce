@@ -21,6 +21,11 @@ export const requestLocale = (request: Request): 'fr' | 'ar' =>
 const settingInteger = (value: unknown): number | null =>
   typeof value === 'number' && Number.isSafeInteger(value) ? value : null;
 
+interface AgeGatePolicy {
+  enabled: boolean;
+  minimumAge: number | null;
+}
+
 @Injectable()
 export class AgeGateService {
   constructor(
@@ -39,8 +44,10 @@ export class AgeGateService {
         message: 'The age confirmation request could not be verified.',
       });
     }
-    const minimumAge = await this.minimumAge();
-    if (minimumAge === null || minimumAge < 18 || input.minimumAge !== minimumAge) {
+    const policy = await this.policy();
+    if (!policy.enabled) return;
+    const minimumAge = policy.minimumAge;
+    if (minimumAge === null || minimumAge < 1 || input.minimumAge !== minimumAge) {
       throw new BadRequestException({
         code: 'AGE_POLICY_CHANGED',
         message: 'The minimum-age policy changed. Refresh and confirm the current value.',
@@ -99,7 +106,9 @@ export class AgeGateService {
   }
 
   async assertConfirmed(request: Request): Promise<void> {
-    const minimumAge = await this.minimumAge();
+    const policy = await this.policy();
+    if (!policy.enabled) return;
+    const minimumAge = policy.minimumAge;
     if (minimumAge === null || !this.isConfirmed(request, minimumAge)) {
       throw new ForbiddenException({
         code: 'AGE_CONFIRMATION_REQUIRED',
@@ -134,11 +143,20 @@ export class AgeGateService {
   }
 
   async minimumAge(): Promise<number | null> {
-    const setting = await this.prisma.complianceSetting.findUnique({
-      where: { key: 'minimum_purchase_age' },
-      select: { value: true },
+    return (await this.policy()).minimumAge;
+  }
+
+  async policy(): Promise<AgeGatePolicy> {
+    const settings = await this.prisma.complianceSetting.findMany({
+      where: { key: { in: ['minimum_purchase_age', 'age_gate.entry.enabled'] } },
+      select: { key: true, value: true },
     });
-    return settingInteger(setting?.value);
+    const values = new Map(settings.map((setting) => [setting.key, setting.value]));
+    return {
+      enabled:
+        !values.has('age_gate.entry.enabled') || values.get('age_gate.entry.enabled') === true,
+      minimumAge: settingInteger(values.get('minimum_purchase_age')),
+    };
   }
 
   private cookieName(production: boolean): string {

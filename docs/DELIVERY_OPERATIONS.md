@@ -2,7 +2,7 @@
 
 ## Operating principles
 
-The backend state machine is authoritative. UI options are only hints. Every transition is permission-checked, assignment-checked where relevant, idempotent, versioned, and appended to immutable history with actor, request ID, UTC timestamp, source, target, reason, customer-visible note, internal note, and safe evidence references.
+The backend state machine is authoritative. UI options are only hints. Every transition is permission-checked, assignment-checked where relevant, concurrency-controlled, and appended to immutable history with actor, request ID, UTC timestamp, source, target, reason, and safe evidence references. CSV status application is additionally idempotent through a durable import receipt.
 
 Age verification and cash collection are explicit outcomes, not assumptions inferred from a delivered status. A failed required age check cannot be delivered. Returned parcels are quarantined for inspection and stock is not restored automatically.
 
@@ -19,25 +19,25 @@ No role obtains a transition merely because React displays it. Dangerous overrid
 
 ## Operational state machine
 
-| Current              | Normally allowed next states                     | Preconditions                                                                      |
-| -------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| PENDING_CONFIRMATION | CONFIRMED, ON_HOLD, CANCELLED                    | Contact/manual-review and compliance rules resolved                                |
-| CONFIRMED            | PREPARING, ON_HOLD, CANCELLED                    | Inventory remains committed                                                        |
-| ON_HOLD              | CONFIRMED, CANCELLED                             | Hold reason resolved                                                               |
-| PREPARING            | READY_FOR_PICKUP, ON_HOLD, CANCELLED             | Pick/pack checks complete                                                          |
-| READY_FOR_PICKUP     | ASSIGNED_TO_COURIER, DELIVERED, CANCELLED        | Direct DELIVERED only for store pickup after required age and cash outcomes        |
-| ASSIGNED_TO_COURIER  | HANDED_TO_COURIER, READY_FOR_PICKUP, CANCELLED   | Courier/manifest valid; return to ready represents audited unassignment            |
-| HANDED_TO_COURIER    | IN_TRANSIT, RETURN_TO_SENDER                     | Custody accepted                                                                   |
-| IN_TRANSIT           | OUT_FOR_DELIVERY, RETURN_TO_SENDER, FAILED       | Tracking event valid                                                               |
-| OUT_FOR_DELIVERY     | DELIVERED, DELIVERY_ATTEMPTED, REFUSED, FAILED   | Delivered requires successful/not-required age check and exact allowed cash result |
-| DELIVERY_ATTEMPTED   | RESCHEDULED, REFUSED, FAILED, RETURN_TO_SENDER   | Attempt reason and age/cash results recorded                                       |
-| RESCHEDULED          | ASSIGNED_TO_COURIER, OUT_FOR_DELIVERY, CANCELLED | New valid window and assignment                                                    |
-| REFUSED              | RETURN_TO_SENDER                                 | Return workflow and custody recorded                                               |
-| FAILED               | RESCHEDULED, RETURN_TO_SENDER                    | Failure reason determines retry eligibility                                        |
-| RETURN_TO_SENDER     | RETURNED                                         | Warehouse/pickup receipt                                                           |
-| DELIVERED            | None in delivery machine                         | Returns use a separate return workflow                                             |
-| RETURNED             | None                                             | Inventory inspection follows separately                                            |
-| CANCELLED            | None                                             | Reservations/custody handled by cancellation policy                                |
+| Current              | Normally allowed next states                                | Preconditions                                                             |
+| -------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
+| PENDING_CONFIRMATION | None in delivery controller                                 | Order confirmation owns the synchronized confirmation transition          |
+| CONFIRMED            | PREPARING, ON_HOLD                                          | Inventory remains committed                                               |
+| ON_HOLD              | CONFIRMED                                                   | Hold reason resolved                                                      |
+| PREPARING            | READY_FOR_PICKUP, ASSIGNED_TO_COURIER                       | Pick/pack complete; courier target requires an existing active assignment |
+| READY_FOR_PICKUP     | DELIVERED                                                   | Store pickup only; required age and exact cash evidence already durable   |
+| ASSIGNED_TO_COURIER  | HANDED_TO_COURIER                                           | Manifest handoff can apply this atomically for every manifest item        |
+| HANDED_TO_COURIER    | IN_TRANSIT                                                  | Custody accepted                                                          |
+| IN_TRANSIT           | OUT_FOR_DELIVERY                                            | Tracking event valid                                                      |
+| OUT_FOR_DELIVERY     | DELIVERED, DELIVERY_ATTEMPTED, RESCHEDULED, REFUSED, FAILED | Completion/attempt endpoint validates age, cash, outcome and next attempt |
+| DELIVERY_ATTEMPTED   | RESCHEDULED                                                 | A controlled failed-attempt outcome is durable                            |
+| RESCHEDULED          | OUT_FOR_DELIVERY                                            | New valid attempt time/window                                             |
+| REFUSED              | RETURN_TO_SENDER                                            | Return workflow and custody recorded                                      |
+| FAILED               | RETURN_TO_SENDER                                            | Failure evidence remains immutable                                        |
+| RETURN_TO_SENDER     | RETURNED                                                    | Warehouse/pickup receipt                                                  |
+| DELIVERED            | None                                                        | Returns use a separate return workflow                                    |
+| RETURNED             | None                                                        | Inventory inspection follows separately                                   |
+| CANCELLED            | None                                                        | Order cancellation owns eligible early-state cancellation                 |
 
 Transitions not listed are rejected. In particular, DELIVERED to PREPARING, CANCELLED to OUT_FOR_DELIVERY, and RETURNED to DELIVERED are impossible. An exceptional data correction is a separately approved compensating event; it does not erase or rewrite history.
 
@@ -48,13 +48,13 @@ Transitions not listed are rejected. In particular, DELIVERED to PREPARING, CANC
 3. Confirm warning/age-at-delivery requirement is visible on the pick/manifest record without exposing unnecessary personal data.
 4. Pick by SKU/variant/batch; record exceptions. Do not substitute without an approved order correction.
 5. Pack, label, weigh where needed, and mark ready.
-6. Assign only to an active courier and supported service/zone. Bulk assignment validates every item atomically or reports per-item rejection without partial ambiguity.
-7. Generate a unique tracking number, label and manifest. Downloads/exports are permission-checked and audited.
+6. Assign only to an active courier. Manual records contain contact data and a credential-free manual marker; they do not represent a provider API. A courier cannot be disabled while it has non-terminal deliveries or active manifests.
+7. Generate a unique tracking number and, when dispatch grouping is needed, an at-most-100-item manifest. Downloads/exports require `reports.export`, recent authentication, and an audit record.
 8. Courier accepts custody before HANDED_TO_COURIER. Record handoff UTC time and responsible actors.
 
 ## Delivery attempt
 
-Each attempt records sequence number, scheduled/actual time, geographies needed for operation, assigned courier, outcome/reason, safe notes, age-verification result, cash result, next window, and evidence references. Provider callbacks are authenticated, replay-protected, mapped through an allowlist, and idempotent.
+Each attempt records sequence number, actual time, outcome/reason, safe notes, age-verification result, cash result, and next-attempt time. The assigned courier remains on the delivery. This repository exposes no courier callback or provider-tracking endpoint; external provider behavior must not be inferred from these manual workflows.
 
 Do not store national identity-document photographs by default. For age checks, record only the configured result, method/category, verifier, timestamp, policy version, and minimal evidence reference approved by legal/privacy review.
 
@@ -83,14 +83,28 @@ Delivery staff cannot mark cash remitted or reconciled unless separately granted
 
 Notifications are queued after commit, localized in French/Arabic, idempotent, and recorded per attempt. Customer-visible tracking exposes only safe status/time/window and notes; never internal risk, cash-control, courier-private, or security details. Manual phone confirmation is recorded as an operational event.
 
-## Manifests and CSV
+## Manual couriers
 
-Manifests include only necessary delivery data, are access-controlled, time-limited, and audited. CSV import/export has a versioned schema, row limits, dry-run validation, duplicate/replay key, normalized phone/address validation, state-transition validation, and formula-injection neutralization. A malformed row cannot silently update another delivery.
+`GET /api/v1/admin/deliveries/courier-records` lists bounded records. Creation and optimistic update require `deliveries.update`, administrator CSRF, recent authentication, and an explicit confirmation string. Creation writes a `MANUAL` integration marker without credentials or provider configuration. Update refuses records carrying API/CSV integrations. Suspension and archival are non-destructive and fail with `COURIER_HAS_ACTIVE_CUSTODY` until every assigned delivery is terminal and every manifest is closed or cancelled. There is no courier-delete route.
+
+## Manifests
+
+A draft manifest contains 1-100 unique deliveries that are already `ASSIGNED_TO_COURIER`, have matching optimistic versions, belong to the selected active courier, and are absent from another draft/sealed/handed-over manifest. Creation locks affected orders and deliveries in deterministic identifier order and is all-or-nothing.
+
+The lifecycle is `DRAFT -> SEALED -> HANDED_OVER -> CLOSED`; `DRAFT` or `SEALED` may instead become `CANCELLED`. Sealing revalidates assignment and the active courier. Handoff atomically changes every item and its mirrored order from `ASSIGNED_TO_COURIER` to `HANDED_TO_COURIER` and appends delivery, order, and audit histories. Closing is allowed only when every item is `DELIVERED`, `RETURNED`, or `CANCELLED`. Manifest detail and `DELIVERY_MANIFEST_V1` CSV exports include only dispatch-required recipient/address, COD, and age-check fields and are audited. CSV string fields are formula-neutralized.
+
+## Status CSV
+
+`GET /api/v1/admin/deliveries/exports/status.csv` emits an audited UTF-8 `DELIVERY_STATUS_V1` template with at most 500 rows. Optional exact status/courier and UTC updated-time bounds are server-validated. The file contains no recipient name, phone, email, or address. Every string cell is formula-neutralized.
+
+`POST /api/v1/admin/deliveries/imports/status` accepts a JSON envelope with `importKey`, `dryRun`, `csv`, and the apply-only confirmation `APPLY_DELIVERY_STATUS_IMPORT`. The UTF-8 CSV is limited to 250 KB and 500 unique deliveries and must preserve the exact header/schema. Validation checks identifier, expected version, declared current status, mirrored order status, allowed transition, required courier, and required explanation. Dry-run never changes an order or delivery. Apply is all-or-nothing: any invalid row returns `valid=false, applied=false`; otherwise every transition and its histories/audits commit together.
+
+Durable receipts are unique by `(importKey, dryRun)`, so operators may use one key for a dry-run and its later apply. An identical retry replays the stored bounded result. Reusing the same key/mode for changed bytes returns `DELIVERY_IMPORT_KEY_REUSED`. CSV import intentionally excludes delivery completion, failed/refused attempt outcomes, return completion, age evidence, and cash evidence. Those operations remain on their dedicated guarded endpoints, so CSV cannot bypass COD or age controls.
 
 ## Daily controls
 
-- Review unassigned ready orders, aging in-transit/out-for-delivery items, failed callbacks, repeated attempts, failed age checks, returns awaiting receipt, and deliveries lacking cash outcomes.
+- Review unassigned ready orders, aging in-transit/out-for-delivery items, repeated attempts, failed age checks, returns awaiting receipt, and deliveries lacking cash outcomes.
 - Reconcile manifest custody at handoff and return.
-- Review provider retries/dead letters and tracking-number collisions.
+- Review notification retries/dead letters, CSV import rejections, and tracking-number collisions.
 - Escalate impossible sequence, timestamp, assignment, age, or cash combinations as security/operations events.
 - Never repair history directly in MySQL; use reviewed commands and compensating events.

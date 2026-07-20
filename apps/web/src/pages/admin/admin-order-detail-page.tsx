@@ -77,7 +77,9 @@ export function AdminOrderDetailPage() {
       </Link>
       <header className="admin-page__heading">
         <div>
-          <span className="admin-kicker">{data.status}</span>
+          <span className="admin-kicker">
+            {t(`admin.deliveryOps.statuses.${data.status}`, { defaultValue: data.status })}
+          </span>
           <h1>{data.orderNumber}</h1>
           <p>
             {data.customerName} · {data.customerPhone}
@@ -89,7 +91,11 @@ export function AdminOrderDetailPage() {
       <section className="admin-form-grid" aria-label={t('common.details')}>
         <article className="admin-panel">
           <h2>{t('checkout.summary')}</h2>
-          <p>{data.paymentStatus}</p>
+          <p>
+            {t(`account.paymentStatuses.${data.paymentStatus}`, {
+              defaultValue: data.paymentStatus,
+            })}
+          </p>
           <p>
             <LocalDate value={data.createdAt} />
           </p>
@@ -114,7 +120,7 @@ export function AdminOrderDetailPage() {
             <tr>
               <th scope="col">{t('admin.columns.sku')}</th>
               <th scope="col">{t('admin.columns.name')}</th>
-              <th scope="col">Qté</th>
+              <th scope="col">{t('admin.orderOps.quantity')}</th>
               <th scope="col">{t('admin.columns.price')}</th>
               <th scope="col">{t('admin.columns.total')}</th>
             </tr>
@@ -151,11 +157,11 @@ export function AdminOrderDetailPage() {
               onClick={() => confirm.mutate()}
             >
               <CheckCircle2 aria-hidden="true" size={17} />
-              Confirmer la commande
+              {t('admin.orderOps.confirm')}
             </Button>
           </div>
           <FormField
-            label="Motif obligatoire d’annulation"
+            label={t('admin.orderOps.cancellationReason')}
             value={cancelReason}
             onChange={(event) => setCancelReason(event.target.value)}
           />
@@ -167,7 +173,7 @@ export function AdminOrderDetailPage() {
             onClick={() => cancel.mutate()}
           >
             <XCircle aria-hidden="true" size={17} />
-            Annuler la commande
+            {t('admin.orderOps.cancel')}
           </Button>
           <Button
             type="button"
@@ -176,7 +182,7 @@ export function AdminOrderDetailPage() {
             disabled={busy || cancelReason.trim().length < 4}
             onClick={() => progress.mutate('reject')}
           >
-            Rejeter la commande
+            {t('admin.orderOps.reject')}
           </Button>
         </section>
       ) : null}
@@ -188,7 +194,7 @@ export function AdminOrderDetailPage() {
           loading={progress.isPending}
           onClick={() => progress.mutate('prepare')}
         >
-          Commencer la préparation
+          {t('admin.orderOps.prepare')}
         </Button>
       ) : null}
       {data.status === 'PREPARING' && data.deliveryMethodType === 'STORE_PICKUP' ? (
@@ -198,35 +204,44 @@ export function AdminOrderDetailPage() {
           loading={progress.isPending}
           onClick={() => progress.mutate('ready')}
         >
-          Prête pour retrait
+          {t('admin.orderOps.readyForPickup')}
         </Button>
       ) : null}
 
       <section className="admin-panel">
         <h2>
-          <MessageSquareText aria-hidden="true" size={18} /> Notes
+          <MessageSquareText aria-hidden="true" size={18} /> {t('admin.orderOps.notes')}
         </h2>
         <form onSubmit={submitNote}>
-          <SelectField name="visibility" label="Visibilité" defaultValue="INTERNAL">
-            <option value="INTERNAL">Interne</option>
-            <option value="CUSTOMER_VISIBLE">Visible par le client</option>
+          <SelectField
+            name="visibility"
+            label={t('admin.orderOps.visibility')}
+            defaultValue="INTERNAL"
+          >
+            <option value="INTERNAL">{t('admin.orderOps.internal')}</option>
+            <option value="CUSTOMER_VISIBLE">{t('admin.orderOps.customerVisible')}</option>
           </SelectField>
-          <FormField name="body" label="Nouvelle note" maxLength={2000} />
+          <FormField name="body" label={t('admin.orderOps.newNote')} maxLength={2000} />
           <Button type="submit" variant="admin" loading={note.isPending}>
-            Ajouter la note
+            {t('admin.orderOps.addNote')}
           </Button>
         </form>
         <ul>
           {data.notes.map((entry) => (
             <li key={entry.id}>
-              <strong>{entry.visibility}</strong> — {entry.body}
+              <strong>
+                {t(`admin.orderOps.visibilities.${entry.visibility}`, {
+                  defaultValue: entry.visibility,
+                })}
+              </strong>{' '}
+              — {entry.body}
             </li>
           ))}
         </ul>
       </section>
 
       <section className="admin-panel">
-        <h2>Tentative de contact client</h2>
+        <h2>{t('admin.orderOps.contactAttempt')}</h2>
         <form
           className="admin-form-grid"
           onSubmit={(event) => {
@@ -248,33 +263,43 @@ export function AdminOrderDetailPage() {
               .then(() => order.refetch());
           }}
         >
-          <SelectField name="method" label="Canal" defaultValue="PHONE">
-            <option value="PHONE">Téléphone</option>
+          <SelectField name="method" label={t('admin.orderOps.channel')} defaultValue="PHONE">
+            <option value="PHONE">{t('admin.orderOps.phone')}</option>
             <option value="SMS">SMS</option>
-            <option value="EMAIL">E-mail</option>
+            <option value="EMAIL">{t('admin.orderOps.email')}</option>
           </SelectField>
-          <SelectField name="result" label="Résultat" defaultValue="REACHED">
-            <option value="REACHED">Joint</option>
-            <option value="NO_ANSWER">Pas de réponse</option>
-            <option value="WRONG_NUMBER">Mauvais numéro</option>
-            <option value="CALLBACK_REQUESTED">Rappel demandé</option>
-            <option value="UNREACHABLE">Injoignable</option>
-            <option value="OTHER">Autre</option>
+          <SelectField name="result" label={t('admin.orderOps.result')} defaultValue="REACHED">
+            <option value="REACHED">{t('admin.orderOps.results.REACHED')}</option>
+            <option value="NO_ANSWER">{t('admin.orderOps.results.NO_ANSWER')}</option>
+            <option value="WRONG_NUMBER">{t('admin.orderOps.results.WRONG_NUMBER')}</option>
+            <option value="CALLBACK_REQUESTED">
+              {t('admin.orderOps.results.CALLBACK_REQUESTED')}
+            </option>
+            <option value="UNREACHABLE">{t('admin.orderOps.results.UNREACHABLE')}</option>
+            <option value="OTHER">{t('admin.orderOps.results.OTHER')}</option>
           </SelectField>
-          <FormField name="explanation" label="Explication" maxLength={1000} />
+          <FormField name="explanation" label={t('admin.orderOps.explanation')} maxLength={1000} />
           <Button type="submit" variant="admin">
-            Enregistrer le contact
+            {t('admin.orderOps.recordContact')}
           </Button>
         </form>
       </section>
 
       <section className="admin-panel">
-        <h2>Historique</h2>
+        <h2>{t('admin.orderOps.history')}</h2>
         <ol>
           {data.history.map((entry) => (
             <li key={entry.id}>
-              <LocalDate value={entry.createdAt} /> — {entry.fromStatus ?? 'CREATED'} →{' '}
-              {entry.toStatus}
+              <LocalDate value={entry.createdAt} /> —{' '}
+              {entry.fromStatus
+                ? t(`admin.deliveryOps.statuses.${entry.fromStatus}`, {
+                    defaultValue: entry.fromStatus,
+                  })
+                : t('admin.orderOps.created')}{' '}
+              →{' '}
+              {t(`admin.deliveryOps.statuses.${entry.toStatus}`, {
+                defaultValue: entry.toStatus,
+              })}
               {entry.note ? ` — ${entry.note}` : ''}
             </li>
           ))}

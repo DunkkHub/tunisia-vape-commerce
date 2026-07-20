@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Check, Minus, Plus, ShieldAlert, Truck } from 'lucide-react';
+import { ArrowLeft, Check, Heart, Minus, Plus, ShieldAlert, Truck } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 
+import { ApiError } from '../../api/http';
 import { storefrontClient } from '../../api/storefront-client';
+import { useCustomerAuth } from '../../auth/customer-auth-context';
 import { Button } from '../../components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
 import { Price } from '../../components/ui/price';
@@ -12,6 +14,9 @@ import { Price } from '../../components/ui/price';
 export function ProductPage() {
   const { slug = '' } = useParams();
   const { t } = useTranslation();
+  const { user, isLoading: authLoading } = useCustomerAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const [quantity, setQuantity] = useState(1);
   const productQuery = useQuery({
@@ -21,6 +26,11 @@ export function ProductPage() {
   });
   const [variantId, setVariantId] = useState('');
   const product = productQuery.data;
+  const wishlistQuery = useQuery({
+    queryKey: ['customer', 'wishlist'],
+    queryFn: storefrontClient.wishlist,
+    enabled: Boolean(user) && !authLoading,
+  });
 
   const defaultVariantId =
     product?.variants.find((variant) => variant.availableQuantity > 0)?.id ??
@@ -48,6 +58,33 @@ export function ProductPage() {
     onSuccess: (cart) => {
       queryClient.setQueryData(['cart'], cart);
       queryClient.setQueryData(['cart', 'summary'], { itemCount: cart.itemCount });
+    },
+  });
+  const savedToWishlist =
+    product !== undefined &&
+    wishlistQuery.data?.items.some((wishlistProduct) => wishlistProduct.id === product.id) === true;
+  const wishlistMutation = useMutation({
+    mutationFn: async () => {
+      if (!product || !activeVariantId) throw new Error(t('product.selectVariant'));
+      if (!savedToWishlist) return storefrontClient.addWishlistItem(activeVariantId);
+      const variantIds = [
+        activeVariantId,
+        ...product.variants
+          .map((variant) => variant.id)
+          .filter((candidate) => candidate !== activeVariantId),
+      ];
+      for (const candidate of variantIds) {
+        try {
+          return await storefrontClient.removeWishlistItem(candidate);
+        } catch (error) {
+          if (error instanceof ApiError && error.code === 'WISHLIST_ITEM_NOT_FOUND') continue;
+          throw error;
+        }
+      }
+      return { variantId: '', productId: product.id, saved: false as const };
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['customer', 'wishlist'] });
     },
   });
 
@@ -166,20 +203,60 @@ export function ProductPage() {
             </div>
             <Button
               type="button"
-              disabled={available <= 0 || !activeVariantId}
+              disabled={available <= 0 || !activeVariantId || authLoading}
               loading={addMutation.isPending}
-              onClick={() => addMutation.mutate()}
+              onClick={() => {
+                if (!user) {
+                  void navigate('/login', { state: { from: location.pathname } });
+                  return;
+                }
+                addMutation.mutate();
+              }}
             >
               {addMutation.isSuccess ? <Check aria-hidden="true" size={18} /> : null}
-              {t(addMutation.isPending ? 'product.adding' : 'product.add')}
+              {t(!user ? 'auth.login' : addMutation.isPending ? 'product.adding' : 'product.add')}
             </Button>
           </div>
+          <Button
+            className="product-wishlist-button"
+            type="button"
+            variant="secondary"
+            aria-pressed={user ? savedToWishlist : false}
+            disabled={authLoading || !activeVariantId || (Boolean(user) && wishlistQuery.isPending)}
+            loading={wishlistMutation.isPending}
+            onClick={() => {
+              if (!user) {
+                void navigate('/login', { state: { from: location.pathname } });
+                return;
+              }
+              wishlistMutation.mutate();
+            }}
+          >
+            <Heart aria-hidden="true" size={18} fill={savedToWishlist ? 'currentColor' : 'none'} />
+            {t(
+              !user
+                ? 'product.loginToWishlist'
+                : savedToWishlist
+                  ? 'product.removeWishlist'
+                  : 'product.addWishlist',
+            )}
+          </Button>
           {addMutation.isSuccess ? (
             <p className="form-banner form-banner--success" role="status">
               {t('product.added')}
             </p>
           ) : null}
           {addMutation.isError ? <ErrorState compact /> : null}
+          {wishlistMutation.isSuccess ? (
+            <p className="form-banner form-banner--success" role="status">
+              {t(wishlistMutation.data.saved ? 'product.wishlistAdded' : 'product.wishlistRemoved')}
+            </p>
+          ) : null}
+          {wishlistMutation.isError ? (
+            <p className="form-banner form-banner--error" role="alert">
+              {t('product.wishlistError')}
+            </p>
+          ) : null}
           <div className="delivery-note">
             <Truck aria-hidden="true" size={20} />
             <span>{t('product.delivery')}</span>

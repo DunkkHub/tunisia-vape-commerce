@@ -6,6 +6,8 @@ The system is a pnpm TypeScript modular monolith: one React/Vite web application
 
 This shape keeps database transactions and business invariants in one deployment boundary while allowing web, API, and background work to scale separately. Microservices are deliberately deferred until measured operational pressure justifies their failure and consistency costs.
 
+Legal and regulatory suitability is the responsibility of the purchaser/operator and is outside the software production-readiness assessment.
+
 ## Runtime components
 
 | Component     | Responsibility                                                          | Persistent authority                                  |
@@ -52,23 +54,23 @@ For staging/production, use different storefront and admin hostnames with host-o
 
 NestJS modules follow the domains named in the product specification. Modules may call public application services, not another module's Prisma internals. The current API composes separate commerce, inventory, order intake, delivery configuration, manual delivery, cash, settings, health, access, and operations modules. Cross-domain operations are coordinated by explicit use cases:
 
-- Checkout coordinates catalog, geography/rates, inventory, orders, consent, and a durable queued `Notification` in one database transaction. The worker source later upserts a deterministic `OutboxEvent` for each due notification.
+- Checkout coordinates catalog, geography/rates, inventory, orders, consent, and a durable queued `Notification` plus its deterministic `OutboxEvent` in one database transaction. The worker source bridge only recovers eligible legacy notifications that predate that invariant.
 - Delivery transition coordinates delivery history, order projection, age outcome, inventory return workflow, COD collection, and notifications.
 - COD reconciliation coordinates collections, remittances, discrepancies, approval, and append-only audit.
-- Compliance/operations gate reads environment overrides plus versioned store/compliance settings and is enforced inside quote and order creation, never only in React. `legal_review.completed` is recorded true by default under owner instruction. Published `LegalDocumentVersion` rows are optional consent-version evidence: a supplied terms/privacy version must be published and effective, but publication is not a global checkout-readiness blocker.
+- The operations gate reads environment overrides plus versioned store/compliance settings and is enforced inside quote and order creation, never only in React. Its launch blockers are checkout disabled, maintenance, prelaunch, a missing minimum age when an enabled age control needs it, incomplete store information, and absence of an active delivery method with valid pricing. Legal approval and `LegalDocumentVersion` publication are not software-readiness or global checkout prerequisites. A terms/privacy version supplied for an enabled consent snapshot is still validated as request data before it is recorded.
 
-Customer carts and orders are currently authenticated-customer flows. There is no guest-cart checkout implementation. Manual courier/pickup workflows deliberately do not claim a real courier, SMS, email, or payment-provider integration.
+Customer carts and orders are currently authenticated-customer flows. There is no guest-cart checkout implementation. Manual courier/pickup workflows deliberately do not claim a real courier or payment-provider integration. Notification delivery is a separate provider-neutral worker boundary with production SMTP and authenticated HTTPS SMS adapters; selected provider credentials and staging evidence are still deployment requirements.
 
 ## Transaction and concurrency boundaries
 
 Authenticated-customer COD checkout uses a bounded MySQL `READ COMMITTED` transaction with a five-second acquisition wait, 15-second transaction timeout, and at most three recognized transaction-conflict attempts:
 
 1. Claim or lock a unique customer-scoped SHA-256 idempotency key and request fingerprint. A completed identical request replays its stored order response; a changed request conflicts.
-2. Validate the launch policy, active customer/blocklist state, submitted items, catalog publication/restrictions, integer prices, and request consent.
+2. Validate the operational launch policy, active customer/blocklist state, submitted items, catalog publication/restrictions, integer prices, and the confirmations enabled by operator configuration.
 3. Lock inventory rows in a deterministic variant/location order.
 4. Calculate active reservations and reject insufficient availability.
 5. Resolve promotion and delivery rules and compute integer-millime totals.
-6. Create immutable address, item, warning, delivery-fee/rule and consent snapshots. Optional supplied terms/privacy document versions are validated and snapshotted.
+6. Create immutable address, item, warning, delivery-fee/rule, and configured confirmation snapshots. Optional supplied terms/privacy version references are validated before snapshotting when those confirmations are enabled.
 7. Create active 30-minute reservations, zero-physical-delta reservation movements, the pending order/delivery histories, expected COD collection, queued notification, audit record, and completed idempotency result.
 8. Commit; only then can workers perform external side effects.
 
@@ -88,7 +90,7 @@ COD custody is separate from order and delivery state. Checkout creates an `EXPE
 
 ## Queues and external effects
 
-MySQL `OutboxEvent` is the durable work ledger; BullMQ is transport only. The worker claims bounded ordered batches under `READ COMMITTED`, leases recoverable work, publishes a deterministic hashed BullMQ job ID, reloads and strictly validates the versioned payload from MySQL, and commits successful domain work with the `PROCESSED` transition. Supported version-1 sources are reservation-expiry requests and notification-dispatch requests. Workers:
+MySQL `OutboxEvent` is the durable work ledger; BullMQ is transport only. The worker claims bounded ordered batches under `READ COMMITTED`, leases recoverable work, publishes a deterministic hashed BullMQ job ID, and reloads and strictly validates the versioned payload from MySQL. Database-only handlers commit domain work with the `PROCESSED` transition; external notification and media deletion handlers claim briefly, perform I/O without database locks, and finalize in a second short transaction. Supported version-1 sources are reservation-expiry, notification-dispatch, and media-object-deletion requests. Workers:
 
 - are safe to run more than once;
 - use bounded exponential backoff and dead-letter handling;
@@ -97,13 +99,13 @@ MySQL `OutboxEvent` is the durable work ledger; BullMQ is transport only. The wo
 - never keep a MySQL transaction open during network calls;
 - redact payloads and correlation metadata.
 
-Reservation expiry locks expired active reservations and their inventory rows, marks each reservation `EXPIRED`, clears its active key, and writes a zero-delta release movement plus system audit. Notification payloads contain only a notification ID. The development console adapter logs safe metadata; unconfigured real providers retry and eventually dead-letter without copying recipients into Redis. Queue depth, oldest-job age, retries, dead letters, and handler latency still need production monitoring and staging evidence; there is no dead-letter replay UI.
+Reservation expiry locks expired active reservations and their inventory rows, marks each reservation `EXPIRED`, clears its active key, and writes a zero-delta release movement plus system audit. Notification payloads contain only a notification ID. Local email uses SMTP/Mailpit; production email uses authenticated TLS SMTP and enabled SMS uses an authenticated HTTPS webhook. Production rejects disabled/development adapters. When SMS is explicitly disabled its queued rows close as cancelled without provider calls; provider failures for enabled channels retry and eventually dead-letter without copying recipients into Redis. Product image replacement/deletion stores a deterministic media cleanup event with the soft-deleted metadata; immediate cleanup is followed by an idempotent local/S3 worker retry path with traversal and bucket checks. Queue depth, oldest-job age, retries, dead letters, and handler latency still need production monitoring and staging evidence; there is no dead-letter replay UI.
 
 ## Health and recovery boundaries
 
 `GET /api/v1/health/live` proves only that the API process can answer. `GET /api/v1/health/ready` is no-store and returns 503 unless MySQL responds, Redis answers `PING`, the configured expected migration is applied with no unfinished migration, and the latest `durable-outbox-worker` health record is fresh. It returns only named up/down checks and no credentials or database details.
 
-Logical backup tooling uses `mysqldump --single-transaction`, streams the dump through AES-256-GCM, and writes a checksum, key identifier, database/tool/migration metadata, byte counts, and selected table counts to a sidecar manifest. Restore refuses a non-empty or unconfirmed target, verifies checksum and authentication before starting MySQL mutation, restores only to an explicitly disposable database, then checks structure and invariants. Counts may differ when writes occurred during the logical backup and are advisory. Script tests are not a production-shaped restore drill; RPO/RTO remain unmeasured.
+Logical backup tooling uses `mysqldump --single-transaction`, streams SQL through gzip and AES-256-GCM by default, and writes a checksum, key identifier, database/tool/migration metadata, byte counts, and selected table counts to a sidecar manifest. Safe local fixtures may explicitly opt out of encryption; staging/production cannot. Retention pruning is restricted to recognized timestamped artifacts in a non-linked backup directory. Restore refuses a non-empty or unconfirmed target, verifies checksum and authentication before starting MySQL mutation, restores only to an explicitly disposable database, then checks migration state, structure and invariants. The automated drill creates a randomly named isolated database, invokes the guarded restore, records measured evidence, and removes that database by default. Counts may differ when writes occurred during the logical backup and are advisory. Script tests are not a production-shaped restore drill; RPO/RTO remain unmeasured until a real drill is recorded.
 
 ## Caching
 
@@ -121,7 +123,7 @@ The Docker Compose topology is a development/staging-reference environment, not 
 
 ## Architecture decisions deferred
 
-- Real SMS, email, courier, malware-scanning, error-monitoring, and object-storage providers await credentials and business approval.
+- Production SMTP and SMS adapters are implemented but await selected-provider credentials and staging acceptance. Courier, malware-scanning, error-monitoring, and object-storage providers await credentials and business approval.
 - Search remains MySQL-backed until measured catalog/query needs justify a search service.
 - A CDN and image-processing service are deployment choices behind S3-compatible interfaces.
 - RPO/RTO targets are provisional until stakeholders approve and a restore drill measures them.

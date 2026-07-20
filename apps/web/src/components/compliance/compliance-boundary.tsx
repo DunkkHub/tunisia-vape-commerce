@@ -68,7 +68,7 @@ export function ComplianceBoundary() {
     import.meta.env.DEV &&
     import.meta.env.VITE_STOREFRONT_DESIGN_PREVIEW === 'true' &&
     pathname === '/' &&
-    statusQuery.data.minimumAge >= 18;
+    statusQuery.data.minimumAge >= 1;
 
   if (statusQuery.data.maintenanceMode) return <ServiceModePage mode="maintenance" />;
   if (statusQuery.data.prelaunchMode && !landingPreviewAllowed)
@@ -81,7 +81,7 @@ export function ComplianceBoundary() {
         <div className="age-entry" aria-hidden="true">
           <p>{statusQuery.data.storeName}</p>
           <div>
-            <span>18+</span>
+            <span>{statusQuery.data.minimumAge}+</span>
             <i />
             <i />
             <i />

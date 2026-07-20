@@ -42,6 +42,9 @@ export const OrderTrackingPage = lazy(async () => ({
 export const WishlistPage = lazy(async () => ({
   default: (await import('../pages/store/account-pages')).WishlistPage,
 }));
+export const SecurityPage = lazy(async () => ({
+  default: (await import('../pages/store/account-pages')).SecurityPage,
+}));
 export const InfoPage = lazy(async () => ({
   default: (await import('../pages/store/content-pages')).InfoPage,
 }));

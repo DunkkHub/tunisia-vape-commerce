@@ -10,6 +10,7 @@ const operationOrder = (status: OrderStatus = OrderStatus.PENDING_CONFIRMATION) 
   id: 'order-1',
   orderNumber: 'ORD-0001',
   customerPhoneSnapshot: '+21620111222',
+  customerEmailSnapshot: 'customer@example.test',
   status,
   paymentStatus:
     status === OrderStatus.CANCELLED ? PaymentStatus.CANCELLED : PaymentStatus.CASH_EXPECTED,
@@ -134,11 +135,19 @@ const successfulTransaction = () => {
       updateMany: inventoryUpdate,
     },
     stockMovement: { create: vi.fn().mockResolvedValue({}) },
+    storeSetting: { findUnique: vi.fn().mockResolvedValue(null) },
     cashCollection: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     delivery: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     orderStatusHistory: { create: vi.fn().mockResolvedValue({}) },
     deliveryEvent: { create: vi.fn().mockResolvedValue({}) },
-    notification: { create: vi.fn().mockResolvedValue({}) },
+    notification: {
+      create: vi.fn().mockResolvedValue({
+        id: 'notification-id',
+        channel: 'EMAIL',
+        event: 'ORDER_CANCELLED',
+      }),
+    },
+    outboxEvent: { create: vi.fn().mockResolvedValue({}) },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
   };
   const prisma = {

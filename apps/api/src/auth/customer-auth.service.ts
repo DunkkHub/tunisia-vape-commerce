@@ -5,10 +5,12 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import argon2, { argon2id } from 'argon2';
 import type { Request, Response } from 'express';
 import { AUTH_AUDIENCES } from '../common/auth/auth.constants';
 import { CryptoService } from '../common/security/crypto.service';
+import { createNotificationWithOutbox } from '../common/outbox/notification-outbox';
 import type { Environment } from '../config/environment';
 import { PrismaService } from '../database/prisma.service';
 import type { SessionResponse, CustomerUserResponse } from './auth-response.types';
@@ -54,14 +56,44 @@ export class CustomerAuthService {
     response: Response,
   ): Promise<SessionResponse<CustomerUserResponse>> {
     await this.throttle.consume('customer-registration', input.email, request, 3, 15 * 60);
-    if (!input.adultConfirmed || !input.termsAccepted) {
+    const complianceSettings = await this.prisma.complianceSetting.findMany({
+      where: {
+        key: {
+          in: [
+            'minimum_purchase_age',
+            'age_gate.entry.enabled',
+            'consent.terms.required',
+            'consent.recording.enabled',
+          ],
+        },
+      },
+      select: { key: true, value: true },
+    });
+    const compliance = new Map(
+      complianceSettings.map((setting) => [setting.key, setting.value] as const),
+    );
+    const configuredBoolean = (key: string): boolean =>
+      !compliance.has(key) || compliance.get(key) === true;
+    const ageConfirmationRequired = configuredBoolean('age_gate.entry.enabled');
+    const termsAcceptanceRequired = configuredBoolean('consent.terms.required');
+    const consentRecordingEnabled = configuredBoolean('consent.recording.enabled');
+    const minimumAgeValue = compliance.get('minimum_purchase_age');
+    const minimumAge =
+      typeof minimumAgeValue === 'number' && Number.isSafeInteger(minimumAgeValue)
+        ? minimumAgeValue
+        : null;
+    const missingConfirmations = [
+      ...(ageConfirmationRequired && !input.adultConfirmed ? ['adultConfirmed'] : []),
+      ...(termsAcceptanceRequired && !input.termsAccepted ? ['termsAccepted'] : []),
+    ];
+    if (missingConfirmations.length > 0) {
       throw new BadRequestException({
         code: 'CONSENT_REQUIRED',
-        message: 'Age confirmation and acceptance of the terms are required.',
+        message: 'Complete the confirmations configured for customer registration.',
+        fields: missingConfirmations,
       });
     }
-    const minimumAge = this.config.get('MINIMUM_PURCHASE_AGE', { infer: true });
-    if (minimumAge < 18) {
+    if (ageConfirmationRequired && (minimumAge === null || minimumAge < 1)) {
       throw new BadRequestException({
         code: 'AGE_POLICY_NOT_CONFIGURED',
         message: 'Registration is temporarily unavailable.',
@@ -91,17 +123,68 @@ export class CustomerAuthService {
     const consentedAt = new Date();
     const ipAddress = (request.ip ?? request.socket.remoteAddress ?? 'unknown').slice(0, 45);
     const userAgent = request.get('user-agent')?.slice(0, 512);
-    const termsVersion = await this.prisma.legalDocumentVersion.findFirst({
-      where: {
-        status: 'PUBLISHED',
-        publishedAt: { lte: consentedAt },
-        legalDocument: {
-          is: { type: 'TERMS_AND_CONDITIONS', locale: input.locale },
-        },
-      },
-      orderBy: [{ version: 'desc' }, { id: 'desc' }],
-      select: { id: true },
-    });
+    const termsVersion =
+      consentRecordingEnabled && input.termsAccepted
+        ? await this.prisma.legalDocumentVersion.findFirst({
+            where: {
+              status: 'PUBLISHED',
+              publishedAt: { lte: consentedAt },
+              legalDocument: {
+                is: { type: 'TERMS_AND_CONDITIONS', locale: input.locale },
+              },
+            },
+            orderBy: [{ version: 'desc' }, { id: 'desc' }],
+            select: { id: true },
+          })
+        : null;
+    const consentRecords: Prisma.ConsentRecordCreateWithoutCustomerInput[] = [];
+    if (consentRecordingEnabled && input.adultConfirmed) {
+      consentRecords.push({
+        type: 'AGE_GATE',
+        granted: true,
+        consentedAt,
+        ipAddress,
+        ...(userAgent ? { userAgent } : {}),
+        locale: input.locale,
+        source: 'customer_registration',
+      });
+    }
+    if (consentRecordingEnabled && input.termsAccepted) {
+      consentRecords.push({
+        type: 'TERMS',
+        granted: true,
+        consentedAt,
+        ...(termsVersion ? { legalDocumentVersion: { connect: { id: termsVersion.id } } } : {}),
+        ipAddress,
+        ...(userAgent ? { userAgent } : {}),
+        locale: input.locale,
+        source: 'customer_registration',
+      });
+    }
+    const customerProfile: Prisma.CustomerProfileCreateWithoutUserInput = {
+      firstName,
+      lastName,
+      phoneE164,
+      phoneSearch: phoneE164.replace(/\D/g, ''),
+      locale: input.locale,
+      marketingConsent: false,
+      ...(consentRecords.length > 0 ? { consentRecords: { create: consentRecords } } : {}),
+      ...(consentRecordingEnabled && input.adultConfirmed && minimumAge !== null
+        ? {
+            ageVerificationEvents: {
+              create: {
+                phase: 'STORE_ENTRY',
+                result: 'PASSED',
+                minimumAge,
+                method: 'self_declaration',
+                ipAddress,
+                ...(userAgent ? { userAgent } : {}),
+                metadata: { source: 'customer_registration' },
+              },
+            },
+          }
+        : {}),
+    };
     let userId: string;
     try {
       const user = await this.prisma.user.create({
@@ -112,48 +195,7 @@ export class CustomerAuthService {
           passwordHash,
           status: 'ACTIVE',
           customerProfile: {
-            create: {
-              firstName,
-              lastName,
-              phoneE164,
-              phoneSearch: phoneE164.replace(/\D/g, ''),
-              locale: input.locale,
-              marketingConsent: false,
-              consentRecords: {
-                create: [
-                  {
-                    type: 'AGE_GATE',
-                    granted: true,
-                    consentedAt,
-                    ipAddress,
-                    ...(userAgent ? { userAgent } : {}),
-                    locale: input.locale,
-                    source: 'customer_registration',
-                  },
-                  {
-                    type: 'TERMS',
-                    granted: true,
-                    consentedAt,
-                    ...(termsVersion ? { legalDocumentVersionId: termsVersion.id } : {}),
-                    ipAddress,
-                    ...(userAgent ? { userAgent } : {}),
-                    locale: input.locale,
-                    source: 'customer_registration',
-                  },
-                ],
-              },
-              ageVerificationEvents: {
-                create: {
-                  phase: 'STORE_ENTRY',
-                  result: 'PASSED',
-                  minimumAge,
-                  method: 'self_declaration',
-                  ipAddress,
-                  ...(userAgent ? { userAgent } : {}),
-                  metadata: { source: 'customer_registration' },
-                },
-              },
-            },
+            create: customerProfile,
           },
         },
         select: { id: true },
@@ -295,8 +337,8 @@ export class CustomerAuthService {
     const tokenHash = this.crypto.hashToken(token);
     const now = new Date();
     const recipient = user.emailNormalized ?? normalizeEmail(input.email);
-    await this.prisma.$transaction([
-      this.prisma.passwordResetToken.create({
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.passwordResetToken.create({
         data: {
           userId: user.id,
           audience: 'CUSTOMER',
@@ -304,23 +346,21 @@ export class CustomerAuthService {
           requestedIp: (request.ip ?? request.socket.remoteAddress ?? 'unknown').slice(0, 45),
           expiresAt: new Date(now.getTime() + 30 * 60_000),
         },
-      }),
-      this.prisma.notification.create({
-        data: {
-          idempotencyKey: `password-reset:${user.id}:${tokenHash.slice(0, 20)}`,
-          event: 'PASSWORD_RESET',
-          channel: 'EMAIL',
-          recipientHash: this.crypto.hashToken(recipient),
-          encryptedRecipient: this.crypto.encrypt(recipient),
-          locale: user.customerProfile?.locale ?? 'fr',
-          payload: {
-            encryptedResetToken: this.crypto.encrypt(token),
-            expiresInMinutes: 30,
-          },
-          status: 'QUEUED',
+      });
+      await createNotificationWithOutbox(transaction, {
+        idempotencyKey: `password-reset:${user.id}:${tokenHash.slice(0, 20)}`,
+        event: 'PASSWORD_RESET',
+        channel: 'EMAIL',
+        recipientHash: this.crypto.hashToken(recipient),
+        encryptedRecipient: this.crypto.encrypt(recipient),
+        locale: user.customerProfile?.locale ?? 'fr',
+        payload: {
+          encryptedResetToken: this.crypto.encrypt(token),
+          expiresInMinutes: 30,
         },
-      }),
-    ]);
+        status: 'QUEUED',
+      });
+    });
   }
 
   async completePasswordReset(input: PasswordResetCompleteDto, request: Request): Promise<void> {
@@ -357,6 +397,14 @@ export class CustomerAuthService {
         data: { consumedAt: now },
       });
       if (consumed.count !== 1) throw this.invalidResetToken();
+      await transaction.passwordResetToken.updateMany({
+        where: {
+          userId: token.userId,
+          audience: 'CUSTOMER',
+          consumedAt: null,
+        },
+        data: { consumedAt: now },
+      });
       await transaction.user.update({
         where: { id: token.userId },
         data: {

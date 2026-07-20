@@ -2,18 +2,27 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { ApiCookieAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiCookieAuth,
+  ApiHeader,
+  ApiOkResponse,
+  ApiOperation,
+  ApiProduces,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { AdminSessionGuard } from '../auth/guards/admin-session.guard';
 import { CsrfGuard } from '../auth/guards/csrf.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -52,6 +61,21 @@ export class AdminCashController {
     return this.cash.listCollections(query);
   }
 
+  @Get('collections/export.csv')
+  @UseGuards(RecentAuthenticationGuard)
+  @RequirePermissions('cash.read', 'reports.export')
+  @ApiOperation({ summary: 'Export up to 500 filtered COD collection rows as audited safe CSV' })
+  @ApiProduces('text/csv')
+  async collectionCsv(
+    @Query() query: AdminCollectionListQueryDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.cash.exportCollections(query, request);
+    this.csvResponse(response, result.filename, result.rowCount);
+    return result.csv;
+  }
+
   @Get('collections/:id')
   @RequirePermissions('cash.read')
   @ApiOperation({ summary: 'Get one COD collection and its bounded allocation history' })
@@ -62,16 +86,22 @@ export class AdminCashController {
 
   @Post('collections/:id/record')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(CsrfGuard)
+  @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('cash.collect')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: 'A stable 16-128 character key reused only to retry this exact collection.',
+  })
   @ApiOperation({ summary: 'Record physical cash against exactly one expected collection' })
   @ApiOkResponse({ type: AdminCashCollectionResponseDto })
   recordCollection(
     @Param('id') id: string,
     @Body() input: RecordCashCollectionDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Req() request: Request,
   ) {
-    return this.cash.recordCollection(id, input, request);
+    return this.cash.recordCollection(id, input, idempotencyKey, request);
   }
 
   @Get('remittances')
@@ -80,6 +110,21 @@ export class AdminCashController {
   @ApiOkResponse({ type: AdminCashRemittanceListResponseDto })
   remittances(@Query() query: AdminRemittanceListQueryDto) {
     return this.cash.listRemittances(query);
+  }
+
+  @Get('remittances/export.csv')
+  @UseGuards(RecentAuthenticationGuard)
+  @RequirePermissions('cash.read', 'reports.export')
+  @ApiOperation({ summary: 'Export up to 500 filtered COD remittance rows as audited safe CSV' })
+  @ApiProduces('text/csv')
+  async remittanceCsv(
+    @Query() query: AdminRemittanceListQueryDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.cash.exportRemittances(query, request);
+    this.csvResponse(response, result.filename, result.rowCount);
+    return result.csv;
   }
 
   @Get('remittances/:id')
@@ -140,5 +185,11 @@ export class AdminCashController {
     @Req() request: Request,
   ) {
     return this.cash.resolveDiscrepancy(id, input, request);
+  }
+
+  private csvResponse(response: Response, filename: string, rowCount: number): void {
+    response.type('text/csv; charset=utf-8');
+    response.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    response.setHeader('X-Export-Row-Count', String(rowCount));
   }
 }

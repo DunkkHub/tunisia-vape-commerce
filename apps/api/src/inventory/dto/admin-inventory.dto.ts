@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
+  IsDateString,
   IsIn,
   IsInt,
   IsOptional,
@@ -27,6 +28,15 @@ export const INVENTORY_ADJUSTMENT_REASONS = [
 ] as const;
 export type InventoryAdjustmentReason = (typeof INVENTORY_ADJUSTMENT_REASONS)[number];
 
+export const INVENTORY_ADJUSTMENT_QUEUE_STATUSES = [
+  'PENDING_APPROVAL',
+  'REJECTED',
+  'APPLIED',
+  'EXPIRED',
+] as const;
+
+export const INVENTORY_ADJUSTMENT_DECISIONS = ['APPROVE', 'REJECT'] as const;
+
 export class InventoryItemIdParametersDto {
   @ApiProperty()
   @IsString()
@@ -41,6 +51,14 @@ export class InventoryVariantIdParametersDto {
   @Matches(ID_PATTERN)
   @MaxLength(30)
   variantId!: string;
+}
+
+export class InventoryAdjustmentIdParametersDto {
+  @ApiProperty()
+  @IsString()
+  @Matches(ID_PATTERN)
+  @MaxLength(30)
+  id!: string;
 }
 
 export class InventoryMovementQueryDto {
@@ -59,6 +77,15 @@ export class InventoryMovementQueryDto {
   @Max(50)
   limit: number = 25;
 }
+
+export class InventoryAdjustmentQueryDto extends InventoryMovementQueryDto {
+  @ApiPropertyOptional({ enum: INVENTORY_ADJUSTMENT_QUEUE_STATUSES })
+  @IsOptional()
+  @IsIn(INVENTORY_ADJUSTMENT_QUEUE_STATUSES)
+  status?: (typeof INVENTORY_ADJUSTMENT_QUEUE_STATUSES)[number];
+}
+
+export class InventoryTransferQueryDto extends InventoryMovementQueryDto {}
 
 export class ApplyInventoryAdjustmentDto {
   @ApiProperty({ enum: INVENTORY_ADJUSTMENT_OPERATIONS })
@@ -101,6 +128,99 @@ export class ApplyInventoryAdjustmentDto {
   @IsInt()
   @Min(1)
   expectedVersion!: number;
+}
+
+export class DecideInventoryAdjustmentDto {
+  @ApiProperty({ enum: INVENTORY_ADJUSTMENT_DECISIONS })
+  @IsIn(INVENTORY_ADJUSTMENT_DECISIONS)
+  decision!: (typeof INVENTORY_ADJUSTMENT_DECISIONS)[number];
+
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+}
+
+export class CreateBatchReceiptDto {
+  @ApiProperty()
+  @IsString()
+  @MaxLength(30)
+  @Matches(ID_PATTERN)
+  variantId!: string;
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(30)
+  @Matches(ID_PATTERN)
+  locationId!: string;
+
+  @ApiProperty({ maxLength: 120 })
+  @IsString()
+  @Matches(/\S/)
+  @MaxLength(120)
+  batchNumber!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  @Matches(ID_PATTERN)
+  supplierId?: string;
+
+  @ApiPropertyOptional({ maxLength: 160 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  supplierReference?: string;
+
+  @ApiPropertyOptional({ format: 'date' })
+  @IsOptional()
+  @IsDateString({ strict: true })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  manufacturedAt?: string;
+
+  @ApiProperty({ format: 'date' })
+  @IsDateString({ strict: true })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  expiryDate!: string;
+
+  @ApiProperty({ minimum: 1, maximum: DATABASE_INT_MAX })
+  @IsInt()
+  @Min(1)
+  @Max(DATABASE_INT_MAX)
+  quantity!: number;
+
+  @ApiPropertyOptional({ maxLength: 1000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+}
+
+export class TransferInventoryDto {
+  @ApiProperty()
+  @IsString()
+  @MaxLength(30)
+  @Matches(ID_PATTERN)
+  destinationLocationId!: string;
+
+  @ApiProperty({ minimum: 1, maximum: DATABASE_INT_MAX })
+  @IsInt()
+  @Min(1)
+  @Max(DATABASE_INT_MAX)
+  quantity!: number;
+
+  @ApiProperty({ minimum: 1, description: 'Current source InventoryItem version.' })
+  @IsInt()
+  @Min(1)
+  expectedSourceVersion!: number;
+
+  @ApiPropertyOptional({ maxLength: 1000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
 }
 
 export class UpdateLowStockThresholdDto {

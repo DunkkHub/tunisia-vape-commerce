@@ -21,20 +21,41 @@ describe('administrator cash access policy', () => {
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const collections = AdminCashController.prototype.collections;
     // eslint-disable-next-line @typescript-eslint/unbound-method
+    const collectionCsv = AdminCashController.prototype.collectionCsv;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     const recordCollection = AdminCashController.prototype.recordCollection;
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const createRemittance = AdminCashController.prototype.createRemittance;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const remittanceCsv = AdminCashController.prototype.remittanceCsv;
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const reconcile = AdminCashController.prototype.reconcileRemittance;
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const resolve = AdminCashController.prototype.resolveDiscrepancy;
 
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, collections)).toEqual(['cash.read']);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, collectionCsv)).toEqual([
+      'cash.read',
+      'reports.export',
+    ]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, collectionCsv)).toEqual([
+      RecentAuthenticationGuard,
+    ]);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, recordCollection)).toEqual(['cash.collect']);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, createRemittance)).toEqual(['cash.remit']);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, remittanceCsv)).toEqual([
+      'cash.read',
+      'reports.export',
+    ]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, remittanceCsv)).toEqual([
+      RecentAuthenticationGuard,
+    ]);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, reconcile)).toEqual(['cash.reconcile']);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, resolve)).toEqual(['cash.reconcile']);
-    expect(Reflect.getMetadata(GUARDS_METADATA, recordCollection)).toEqual([CsrfGuard]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, recordCollection)).toEqual([
+      CsrfGuard,
+      RecentAuthenticationGuard,
+    ]);
     expect(Reflect.getMetadata(GUARDS_METADATA, createRemittance)).toEqual([
       CsrfGuard,
       RecentAuthenticationGuard,

@@ -14,14 +14,14 @@ Security is deny-by-default and layered across Nginx, NestJS guards/validation, 
 - Admin password success never creates an authorized admin session. Mandatory TOTP or a one-time recovery code completes authentication.
 - A customer principal can never be upgraded to an admin principal based on a role field from the browser.
 
-Production cookies are host-only, Secure, HttpOnly, SameSite=Lax unless a documented flow requires stricter behavior, and narrowly scoped to the serving host. Separate store/admin hosts are preferred. Mutation requests also require a session-bound CSRF token and valid Origin. Session identifiers are opaque 256-bit random values and only their keyed hash is persisted where practical.
+Production cookies are host-only, Secure, HttpOnly, SameSite=Lax unless a documented flow requires stricter behavior, and narrowly scoped to the serving host. Production requires distinct storefront and administrator origins/hosts; local development may deliberately use one origin. Mutation requests also require a session-bound CSRF token and valid Origin. Session identifiers are opaque 256-bit random values and only their keyed hash is persisted where practical.
 
 ## Passwords, MFA, and tokens
 
 - Hash passwords with Argon2id using parameters benchmarked on the production class and reviewed annually; keep a pepper in the secret manager if adopted.
 - Enforce length and breached/common-password checks for admins; do not use composition rules that encourage predictable passwords.
 - Normalize email/phone for lookup but preserve display values separately.
-- Verification, invitation, reset, and pending-2FA tokens are high entropy, short lived, single use, and stored as hashes.
+- Verification, invitation, reset, and pending-2FA tokens are high entropy, short lived, single use, and stored as hashes. Completing a customer password reset atomically consumes every outstanding customer reset token for that account before revoking its customer sessions.
 - Encrypt TOTP seeds with the field-encryption key and bind associated data to the admin ID/purpose.
 - Hash individual recovery codes, show them once, consume atomically, and notify/log their use.
 - Rotate the session on login, MFA completion, password change, privilege change, and recent-auth completion.
@@ -38,7 +38,7 @@ The account-lifecycle controllers use an exact server-derived `super-administrat
 
 Role-row locking serializes the super-administrator availability decision. An administrator cannot change their own lifecycle state, and a super-administrator cannot be suspended or anonymized unless another active, non-suspended, TOTP-enrolled super-administrator remains. Expected user/profile versions prevent stale confirmations from overwriting a concurrent account change. Creation through the management API cannot assign `super-administrator`; that escalation requires a separate approved workflow.
 
-Suspending an administrator revokes only active `ADMIN` sessions for that user. Suspending or disabling a customer revokes only active `CUSTOMER` sessions for that user, preserving the authentication-realm boundary. Reactivation never issues a session. Administrator anonymization is suspended-first and removes role assignments, MFA/recovery/reset material and direct identifiers while retaining stable record identifiers needed by append-only audit and historical references. Customer disable is also suspended-first, but preserves customer and commerce records; it must not be represented as privacy erasure or anonymization. Successful actions write audit and security events; denials write safe audit events.
+Suspending an administrator revokes only active `ADMIN` sessions for that user. Suspending, disabling, or explicitly revoking sessions for a customer affects only the `CUSTOMER` realm. Reactivation never issues a session. Administrator anonymization is suspended-first and removes role assignments, MFA/recovery/reset material and direct identifiers while retaining stable audit references. Customer disable is access control only. The distinct customer anonymization action requires an exact Super Administrator, recent authentication, expected versions, explicit confirmation, no non-terminal orders, and an audit record; it removes direct account/address/credential data and encrypted notification recipients while preserving immutable commercial, consent, internal-note, security, and audit history.
 
 The first administrator remains a bootstrap exception performed only with `pnpm admin:create` in an interactive trusted TTY. The command refuses to run once any administrator exists, locks the Super Administrator role row, assigns the seeded exact role, requires TOTP enrollment at first login, and appends a system audit event. It has no default password, command-line password, or seeded account.
 
@@ -48,7 +48,7 @@ The first administrator remains a bootstrap exception performed only with `pnpm 
 - Parse money only as integer millimes or validated decimal input converted exactly at the boundary.
 - Use response DTO allowlists; never serialize Prisma records directly.
 - Use stable safe errors with requestId. Production does not expose causes, SQL, paths, or stack traces.
-- Allow CORS only from exact configured storefront/admin origins. Never combine credentials with a wildcard origin.
+- Allow credentialed CORS only from the exact `WEB_URL` and `ADMIN_WEB_URL` origins. Production validates that both are HTTPS origin-only URLs and distinct, and that their hostnames match `STOREFRONT_HOST` and `ADMIN_HOST`. Never combine credentials with a wildcard origin or an independently configured catch-all list.
 - Enforce JSON/content types and reject ambiguous duplicate parameters.
 - Configure request, upstream, database, Redis, and provider timeouts.
 
@@ -60,7 +60,9 @@ React does not render untrusted HTML. If business-approved rich content is intro
 
 ## CSRF and CORS
 
-Cookie SameSite is defense in depth, not the only CSRF control. The API issues a realm-specific synchronizer token bound to the server session. POST, PUT, PATCH, and DELETE require it in a custom header and validate Origin/Fetch Metadata. Tokens rotate on authentication transitions. Login CSRF is considered and the admin/customer login buckets and tokens are separate.
+Cookie SameSite is defense in depth, not the only CSRF control. The API issues a realm-specific synchronizer token bound to the server session. `TrustedOriginGuard` applies globally: storefront/customer routes accept only `WEB_URL`, administrator routes and optional OpenAPI docs accept only `ADMIN_WEB_URL`, cross-site Fetch Metadata is denied, and requests carrying an unconfigured Origin are denied. POST, PUT, PATCH, and DELETE additionally require the realm-specific token in a custom header. Tokens rotate on authentication transitions. Login CSRF is considered and the admin/customer login buckets and tokens are separate.
+
+The production edge repeats this boundary before NestJS. The storefront virtual host never serves `/admin`, forwards `/api/v1/admin` or `/api/v1/auth/admin`, or exposes any `/api/docs*` OpenAPI UI/schema route; the administrator virtual host does not forward customer authentication; unknown hosts are dropped. OpenAPI UI is absent by default in production and exists only after the explicit validated `OPENAPI_ENABLED=true` opt-in, on the protected admin host.
 
 ## Sessions and Redis
 

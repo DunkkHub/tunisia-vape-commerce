@@ -47,7 +47,7 @@ export class CheckoutQuoteService {
     const policy = await this.policies.evaluate();
     if (!policy.allowed) {
       throw new ConflictException({
-        code: 'LEGAL_GATE_CLOSED',
+        code: 'CHECKOUT_UNAVAILABLE',
         message: 'Checkout is not currently available.',
         blockers: policy.blockers,
       });

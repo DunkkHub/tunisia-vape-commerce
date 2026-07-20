@@ -13,6 +13,7 @@ const permissions = [
   'suppliers.manage',
   'inventory.read',
   'inventory.adjust',
+  'inventory.approve',
   'inventory.transfer',
   'orders.read',
   'orders.create',
@@ -87,7 +88,13 @@ const roleDefinitions: ReadonlyArray<{
     key: 'inventory-manager',
     name: 'Inventory Manager',
     description: 'Inventory visibility, approved adjustments, and transfers.',
-    permissions: ['products.read', 'inventory.read', 'inventory.adjust', 'inventory.transfer'],
+    permissions: [
+      'products.read',
+      'inventory.read',
+      'inventory.adjust',
+      'inventory.approve',
+      'inventory.transfer',
+    ],
   },
   {
     key: 'order-manager',
@@ -132,6 +139,7 @@ const roleDefinitions: ReadonlyArray<{
       'deliveries.update',
       'couriers.manage',
       'cash.read',
+      'reports.export',
     ],
   },
   {
@@ -265,21 +273,78 @@ const storeSettings = [
     value: true,
     description: 'Queues a customer order-received notification for the configured adapter.',
   },
+  {
+    key: 'notifications.customer_order_sms.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: false,
+    description:
+      'Adds SMS to customer order lifecycle notifications. Keep disabled until an SMS provider is configured.',
+  },
+  {
+    key: 'notifications.security_alert_email',
+    valueType: SettingValueType.STRING,
+    value: '',
+    description:
+      'Recipient for coalesced security alerts. Empty disables security-alert email without affecting security event recording.',
+  },
+  {
+    key: 'notifications.order_alert_email',
+    valueType: SettingValueType.STRING,
+    value: '',
+    description:
+      'Recipient for internal new-order alerts. Empty disables internal email without affecting customer order receipts.',
+  },
+  {
+    key: 'notifications.low_stock_alert_email',
+    valueType: SettingValueType.STRING,
+    value: '',
+    description:
+      'Recipient for coalesced low-stock alerts. Empty disables email while dashboard low-stock reporting remains available.',
+  },
+  {
+    key: 'notifications.operational_alert_locale',
+    valueType: SettingValueType.STRING,
+    value: 'fr',
+    description: 'French or Arabic locale for internal security and inventory alert email.',
+  },
 ] as const;
 
 const complianceSettings = [
   {
-    key: 'legal_review.completed',
-    valueType: SettingValueType.BOOLEAN,
-    value: true,
-    legallyReviewed: true,
-    description: 'Records the externally completed legal review; operational gates still apply.',
-  },
-  {
     key: 'minimum_purchase_age',
     valueType: SettingValueType.INTEGER,
     value: 18,
-    description: 'Approved minimum purchase age; values below 18 block checkout.',
+    description: 'Operator-configured minimum purchase age; the software default is 18.',
+  },
+  {
+    key: 'age_gate.entry.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Shows and enforces the storefront entry age confirmation when enabled.',
+  },
+  {
+    key: 'age_gate.checkout.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Requires an explicit age confirmation during checkout when enabled.',
+  },
+  {
+    key: 'consent.terms.required',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Requires the operator-configured terms confirmation when enabled.',
+  },
+  {
+    key: 'consent.privacy.required',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Requires the operator-configured privacy confirmation when enabled.',
+  },
+  {
+    key: 'consent.recording.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Records enabled customer confirmations and their request evidence.',
   },
   {
     key: 'delivery.age_verification_required',
@@ -299,7 +364,7 @@ const featureFlags = [
   {
     key: 'guest_checkout',
     enabled: false,
-    description: 'Guest checkout remains disabled until checkout and legal gates pass.',
+    description: 'Guest checkout remains disabled until its operational flow is configured.',
   },
   {
     key: 'manual_delivery_quotes',

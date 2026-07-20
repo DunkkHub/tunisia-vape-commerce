@@ -9,6 +9,100 @@ import { CatalogService } from './catalog.service';
 const config = {} as ConfigService<Environment, true>;
 
 describe('CatalogService public filters and facets', () => {
+  it('reports technical launch state without exposing or querying legal approval', async () => {
+    const storeSettings = vi.fn().mockResolvedValue([
+      { key: 'store.name', value: 'PUFFJET' },
+      { key: 'maintenance.mode', value: false },
+      { key: 'prelaunch.mode', value: false },
+      { key: 'checkout.enabled', value: true },
+    ]);
+    const complianceSettings = vi.fn().mockResolvedValue([
+      { key: 'minimum_purchase_age', value: 18 },
+      { key: 'age_gate.entry.enabled', value: true },
+      { key: 'age_gate.checkout.enabled', value: true },
+      { key: 'consent.terms.required', value: true },
+      { key: 'consent.privacy.required', value: true },
+      { key: 'consent.recording.enabled', value: true },
+    ]);
+    const prisma = {
+      storeSetting: { findMany: storeSettings },
+      complianceSetting: { findMany: complianceSettings },
+    } as unknown as PrismaService;
+    const ageGate = { isConfirmed: vi.fn().mockReturnValue(true) } as unknown as AgeGateService;
+    const configuration = {
+      get: vi.fn((key: keyof Environment) =>
+        key === 'CHECKOUT_ENABLED' ? true : key === 'MAINTENANCE_MODE' ? false : false,
+      ),
+    } as unknown as ConfigService<Environment, true>;
+    const service = new CatalogService(prisma, ageGate, configuration);
+
+    const response = await service.status({} as never);
+
+    expect(response.data).toEqual({
+      storeName: 'PUFFJET',
+      maintenanceMode: false,
+      prelaunchMode: false,
+      checkoutEnabled: true,
+      minimumAge: 18,
+      ageGateEnabled: true,
+      checkoutAgeConfirmationRequired: true,
+      termsAcceptanceRequired: true,
+      privacyAcceptanceRequired: true,
+      consentRecordingEnabled: true,
+      ageGateRequired: false,
+      ageConfirmed: true,
+    });
+    expect(complianceSettings).toHaveBeenCalledWith({
+      where: {
+        key: {
+          in: [
+            'minimum_purchase_age',
+            'age_gate.entry.enabled',
+            'age_gate.checkout.enabled',
+            'consent.terms.required',
+            'consent.privacy.required',
+            'consent.recording.enabled',
+          ],
+        },
+      },
+      select: { key: true, value: true },
+    });
+  });
+
+  it('does not force prelaunch when the operator disables the entry age gate', async () => {
+    const prisma = {
+      storeSetting: {
+        findMany: vi.fn().mockResolvedValue([
+          { key: 'store.name', value: 'PUFFJET' },
+          { key: 'maintenance.mode', value: false },
+          { key: 'prelaunch.mode', value: false },
+          { key: 'checkout.enabled', value: true },
+        ]),
+      },
+      complianceSetting: {
+        findMany: vi.fn().mockResolvedValue([
+          { key: 'minimum_purchase_age', value: 0 },
+          { key: 'age_gate.entry.enabled', value: false },
+        ]),
+      },
+    } as unknown as PrismaService;
+    const isConfirmed = vi.fn();
+    const ageGate = { isConfirmed } as unknown as AgeGateService;
+    const configuration = {
+      get: vi.fn((key: keyof Environment) => key === 'CHECKOUT_ENABLED'),
+    } as unknown as ConfigService<Environment, true>;
+
+    const response = await new CatalogService(prisma, ageGate, configuration).status({} as never);
+
+    expect(response.data).toMatchObject({
+      prelaunchMode: false,
+      ageGateEnabled: false,
+      ageGateRequired: false,
+      ageConfirmed: true,
+    });
+    expect(isConfirmed).not.toHaveBeenCalled();
+  });
+
   it('defensively rejects an inverted price range when called outside controller validation', async () => {
     const service = new CatalogService({} as PrismaService, {} as AgeGateService, config);
 
@@ -53,6 +147,16 @@ describe('CatalogService public filters and facets', () => {
         minimumAge: 18,
         featured: false,
         brand: { name: 'Nexa', slug: 'nexa' },
+        images: [
+          {
+            id: 'image-1',
+            objectKeyHash: 'a'.repeat(64),
+            altTextFr: 'Flacon menthe',
+            altTextAr: 'عبوة نعناع',
+            width: 800,
+            height: 800,
+          },
+        ],
         variants: [],
         attributes: [],
       },
@@ -92,8 +196,31 @@ describe('CatalogService public filters and facets', () => {
       flavor: 'Menthe',
       priceMillimes: 20_000,
       promotionalPriceMillimes: 15_000,
+      primaryImage: {
+        id: 'image-1',
+        url: `/api/v1/media/${'a'.repeat(64)}`,
+        altText: 'Flacon menthe',
+        width: 800,
+        height: 800,
+      },
     });
     expect(response.data).toMatchObject({ page: 1, pageSize: 20, total: 1, totalPages: 1 });
+    const request = findMany.mock.calls[0]?.[0] as
+      | {
+          select?: {
+            images?: { where?: unknown; orderBy?: unknown; take?: number };
+          };
+        }
+      | undefined;
+    expect(request?.select?.images).toMatchObject({
+      where: { deletedAt: null, moderationStatus: 'APPROVED' },
+      take: 20,
+    });
+    expect(request?.select?.images?.orderBy).toEqual([
+      { isPrimary: 'desc' },
+      { sortOrder: 'asc' },
+      { id: 'asc' },
+    ]);
   });
 
   it('returns only bounded public facet values and integer-millime price bounds', async () => {

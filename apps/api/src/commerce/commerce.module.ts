@@ -18,10 +18,26 @@ import { AgeGateGuard } from '../compliance/age-gate.guard';
 import { AgeGateService } from '../compliance/age-gate.service';
 import { CustomerOrdersController } from '../customer-orders/customer-orders.controller';
 import { CustomerOrdersService } from '../customer-orders/customer-orders.service';
+import { CustomerAddressesController } from '../customer-addresses/customer-addresses.controller';
+import { CustomerAddressesService } from '../customer-addresses/customer-addresses.service';
 import { DeliveryOptionsController, GeographyController } from '../geography/geography.controller';
 import { GeographyService } from '../geography/geography.service';
+import {
+  AdminProductMediaController,
+  PublicProductMediaController,
+} from '../product-media/product-media.controller';
+import { ProductImageValidatorService } from '../product-media/product-image-validator.service';
+import { ProductMediaService } from '../product-media/product-media.service';
+import { productMediaStorageProvider } from '../product-media/storage/media-storage.provider';
+import {
+  LegalDocumentsController,
+  StorefrontContentController,
+} from '../storefront-content/storefront-content.controller';
+import { StorefrontContentService } from '../storefront-content/storefront-content.service';
 import { AdminBrandsController, AdminCategoriesController } from '../taxonomy/taxonomy.controller';
 import { AdminBrandsService, AdminCategoriesService } from '../taxonomy/taxonomy.service';
+import { WishlistController } from '../wishlist/wishlist.controller';
+import { WishlistService } from '../wishlist/wishlist.service';
 
 @Module({
   imports: [AuthModule],
@@ -36,6 +52,12 @@ import { AdminBrandsService, AdminCategoriesService } from '../taxonomy/taxonomy
     GeographyController,
     DeliveryOptionsController,
     CustomerOrdersController,
+    CustomerAddressesController,
+    WishlistController,
+    LegalDocumentsController,
+    StorefrontContentController,
+    AdminProductMediaController,
+    PublicProductMediaController,
     AdminBrandsController,
     AdminCategoriesController,
   ],
@@ -51,6 +73,12 @@ import { AdminBrandsService, AdminCategoriesService } from '../taxonomy/taxonomy
     CartService,
     GeographyService,
     CustomerOrdersService,
+    CustomerAddressesService,
+    WishlistService,
+    StorefrontContentService,
+    ProductImageValidatorService,
+    productMediaStorageProvider,
+    ProductMediaService,
     AdminBrandsService,
     AdminCategoriesService,
   ],

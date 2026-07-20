@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client';
 import { buildPublicProductWhere } from '../catalog/catalog-policy';
 import type { StorefrontLocale } from '../catalog/catalog.service';
 import { PrismaService } from '../database/prisma.service';
+import { publicProductImageUrl } from '../product-media/product-media.service';
 import type { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import {
   availableCartQuantity,
@@ -17,6 +18,25 @@ import {
   MAX_CART_DISTINCT_ITEMS,
   MAX_CART_ITEM_QUANTITY,
 } from './cart-policy';
+
+const CART_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
+const cartExpiry = (now = new Date()) => new Date(now.getTime() + CART_TTL_MS);
+
+const cartImageSelect = {
+  id: true,
+  objectKeyHash: true,
+  altTextFr: true,
+  altTextAr: true,
+  width: true,
+  height: true,
+} satisfies Prisma.ProductImageSelect;
+
+const cartImages = {
+  where: { deletedAt: null, moderationStatus: 'APPROVED' as const },
+  orderBy: [{ isPrimary: 'desc' as const }, { sortOrder: 'asc' as const }, { id: 'asc' as const }],
+  take: 1,
+  select: cartImageSelect,
+};
 
 const eligibleInventoryWhere = (now: Date): Prisma.InventoryItemWhereInput => ({
   onHandQuantity: { gt: 0 },
@@ -51,6 +71,7 @@ const cartVariantSelect = (now: Date) =>
     priceMillimes: true,
     promotionalPriceMillimes: true,
     lowStockThreshold: true,
+    images: cartImages,
     product: {
       select: {
         id: true,
@@ -64,6 +85,7 @@ const cartVariantSelect = (now: Date) =>
         containsNicotine: true,
         minimumAge: true,
         brand: { select: { name: true, slug: true } },
+        images: cartImages,
       },
     },
     inventoryItems: {
@@ -97,6 +119,7 @@ type CartRecord = Prisma.CartGetPayload<{ select: ReturnType<typeof cartSelect> 
 type CartVariantRecord = Prisma.ProductVariantGetPayload<{
   select: ReturnType<typeof cartVariantSelect>;
 }>;
+type CartImageRecord = CartVariantRecord['images'][number];
 
 @Injectable()
 export class CartService {
@@ -114,6 +137,7 @@ export class CartService {
     const cart = await this.prisma.cart.findFirst({
       where: {
         status: 'ACTIVE',
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
         customer: { is: { userId, suspendedAt: null, user: { is: { status: 'ACTIVE' } } } },
       },
       orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
@@ -160,7 +184,7 @@ export class CartService {
       }
       await transaction.cart.update({
         where: { id: activeCartId! },
-        data: { version: { increment: 1 } },
+        data: { version: { increment: 1 }, expiresAt: cartExpiry(now) },
       });
       return activeCartId!;
     });
@@ -191,7 +215,7 @@ export class CartService {
       });
       await transaction.cart.update({
         where: { id: activeCartId },
-        data: { version: { increment: 1 } },
+        data: { version: { increment: 1 }, expiresAt: cartExpiry(now) },
       });
       return activeCartId;
     });
@@ -208,7 +232,7 @@ export class CartService {
       if (deleted.count !== 1) throw this.itemNotFound();
       await transaction.cart.update({
         where: { id: activeCartId },
-        data: { version: { increment: 1 } },
+        data: { version: { increment: 1 }, expiresAt: cartExpiry() },
       });
       return activeCartId;
     });
@@ -220,6 +244,7 @@ export class CartService {
     userId: string,
     create: boolean,
   ): Promise<string | null> {
+    const now = new Date();
     const customer = await transaction.customerProfile.findFirst({
       where: {
         userId,
@@ -258,14 +283,49 @@ export class CartService {
     const cart = await transaction.cart.findFirst({
       where: { customerId: customer.id, status: 'ACTIVE' },
       orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
-      select: { id: true },
+      select: { id: true, expiresAt: true },
     });
-    if (cart || !create) return cart?.id ?? null;
+    if (cart && cart.expiresAt !== null && cart.expiresAt <= now) {
+      await transaction.cart.updateMany({
+        where: { id: cart.id, status: 'ACTIVE' },
+        data: { status: 'EXPIRED', version: { increment: 1 } },
+      });
+    } else if (cart) {
+      await this.removeUnavailableItems(transaction, cart.id, now);
+      return cart.id;
+    }
+    if (!create) return null;
     const created = await transaction.cart.create({
-      data: { customerId: customer.id, status: 'ACTIVE', currency: 'TND' },
+      data: {
+        customerId: customer.id,
+        status: 'ACTIVE',
+        currency: 'TND',
+        expiresAt: cartExpiry(),
+      },
       select: { id: true },
     });
     return created.id;
+  }
+
+  private async removeUnavailableItems(
+    transaction: Prisma.TransactionClient,
+    cartId: string,
+    now: Date,
+  ): Promise<void> {
+    const deleted = await transaction.cartItem.deleteMany({
+      where: {
+        cartId,
+        variant: { isNot: publicVariantWhere(now) },
+      },
+    });
+    if (deleted.count === 0) return;
+
+    // Checkout compares the submitted lines with every persisted cart row. Removing a stale row
+    // must therefore invalidate any quote produced from the previous cart version.
+    await transaction.cart.update({
+      where: { id: cartId },
+      data: { version: { increment: 1 } },
+    });
   }
 
   private async response(userId: string, cartId: string, locale: StorefrontLocale) {
@@ -274,6 +334,7 @@ export class CartService {
       where: {
         id: cartId,
         status: 'ACTIVE',
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
         customer: { is: { userId, suspendedAt: null, user: { is: { status: 'ACTIVE' } } } },
       },
       select: cartSelect(now),
@@ -330,6 +391,8 @@ const serializeCart = (cart: CartRecord, locale: StorefrontLocale) => {
     const variantName = locale === 'ar' ? variant.nameAr : variant.nameFr;
     const shortDescription =
       locale === 'ar' ? product.shortDescriptionAr : product.shortDescriptionFr;
+    const variantImage = variant.images?.[0];
+    const productImage = product.images?.[0] ?? variantImage;
     return {
       id: item.id,
       quantity: item.quantity,
@@ -349,7 +412,7 @@ const serializeCart = (cart: CartRecord, locale: StorefrontLocale) => {
         availableQuantity: availability,
         lowStock: availability <= variant.lowStockThreshold,
         ageRestricted: product.minimumAge !== null || product.containsNicotine,
-        primaryImage: null,
+        primaryImage: productImage ? serializeCartImage(productImage, locale) : null,
       },
       variant: {
         id: variant.id,
@@ -358,7 +421,7 @@ const serializeCart = (cart: CartRecord, locale: StorefrontLocale) => {
         priceMillimes: price.listPriceMillimes,
         promotionalPriceMillimes: price.promotionalPriceMillimes,
         availableQuantity: availability,
-        image: null,
+        image: variantImage ? serializeCartImage(variantImage, locale) : null,
       },
     };
   });
@@ -370,3 +433,11 @@ const serializeCart = (cart: CartRecord, locale: StorefrontLocale) => {
     subtotalMillimes: cartSubtotal(lineTotals),
   };
 };
+
+const serializeCartImage = (image: CartImageRecord, locale: StorefrontLocale) => ({
+  id: image.id,
+  url: publicProductImageUrl(image.objectKeyHash),
+  altText: locale === 'ar' ? image.altTextAr : image.altTextFr,
+  width: image.width ?? undefined,
+  height: image.height ?? undefined,
+});

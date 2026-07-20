@@ -50,27 +50,60 @@ Do not represent these as achieved until a timed restore exercise proves them on
 - Suggested starting retention: 35 daily, 13 monthly, and legally approved annual records. Tunisian tax, consumer, employment/courier, privacy, and consent requirements must determine the final schedule.
 - Maintain a manifest containing environment, UTC range, tool/version, MySQL version, schema migration, file/object sizes, checksums, encryption key version, binlog coordinates, and backup job result.
 
-## Local logical backup example
+## Logical backup command
 
-The repository backup command requires a dedicated read-capable backup URL, a 32-byte base64 key,
-an external key identifier, and an environment label:
+The Node-based command is cross-platform; it requires MySQL 8-compatible `mysql` and `mysqldump`
+clients on `PATH` (or explicit `MYSQL_BIN`/`MYSQLDUMP_BIN` paths). Use a dedicated read-capable
+backup URL, a 32-byte base64 key, an external key identifier, an environment label, and an approved
+retention value:
 
     DATABASE_BACKUP_URL=mysql://backup_user:...@mysql:3306/vape_store
     BACKUP_ENCRYPTION_KEY_BASE64=<32 random bytes, base64>
     BACKUP_ENCRYPTION_KEY_ID=<managed-key-version>
     BACKUP_ENVIRONMENT=<environment-name>
+    BACKUP_DIRECTORY=<dedicated-backup-directory>
+    BACKUP_RETENTION_DAYS=35
+    BACKUP_ENCRYPTION_MODE=aes-256-gcm
+    MYSQL_TLS_MODE=VERIFY_IDENTITY
+    MYSQL_TLS_CA_FILE=<absolute-CA-path-if-not-in-system-trust>
     pnpm backup:mysql
 
 The command uses a consistent logical transaction and includes routines, scheduled events, triggers,
-all commerce/audit/outbox tables, and `_prisma_migrations`. It streams directly into AES-256-GCM,
-writes through a restricted `.partial` file, deletes incomplete output on failure, and atomically
-publishes the encrypted file plus a restricted JSON manifest. The manifest records ciphertext
-SHA-256 and size, plaintext size, database/dump tool versions, latest migration, advisory table
-counts, environment, and encryption key ID. Passwords are passed to MySQL tools through their
-environment rather than process arguments; a managed provider or protected option file is still
-preferred in production.
+all commerce/audit/outbox tables, and `_prisma_migrations`. Version 2 streams SQL through gzip and
+then AES-256-GCM, writes through a mode-restricted `.partial` file, deletes incomplete output on
+failure, flushes each file, renames the timestamped `.sql.gz.enc` artifact, and publishes its
+restricted JSON manifest last as the commit marker. A file without its matching final manifest is
+incomplete and must not be selected for restore. The manifest records the artifact SHA-256 and size,
+compressed/plaintext sizes, database/dump tool versions, every applied migration name/checksum,
+advisory table counts, environment, compression, and encryption key ID. For encrypted format 2, an
+HMAC key derived from the backup encryption key authenticates the complete canonical manifest, so
+its time, environment, migration and checksum evidence cannot be rewritten independently. Passwords
+are passed to MySQL tools through their environment rather than process arguments; a managed
+provider or protected option file is still preferred in production.
+MySQL subprocesses receive an allowlisted operating-system environment plus `MYSQL_PWD`, not the
+application/provider/key environment. Non-local runs fail unless TLS identity verification is
+explicitly enabled; local development may use `PREFERRED`.
+Restore remains backward-compatible with repository format-1 `.sql.enc` artifacts. New backups use
+format 2; format 1 has no authenticated manifest and therefore requires the explicit
+`RESTORE_ALLOW_LEGACY_UNSIGNED_MANIFEST=true` exception. Always retain each artifact's matching
+manifest and tested key version during rotation.
 
-Check the output is nonempty, capture a SHA-256 checksum, encrypt it before transport, and never commit it. Logical dumps containing customer data are sensitive.
+`BACKUP_DIRECTORY` cannot be a filesystem root, symlink, or junction. Retention pruning considers
+only repository-generated artifact names directly inside that directory and never follows links or
+deletes unrelated files. `BACKUP_RETENTION_DAYS=0` disables automatic pruning; otherwise completed
+artifacts older than the configured age are removed after a new backup and manifest are published.
+Object-lock/provider retention remains authoritative because a host process able to delete local
+files is not an immutable-backup boundary.
+
+Encryption is enabled by default and is mandatory for staging/production use. A deliberately
+unencrypted `.sql.gz` is supported only for disposable local/development/test/CI fixtures and
+requires all three of `BACKUP_ENCRYPTION_MODE=none`, `ALLOW_UNENCRYPTED_BACKUP=true`, and a matching
+safe `BACKUP_ENVIRONMENT`. Restoring that exception independently requires
+`RESTORE_ALLOW_UNENCRYPTED_BACKUP=true`. Never transfer or retain an unencrypted backup containing
+real customer or commercial data.
+
+Never commit a backup. Copy the artifact and manifest together to retention-protected storage and
+verify the reported checksum after transport. Logical dumps containing customer data are sensitive.
 
 ## Isolated restore procedure
 
@@ -93,19 +126,58 @@ of these independent confirmations:
     BACKUP_ENCRYPTION_KEY_BASE64=<matching-key>
     RESTORE_TARGET_IS_DISPOSABLE=true
     RESTORE_CONFIRM_DATABASE=vape_restore_drill
-    pnpm restore:mysql <backup.sql.enc> --confirm-empty-disposable-database
+    RESTORE_ALLOW_LEGACY_UNSIGNED_MANIFEST=false
+    RESTORE_MAX_PLAINTEXT_BYTES=<approved-capacity-limit>
+    EXPECTED_MIGRATION_NAME=<migration-required-by-this-image>
+    pnpm restore:mysql <backup.sql.gz.enc> --confirm-empty-disposable-database
 
 Before spawning a mutating MySQL client, restore verifies the manifest checksum/size and fully
-authenticates/decrypts AES-GCM into a mode-0600 file inside a mode-0700 temporary directory. It then
-proves the target database has zero tables. After import it runs migration, key table count,
-nonnegative inventory, active-reservation coverage, order/line money equation, and nonnegative cash
-invariants. Temporary plaintext is removed in `finally`. A failed logical import can still leave a
-partially populated target because MySQL DDL is not globally transactional; discard and recreate
-that disposable database before retrying. Never import over the source or production database.
+authenticates/decrypts AES-GCM, verifies the declared gzip expansion size does not exceed the
+operator-approved `RESTORE_MAX_PLAINTEXT_BYTES`, and materializes SQL only
+inside a mode-0700 temporary directory. It then proves the target database has zero tables. After
+import it checks the manifest and image migration versions, incomplete migrations, key table counts,
+known foreign-key orphans, nonnegative inventory, active-reservation coverage, order/line money
+equations, and nonnegative cash invariants. Temporary plaintext is removed in `finally`. A failed
+logical import can still leave a partially populated target because MySQL DDL is not globally
+transactional; discard and recreate that disposable database before retrying. Never import over the
+source or production database.
 
-`pnpm verify:restore [manifest]` reruns read-only post-restore verification. Manifest table counts
+`pnpm verify:restore [manifest]` reruns read-only post-restore verification and also requires
+`EXPECTED_MIGRATION_NAME`. Manifest table counts
 are advisory when writes occurred between metadata capture and the logical snapshot; invariant and
 migration failures are fatal.
+
+## Automated isolated restore drill
+
+The drill command creates a randomly named `vape_restore_drill_<UTC>_<nonce>` database on the
+server named by a privileged drill-only URL, invokes the same guarded restore and verification,
+writes a mode-restricted JSON evidence report, and drops the drill database by default:
+
+    RESTORE_DRILL_ADMIN_URL=mysql://drill_admin:...@isolated-mysql:3306/mysql
+    RESTORE_DRILL_TARGET_IS_ISOLATED=true
+    RESTORE_DRILL_CONFIRM_HOST=isolated-mysql
+    EXPECTED_MIGRATION_NAME=<migration-required-by-this-image>
+    BACKUP_ENCRYPTION_KEY_BASE64=<matching-key>
+    RESTORE_DRILL_REPORT_DIRECTORY=backups/restore-drill-reports
+    pnpm restore:drill <backup.sql.gz.enc>
+
+The drill refuses to start unless the isolated-target boolean and exact hostname confirmation match
+the admin URL. That admin identity creates the generated database and an ephemeral random restore
+identity scoped only to that database; the dump and verification never use the server-wide admin
+identity. The ephemeral identity is removed on success or failure. The admin identity should still
+have permission to create/drop databases and users only on a dedicated isolated drill server or
+account. The generated-name guard prevents this command from dropping an ordinary database. Keeping
+the restored database requires both `--keep-isolated-database` and
+`RESTORE_DRILL_KEEP_DATABASE=true`; destroy retained sensitive copies through the approved process.
+Mode `0600`/`0700` is applied where the operating system supports POSIX permissions; on Windows,
+also protect backup, temporary, and report directories with a dedicated NTFS ACL.
+
+Each report records the source checksum/migration, target database name, start/end, logical
+restore-and-verification duration, cleanup result, and backup age at drill start. Those last two
+measurements are evidence inputs: they are not a full-service RTO or transaction-level RPO. The
+operator must still record provider snapshot/PITR recovery, object recovery, service startup, smoke
+tests, reconciliation, and the latest recoverable transaction in the readiness report. A unit test
+or `--help` invocation is not a successful restore drill.
 
 ## Restore verification
 
@@ -120,6 +192,21 @@ migration failures are fatal.
 - Customer and admin authentication realms remain separate; all restored sessions are invalidated.
 - A controlled read-only report and safe test order workflow succeed with notifications suppressed.
 - Audit/security histories are present and not writable through normal APIs.
+
+## Latest recorded local drill
+
+On 2026-07-20, a fresh MySQL 8.4 source received all six migrations through
+`20260720160000_cash_collection_idempotency` and the structural seed. The backup command produced a
+gzip plus AES-256-GCM artifact and authenticated manifest. The isolated drill created a generated
+database and scoped restore identity, verified all six migration checksums, table counts, foreign
+keys/orphans, money equations, inventory/reservation rules and cash invariants, then removed both
+the database and identity. Every reported violation count was zero.
+
+The measured artifact sizes were 202,567 plaintext bytes, 26,275 compressed bytes and 26,307
+ciphertext bytes. Total drill time was 23.551 seconds, of which restore plus verification was
+16.372 seconds; backup age at drill start was 1.203 seconds. This is local logical-database evidence.
+It does not replace the purchaser's target object restore, provider snapshot/PITR test, service
+startup/reconciliation, protected off-site retention, or accepted full-service RPO/RTO.
 
 ## Disaster recovery
 

@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "baseUrl": "http://127.0.0.1:3000",
+  "scale": 1,
+  "defaults": {
+    "timeoutMs": 10000,
+    "maxErrorRate": 0.01
+  },
+  "scenarios": {
+    "catalogBrowsing": {
+      "enabled": false,
+      "reason": "Set an age-confirmed cookie in a private fixture before running catalog load.",
+      "concurrency": 100,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/products?page=1&pageSize=20&sort=newest",
+          "headers": {
+            "Cookie": "${LOAD_AGE_COOKIE}"
+          }
+        }
+      ]
+    },
+    "checkoutAttempts": {
+      "enabled": false,
+      "reason": "Provision 50 independent customer sessions, carts, stock allocations and unique idempotency keys in a private fixture.",
+      "concurrency": 50,
+      "expectedStatuses": [201],
+      "responseIdentityPath": "data.id",
+      "actors": []
+    },
+    "finalUnitRace": {
+      "enabled": false,
+      "reason": "Provision at least two customer carts targeting the same authoritative final unit.",
+      "successStatuses": [201],
+      "loserStatuses": [409],
+      "loserErrorCodes": ["OUT_OF_STOCK"],
+      "expectedWinners": 1,
+      "actors": [],
+      "verification": {
+        "method": "GET",
+        "path": "/api/v1/admin/inventory?q=FINAL-UNIT-SKU&page=1&limit=1",
+        "headers": {
+          "Cookie": "${LOAD_ADMIN_COOKIE}"
+        },
+        "responseValuePath": "data.items.0.remainingQuantity",
+        "expectedValue": 0
+      }
+    },
+    "repeatedIdempotency": {
+      "enabled": false,
+      "reason": "Provision one customer cart and one fixed idempotency key in a private fixture.",
+      "concurrency": 20,
+      "expectedStatuses": [201],
+      "responseIdentityPath": "data.id",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/checkout/orders",
+        "headers": {
+          "Cookie": "${LOAD_CUSTOMER_COOKIE}",
+          "X-CSRF-Token": "${LOAD_CUSTOMER_CSRF}"
+        },
+        "idempotencyKey": "replace-with-fixed-key-0001",
+        "body": {}
+      }
+    },
+    "adminOrderList": {
+      "enabled": false,
+      "reason": "Set a reports/orders-capable administrator cookie in a private fixture.",
+      "concurrency": 25,
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/admin/orders?page=1&limit=50",
+        "headers": {
+          "Cookie": "${LOAD_ADMIN_COOKIE}"
+        }
+      }
+    },
+    "workerBacklogRecovery": {
+      "enabled": false,
+      "reason": "Configure safe requests that create durable outbox events and a reports-capable administrator cookie.",
+      "recoveryTimeoutMs": 60000,
+      "pollIntervalMs": 2500,
+      "minimumProcessedIncrease": 1,
+      "allowedDeadLetterIncrease": 0,
+      "metricsRequest": {
+        "method": "GET",
+        "path": "/api/v1/admin/operations/metrics",
+        "headers": {
+          "Cookie": "${LOAD_ADMIN_COOKIE}"
+        }
+      },
+      "triggerRequests": []
+    }
+  }
+}

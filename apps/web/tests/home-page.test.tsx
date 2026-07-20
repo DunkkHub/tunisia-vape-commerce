@@ -35,7 +35,6 @@ function installHomeFetch({ empty = false }: { empty?: boolean } = {}) {
           ...statusPayload,
           storeName: 'PUFFJET',
           checkoutEnabled: false,
-          legalReviewCompleted: false,
         }),
       );
     }
@@ -73,7 +72,7 @@ beforeEach(() => {
 });
 
 it('renders the neon landing structure with only API-derived commerce data', async () => {
-  installHomeFetch();
+  const fetchMock = installHomeFetch();
   const { container } = renderRoute('/');
 
   expect(
@@ -105,7 +104,10 @@ it('renders the neon landing structure with only API-derived commerce data', asy
   );
   expect(container.querySelector('data[value="99000"]')).toBeInTheDocument();
   expect(screen.getAllByRole('link', { name: 'Voir Jet Menthe' })).toHaveLength(2);
-  expect(screen.getByRole('link', { name: 'Panier' })).toHaveTextContent('2');
+  expect(screen.getByRole('link', { name: 'Panier' })).toHaveTextContent('0');
+  expect(fetchMock.mock.calls.some(([input]) => requestUrl(input).includes('/cart/summary'))).toBe(
+    false,
+  );
 
   expect(screen.queryByText(/24.?48h/i)).not.toBeInTheDocument();
   expect(screen.queryByText(/6000 Puffs/i)).not.toBeInTheDocument();

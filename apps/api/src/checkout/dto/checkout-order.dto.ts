@@ -1,8 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
-  Equals,
   IsDefined,
+  IsBoolean,
   IsEmail,
   IsOptional,
   IsString,
@@ -73,17 +73,17 @@ export class CheckoutAddressDto {
 }
 
 export class CheckoutConsentDto {
-  @ApiProperty({ enum: [true] })
-  @Equals(true)
-  ageConfirmed!: true;
+  @ApiProperty({ default: false })
+  @IsBoolean()
+  ageConfirmed!: boolean;
 
-  @ApiProperty({ enum: [true] })
-  @Equals(true)
-  termsAccepted!: true;
+  @ApiProperty({ default: false })
+  @IsBoolean()
+  termsAccepted!: boolean;
 
-  @ApiProperty({ enum: [true] })
-  @Equals(true)
-  privacyAccepted!: true;
+  @ApiProperty({ default: false })
+  @IsBoolean()
+  privacyAccepted!: boolean;
 
   @ApiPropertyOptional({ description: 'Published terms version shown to the customer.' })
   @IsOptional()

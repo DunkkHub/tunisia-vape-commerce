@@ -31,6 +31,7 @@ export function StorefrontShell() {
     queryKey: ['cart', 'summary'],
     queryFn: storefrontClient.cartSummary,
     staleTime: 10_000,
+    enabled: Boolean(user),
   });
   const currentPath = `${location.pathname}${location.search}`;
   const navItemIsCurrent = (to: string) =>
@@ -40,12 +41,12 @@ export function StorefrontShell() {
 
   return (
     <div
-      className={`store-shell ${homeRoute ? 'store-shell--home' : ''} ${
+      className={`store-shell ${homeRoute ? 'store-shell--home' : 'store-shell--interior'} ${
         status.prelaunchMode ? 'store-shell--prelaunch' : ''
       }`}
     >
       <a href="#main-content" className="skip-link">
-        {t('common.submit')}
+        {t('common.skipToContent')}
       </a>
       <header className="store-header">
         {!homeRoute ? (
@@ -83,7 +84,12 @@ export function StorefrontShell() {
             >
               <UserRound aria-hidden="true" />
             </Link>
-            <Link className="icon-link" to="/cart" aria-label={t('nav.cart')}>
+            <Link
+              className="icon-link"
+              to={user ? '/cart' : '/login'}
+              state={user ? undefined : { from: '/cart' }}
+              aria-label={t('nav.cart')}
+            >
               <ShoppingBag aria-hidden="true" />
               <span>{cartQuery.data?.itemCount ?? 0}</span>
             </Link>

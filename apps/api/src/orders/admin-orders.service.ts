@@ -2,7 +2,6 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import {
   CashCollectionStatus,
   DeliveryStatus,
-  NotificationChannel,
   NotificationEvent,
   OrderStatus,
   PaymentStatus,
@@ -10,6 +9,8 @@ import {
 } from '@prisma/client';
 import type { Request } from 'express';
 import { neutralizeCsvFormula } from '../common/export/csv';
+import { createOperationalAlertWithOutbox } from '../common/outbox/operational-alerts';
+import { createOrderNotificationsWithOutbox } from '../common/outbox/order-notifications';
 import { CryptoService } from '../common/security/crypto.service';
 import { PrismaService } from '../database/prisma.service';
 import type {
@@ -241,10 +242,12 @@ const ORDER_OPERATION_SELECT = {
   id: true,
   orderNumber: true,
   customerPhoneSnapshot: true,
+  customerEmailSnapshot: true,
   status: true,
   paymentStatus: true,
   deliveryMethodType: true,
   version: true,
+  customer: { select: { locale: true } },
   delivery: { select: { id: true, status: true, version: true } },
   items: { select: { id: true, variantId: true, quantity: true } },
   cashCollections: { select: { id: true, status: true } },
@@ -398,6 +401,12 @@ export class AdminOrdersService {
           'Reserved stock changed while the order was being confirmed.',
         );
       }
+
+      await this.createLowStockAlerts(
+        transaction,
+        [...new Set(locked.items.map(({ variantId }) => variantId))],
+        now,
+      );
 
       const orderUpdated = await transaction.order.updateMany({
         where: {
@@ -931,19 +940,90 @@ export class AdminOrdersService {
     event: NotificationEvent,
     scheduledAt: Date,
   ) {
-    return transaction.notification.create({
-      data: {
-        orderId: order.id,
-        idempotencyKey: `order:${order.id}:${event.toLocaleLowerCase('en-US')}`,
-        event,
-        channel: NotificationChannel.SMS,
-        recipientHash: this.crypto.hashToken(order.customerPhoneSnapshot),
-        encryptedRecipient: this.crypto.encrypt(order.customerPhoneSnapshot),
-        locale: 'fr-TN',
-        payload: { orderNumber: order.orderNumber },
-        scheduledAt,
+    return createOrderNotificationsWithOutbox(transaction, this.crypto, {
+      order: {
+        id: order.id,
+        orderNumber: order.orderNumber,
+        customerEmailSnapshot: order.customerEmailSnapshot,
+        customerPhoneSnapshot: order.customerPhoneSnapshot,
+        locale: order.customer?.locale === 'ar' ? 'ar-TN' : 'fr-TN',
+      },
+      event,
+      scheduledAt,
+    });
+  }
+
+  private async createLowStockAlerts(
+    transaction: Transaction,
+    variantIds: string[],
+    now: Date,
+  ): Promise<void> {
+    if (variantIds.length === 0) return;
+    const recipient = await transaction.storeSetting.findUnique({
+      where: { key: 'notifications.low_stock_alert_email' },
+      select: { value: true },
+    });
+    if (typeof recipient?.value !== 'string' || !recipient.value.trim()) return;
+
+    const variants = await transaction.productVariant.findMany({
+      where: { id: { in: variantIds } },
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        sku: true,
+        nameFr: true,
+        nameAr: true,
+        lowStockThreshold: true,
+        inventoryItems: {
+          where: {
+            location: { is: { active: true, fulfillsOrders: true } },
+            OR: [
+              { batchId: null },
+              {
+                batch: {
+                  is: {
+                    archivedAt: null,
+                    OR: [{ expiryDate: null }, { expiryDate: { gt: now } }],
+                  },
+                },
+              },
+            ],
+          },
+          select: {
+            onHandQuantity: true,
+            reservations: {
+              where: { state: 'ACTIVE', expiresAt: { gt: now } },
+              select: { quantity: true },
+            },
+          },
+        },
       },
     });
+    const hourBucket = now.toISOString().slice(0, 13);
+    for (const variant of variants) {
+      const remainingQuantity = variant.inventoryItems.reduce(
+        (total, item) =>
+          total +
+          item.onHandQuantity -
+          item.reservations.reduce((reserved, reservation) => reserved + reservation.quantity, 0),
+        0,
+      );
+      if (remainingQuantity > variant.lowStockThreshold) continue;
+      await createOperationalAlertWithOutbox(transaction, this.crypto, {
+        kind: 'low-stock',
+        event: NotificationEvent.LOW_STOCK_ALERT,
+        idempotencyKey: `low-stock-alert:${variant.id}:${hourBucket}`,
+        payload: {
+          sku: variant.sku,
+          nameFr: variant.nameFr,
+          nameAr: variant.nameAr,
+          remainingQuantity,
+          threshold: variant.lowStockThreshold,
+          observedAt: now.toISOString(),
+        },
+        scheduledAt: now,
+      });
+    }
   }
 
   private createAudit(
@@ -1004,7 +1084,7 @@ export class AdminOrdersService {
       grandTotalMillimes: order.grandTotalMillimes,
       expectedCodMillimes: order.expectedCodMillimes,
       minimumAge: order.minimumAgeSnapshot,
-      ageConfirmedAt: order.ageConfirmedAt.toISOString(),
+      ageConfirmedAt: order.ageConfirmedAt?.toISOString() ?? null,
       ageVerificationAtDeliveryRequired: order.ageVerificationAtDeliveryRequired,
       deliveryInstructions: order.deliveryInstructions,
       preferredDeliveryDate: order.preferredDeliveryDate?.toISOString() ?? null,

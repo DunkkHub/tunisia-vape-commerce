@@ -11,9 +11,12 @@
     "test:unit": "vitest run src",
     "test:integration": "node test/integration/run-integration.mjs",
     "test:security": "vitest run test/security --passWithNoTests",
+    "test:e2e:fixture": "node test/e2e/seed-operational-fixture.mjs",
+    "test:e2e:operational": "node test/e2e/run-operational-e2e.mjs",
     "admin:create": "tsx src/cli/admin-create.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1090.0",
     "@nestjs/common": "11.1.28",
     "@nestjs/config": "4.0.4",
     "@nestjs/core": "11.1.28",
@@ -35,6 +38,7 @@
     "qrcode": "1.5.4",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
+    "sharp": "0.35.3",
     "uuid": "14.0.1",
     "zod": "4.4.3"
   },

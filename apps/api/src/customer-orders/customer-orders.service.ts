@@ -2,13 +2,13 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import {
   CashCollectionStatus,
   DeliveryStatus,
-  NotificationChannel,
   NotificationEvent,
   OrderStatus,
   PaymentStatus,
   Prisma,
 } from '@prisma/client';
 import type { Request } from 'express';
+import { createOrderNotificationsWithOutbox } from '../common/outbox/order-notifications';
 import { CryptoService } from '../common/security/crypto.service';
 import { PrismaService } from '../database/prisma.service';
 import { canCustomerCancelOrder } from './customer-order-policy';
@@ -149,6 +149,7 @@ const CUSTOMER_ORDER_OPERATION_SELECT = {
   id: true,
   orderNumber: true,
   customerPhoneSnapshot: true,
+  customerEmailSnapshot: true,
   status: true,
   paymentStatus: true,
   version: true,
@@ -386,18 +387,16 @@ export class CustomerOrdersService {
             requestId: request.requestId,
           },
         }),
-        transaction.notification.create({
-          data: {
-            orderId: order.id,
-            idempotencyKey: `order:${order.id}:customer_cancelled`,
-            event: NotificationEvent.ORDER_CANCELLED,
-            channel: NotificationChannel.SMS,
-            recipientHash: this.crypto.hashToken(order.customerPhoneSnapshot),
-            encryptedRecipient: this.crypto.encrypt(order.customerPhoneSnapshot),
+        createOrderNotificationsWithOutbox(transaction, this.crypto, {
+          order: {
+            id: order.id,
+            orderNumber: order.orderNumber,
+            customerEmailSnapshot: order.customerEmailSnapshot,
+            customerPhoneSnapshot: order.customerPhoneSnapshot,
             locale: order.customer?.locale === 'ar' ? 'ar-TN' : 'fr-TN',
-            payload: { orderNumber: order.orderNumber },
-            scheduledAt: now,
           },
+          event: NotificationEvent.ORDER_CANCELLED,
+          scheduledAt: now,
         }),
         transaction.auditLog.create({
           data: {

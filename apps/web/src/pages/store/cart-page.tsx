@@ -133,7 +133,7 @@ export function CartPage() {
               <ShieldCheck aria-hidden="true" size={18} />
               {t('cart.totalAuthoritative')}
             </p>
-            {status.checkoutEnabled && status.legalReviewCompleted ? (
+            {status.checkoutEnabled ? (
               <Button asChild>
                 <Link to="/checkout">{t('cart.checkout')}</Link>
               </Button>

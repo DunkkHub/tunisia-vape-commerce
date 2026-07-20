@@ -1,10 +1,10 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Banknote, LockKeyhole, MapPin, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { z } from 'zod';
 
 import { storefrontClient } from '../../api/storefront-client';
@@ -18,7 +18,16 @@ function optionalText() {
   return z.string().trim().optional();
 }
 
-function checkoutSchema(t: (key: string) => string) {
+function checkoutSchema(
+  t: (key: string) => string,
+  requirements: {
+    age: boolean;
+    terms: boolean;
+    privacy: boolean;
+  },
+) {
+  const confirmation = (required: boolean, message: string) =>
+    required ? z.boolean().refine(Boolean, message) : z.boolean();
   return z.object({
     fullName: z.string().trim().min(2, t('validation.required')),
     phone: z
@@ -37,21 +46,27 @@ function checkoutSchema(t: (key: string) => string) {
     landmark: optionalText(),
     deliveryInstructions: optionalText(),
     deliveryMethodId: z.string().min(1, t('validation.required')),
-    adultConfirmation: z.boolean().refine(Boolean, t('validation.adult')),
-    termsAccepted: z.boolean().refine(Boolean, t('validation.terms')),
-    privacyAccepted: z.boolean().refine(Boolean, t('validation.terms')),
+    adultConfirmation: confirmation(requirements.age, t('validation.adult')),
+    termsAccepted: confirmation(requirements.terms, t('validation.terms')),
+    privacyAccepted: confirmation(requirements.privacy, t('validation.terms')),
   });
 }
 
 export function CheckoutPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const status = useStorefrontStatus();
   const [idempotency, setIdempotency] = useState({
     key: globalThis.crypto.randomUUID(),
     fingerprint: '',
   });
-  const schema = checkoutSchema(t);
+  const requirements = {
+    age: status.checkoutAgeConfirmationRequired ?? true,
+    terms: status.termsAcceptanceRequired ?? true,
+    privacy: status.privacyAcceptanceRequired ?? true,
+  };
+  const schema = checkoutSchema(t, requirements);
   type FormValues = z.input<typeof schema>;
   const {
     register,
@@ -123,6 +138,8 @@ export function CheckoutPage() {
     mutationFn: ({ payload, key }: { payload: CheckoutPayload; key: string }) =>
       storefrontClient.checkout(payload, key),
     onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ['cart'] });
+      void queryClient.invalidateQueries({ queryKey: ['cart', 'summary'] });
       void navigate(`/order-confirmation/${encodeURIComponent(result.orderNumber)}`, {
         replace: true,
         state: result,
@@ -131,7 +148,7 @@ export function CheckoutPage() {
   });
 
   const placeOrder = handleSubmit((values) => {
-    if (!status.checkoutEnabled || !status.legalReviewCompleted) return;
+    if (!status.checkoutEnabled) return;
     if (!selectedMethod || !quote.data || quoteItems.length === 0) return;
     const parsed = schema.parse(values);
     if (selectedMethod.type === 'COURIER') {
@@ -175,9 +192,9 @@ export function CheckoutPage() {
           }
         : {}),
       consent: {
-        ageConfirmed: true,
-        termsAccepted: true,
-        privacyAccepted: true,
+        ageConfirmed: parsed.adultConfirmation,
+        termsAccepted: parsed.termsAccepted,
+        privacyAccepted: parsed.privacyAccepted,
       },
     };
     const fingerprint = JSON.stringify(payload);
@@ -192,7 +209,6 @@ export function CheckoutPage() {
   });
   const allowed =
     status.checkoutEnabled &&
-    status.legalReviewCompleted &&
     quoteItems.length > 0 &&
     Boolean(selectedMethod) &&
     Boolean(quote.data);
@@ -348,29 +364,48 @@ export function CheckoutPage() {
               </SelectField>
             </div>
           </fieldset>
-          <fieldset>
-            <legend>
-              <ShieldCheck aria-hidden="true" size={19} />
-              {t('checkout.consent')}
-            </legend>
-            <div className="consent-list">
-              <CheckboxField
-                label={t('checkout.adult')}
-                error={errors.adultConfirmation?.message}
-                {...register('adultConfirmation')}
-              />
-              <CheckboxField
-                label={t('checkout.terms')}
-                error={errors.termsAccepted?.message}
-                {...register('termsAccepted')}
-              />
-              <CheckboxField
-                label={t('checkout.privacy')}
-                error={errors.privacyAccepted?.message}
-                {...register('privacyAccepted')}
-              />
-            </div>
-          </fieldset>
+          {requirements.age || requirements.terms || requirements.privacy ? (
+            <fieldset>
+              <legend>
+                <ShieldCheck aria-hidden="true" size={19} />
+                {t('checkout.consent')}
+              </legend>
+              <div className="consent-list">
+                {requirements.age ? (
+                  <CheckboxField
+                    label={t('checkout.adult')}
+                    error={errors.adultConfirmation?.message}
+                    {...register('adultConfirmation')}
+                  />
+                ) : null}
+                {requirements.terms ? (
+                  <CheckboxField
+                    label={t('checkout.terms')}
+                    error={errors.termsAccepted?.message}
+                    {...register('termsAccepted')}
+                  />
+                ) : null}
+                {requirements.privacy ? (
+                  <CheckboxField
+                    label={t('checkout.privacy')}
+                    error={errors.privacyAccepted?.message}
+                    {...register('privacyAccepted')}
+                  />
+                ) : null}
+                {(requirements.terms || requirements.privacy) && (
+                  <p className="consent-list__links">
+                    {requirements.terms ? (
+                      <Link to="/legal/terms">{t('checkout.terms')}</Link>
+                    ) : null}
+                    {requirements.terms && requirements.privacy ? ' · ' : null}
+                    {requirements.privacy ? (
+                      <Link to="/legal/privacy">{t('checkout.privacy')}</Link>
+                    ) : null}
+                  </p>
+                )}
+              </div>
+            </fieldset>
+          ) : null}
         </div>
         <aside className="checkout-summary">
           <h2>{t('checkout.summary')}</h2>

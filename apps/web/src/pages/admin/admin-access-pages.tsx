@@ -17,9 +17,10 @@ import { Button } from '../../components/ui/button';
 import { CheckboxField, FormField } from '../../components/ui/form-field';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
 import { LocalDate } from '../../components/ui/price';
+import { AdminCustomerDetailDialog } from './admin-customer-detail-dialog';
 
 type AdminAction = 'suspend' | 'reactivate' | 'anonymize';
-type CustomerAction = 'suspend' | 'reactivate' | 'disable';
+type CustomerAction = 'suspend' | 'reactivate' | 'disable' | 'anonymize';
 type LifecycleAction = AdminAction | CustomerAction;
 type LifecycleTarget = AdminAccount | ManagedCustomerAccount;
 
@@ -112,7 +113,12 @@ function LifecycleDialog({
 }) {
   const { t } = useTranslation();
   const destructive = action === 'anonymize' || action === 'disable';
-  const confirmation = action === 'anonymize' ? 'ANONYMIZE_ADMIN' : 'DISABLE_CUSTOMER';
+  const confirmation =
+    action === 'anonymize'
+      ? 'displayName' in target
+        ? 'ANONYMIZE_ADMIN'
+        : 'ANONYMIZE_CUSTOMER'
+      : 'DISABLE_CUSTOMER';
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -463,6 +469,7 @@ export function AdminCustomersPage() {
     action: CustomerAction;
     target: ManagedCustomerAccount;
   } | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const list = useQuery({
     queryKey: ['admin', 'customers', search.params],
     queryFn: () => adminDataClient.customers(search.params),
@@ -476,17 +483,25 @@ export function AdminCustomersPage() {
     }: {
       target: ManagedCustomerAccount;
       action: CustomerAction;
-      payload: AccountLifecyclePayload & { confirmation?: 'DISABLE_CUSTOMER' };
+      payload: AccountLifecyclePayload & {
+        confirmation?: 'DISABLE_CUSTOMER' | 'ANONYMIZE_CUSTOMER';
+      };
     }) => adminDataClient.customerAction(target.id, action, payload),
   });
   const canManage = Boolean(user?.permissions.includes('system.manage'));
+  const canUpdate = Boolean(user?.permissions.includes('customers.update'));
+  const canExport = Boolean(user?.permissions.includes('customers.export'));
   const confirmAction = async (payload: AccountLifecyclePayload) => {
     if (!action) return;
     await lifecycle.mutateAsync({
       target: action.target,
       action: action.action,
       payload:
-        action.action === 'disable' ? { ...payload, confirmation: 'DISABLE_CUSTOMER' } : payload,
+        action.action === 'disable'
+          ? { ...payload, confirmation: 'DISABLE_CUSTOMER' }
+          : action.action === 'anonymize'
+            ? { ...payload, confirmation: 'ANONYMIZE_CUSTOMER' }
+            : payload,
     });
     setAction(null);
     await queryClient.invalidateQueries({ queryKey: ['admin', 'customers'] });
@@ -544,6 +559,9 @@ export function AdminCustomersPage() {
                   </td>
                   <td>
                     <div className="admin-row-actions">
+                      <Button type="button" variant="ghost" onClick={() => setDetailId(account.id)}>
+                        {t('admin.access.viewCustomer')}
+                      </Button>
                       {!canManage ? <span>{t('admin.access.superOnly')}</span> : null}
                       {canManage && account.status === 'ACTIVE' ? (
                         <Button
@@ -572,6 +590,15 @@ export function AdminCustomersPage() {
                           </Button>
                         </>
                       ) : null}
+                      {canManage && account.status === 'DISABLED' ? (
+                        <Button
+                          type="button"
+                          variant="danger"
+                          onClick={() => setAction({ action: 'anonymize', target: account })}
+                        >
+                          {t('admin.access.actions.anonymize')}
+                        </Button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -592,6 +619,14 @@ export function AdminCustomersPage() {
           error={lifecycle.error}
           onClose={() => setAction(null)}
           onConfirm={confirmAction}
+        />
+      ) : null}
+      {detailId ? (
+        <AdminCustomerDetailDialog
+          customerId={detailId}
+          canUpdate={canUpdate}
+          canExport={canExport}
+          onClose={() => setDetailId(null)}
         />
       ) : null}
     </div>

@@ -6,11 +6,39 @@ const booleanFromEnvironment = (defaultValue: 'true' | 'false') =>
     .default(defaultValue)
     .transform((value) => value === 'true');
 
+const optionalBooleanFromEnvironment = z
+  .enum(['true', 'false'])
+  .transform((value) => value === 'true')
+  .optional();
+
+const browserOrigin = z.url().refine((value) => {
+  const url = new URL(value);
+  return (
+    ['http:', 'https:'].includes(url.protocol) &&
+    !url.username &&
+    !url.password &&
+    url.pathname === '/' &&
+    !url.search &&
+    !url.hash
+  );
+}, 'Must be an HTTP(S) browser origin without credentials, path, query, or fragment');
+
+const browserHost = z
+  .string()
+  .regex(
+    /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i,
+    'Must be a single DNS hostname',
+  );
+
 const environmentSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
-    WEB_URL: z.url().default('http://localhost:5173'),
+    WEB_URL: browserOrigin.default('http://localhost:5173'),
+    ADMIN_WEB_URL: browserOrigin.optional(),
+    STOREFRONT_HOST: browserHost.optional(),
+    ADMIN_HOST: browserHost.optional(),
+    OPENAPI_ENABLED: optionalBooleanFromEnvironment,
     DATABASE_URL: z.string().min(1).default('mysql://app_user:change_me@localhost:3306/vape_store'),
     REDIS_URL: z.url().default('redis://localhost:6379'),
     HEALTHCHECK_TIMEOUT_MS: z.coerce.number().int().min(250).max(10_000).default(2_000),
@@ -20,14 +48,13 @@ const environmentSchema = z
       .min(1)
       .max(200)
       .regex(/^\d{14}_[a-z0-9_]+$/)
-      .default('20260713010000_durable_outbox'),
+      .default('20260720160000_cash_collection_idempotency'),
     COOKIE_SECRET: z.string().default('development-only-cookie-secret-change-me'),
     FIELD_ENCRYPTION_KEY: z.string().default('development-only-field-key-change-me'),
     CHECKOUT_ENABLED: booleanFromEnvironment('true'),
-    LEGAL_REVIEW_COMPLETED: booleanFromEnvironment('true'),
     MAINTENANCE_MODE: booleanFromEnvironment('false'),
     PRELAUNCH_MODE: booleanFromEnvironment('false'),
-    MINIMUM_PURCHASE_AGE: z.coerce.number().int().min(18).max(99).default(18),
+    MINIMUM_PURCHASE_AGE: z.coerce.number().int().min(1).max(99).default(18),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     ADMIN_SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
     ADMIN_SESSION_ABSOLUTE_MINUTES: z.coerce.number().int().min(30).max(1_440).default(480),
@@ -36,8 +63,40 @@ const environmentSchema = z
     CUSTOMER_SESSION_IDLE_MINUTES: z.coerce.number().int().min(30).max(43_200).default(10_080),
     CUSTOMER_SESSION_ABSOLUTE_MINUTES: z.coerce.number().int().min(60).max(129_600).default(43_200),
     ADMIN_IP_ALLOWLIST: z.string().optional(),
+    MEDIA_STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+    MEDIA_LOCAL_ROOT: z
+      .string()
+      .min(1)
+      .max(1_024)
+      .refine((value) => !value.includes('\0'), 'MEDIA_LOCAL_ROOT contains an invalid character')
+      .default('uploads/media'),
+    S3_ENDPOINT: z.url().optional(),
+    S3_REGION: z.string().min(1).max(100).default('us-east-1'),
+    S3_BUCKET: z
+      .string()
+      .min(3)
+      .max(63)
+      .regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/)
+      .default('vape-store'),
+    S3_ACCESS_KEY: z.string().min(1).max(512).optional(),
+    S3_SECRET_KEY: z.string().min(1).max(1_024).optional(),
+    S3_FORCE_PATH_STYLE: booleanFromEnvironment('true'),
+    UPLOAD_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1_024)
+      .max(25 * 1_024 * 1_024)
+      .default(10 * 1_024 * 1_024),
+    UPLOAD_MAX_PIXELS: z.coerce.number().int().min(1).max(64_000_000).default(40_000_000),
   })
   .superRefine((environment, context) => {
+    if (Boolean(environment.S3_ACCESS_KEY) !== Boolean(environment.S3_SECRET_KEY)) {
+      context.addIssue({
+        code: 'custom',
+        path: environment.S3_ACCESS_KEY ? ['S3_SECRET_KEY'] : ['S3_ACCESS_KEY'],
+        message: 'S3 access and secret keys must be configured together',
+      });
+    }
     if (environment.NODE_ENV !== 'production') return;
 
     const unsafeFragments = ['change_me', 'development-only', 'localhost'];
@@ -72,9 +131,119 @@ const environmentSchema = z
         message: 'Production WEB_URL must use HTTPS',
       });
     }
+    if (!environment.ADMIN_WEB_URL) {
+      context.addIssue({
+        code: 'custom',
+        path: ['ADMIN_WEB_URL'],
+        message: 'Production ADMIN_WEB_URL is required',
+      });
+    } else {
+      if (!environment.ADMIN_WEB_URL.startsWith('https://')) {
+        context.addIssue({
+          code: 'custom',
+          path: ['ADMIN_WEB_URL'],
+          message: 'Production ADMIN_WEB_URL must use HTTPS',
+        });
+      }
+      if (new URL(environment.ADMIN_WEB_URL).origin === new URL(environment.WEB_URL).origin) {
+        context.addIssue({
+          code: 'custom',
+          path: ['ADMIN_WEB_URL'],
+          message: 'Production administrator and storefront origins must be different',
+        });
+      }
+    }
+    if (!environment.STOREFRONT_HOST) {
+      context.addIssue({
+        code: 'custom',
+        path: ['STOREFRONT_HOST'],
+        message: 'Production STOREFRONT_HOST is required',
+      });
+    } else if (environment.STOREFRONT_HOST !== new URL(environment.WEB_URL).hostname) {
+      context.addIssue({
+        code: 'custom',
+        path: ['STOREFRONT_HOST'],
+        message: 'STOREFRONT_HOST must match WEB_URL',
+      });
+    }
+    if (!environment.ADMIN_HOST) {
+      context.addIssue({
+        code: 'custom',
+        path: ['ADMIN_HOST'],
+        message: 'Production ADMIN_HOST is required',
+      });
+    } else if (
+      environment.ADMIN_WEB_URL &&
+      environment.ADMIN_HOST !== new URL(environment.ADMIN_WEB_URL).hostname
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['ADMIN_HOST'],
+        message: 'ADMIN_HOST must match ADMIN_WEB_URL',
+      });
+    }
+    if (
+      environment.STOREFRONT_HOST &&
+      environment.ADMIN_HOST &&
+      environment.STOREFRONT_HOST === environment.ADMIN_HOST
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['ADMIN_HOST'],
+        message: 'Production administrator and storefront hosts must be different',
+      });
+    }
+    for (const [name, value] of [
+      ['STOREFRONT_HOST', environment.STOREFRONT_HOST],
+      ['ADMIN_HOST', environment.ADMIN_HOST],
+    ] as const) {
+      if (value === 'localhost' || value?.endsWith('.localhost')) {
+        context.addIssue({
+          code: 'custom',
+          path: [name],
+          message: `${name} cannot use localhost in production`,
+        });
+      }
+    }
+    if (
+      environment.MEDIA_STORAGE_DRIVER === 's3' &&
+      [environment.S3_ACCESS_KEY, environment.S3_SECRET_KEY].some((value) =>
+        value?.includes('change_me'),
+      )
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['S3_SECRET_KEY'],
+        message: 'S3 credentials contain an unsafe production default',
+      });
+    }
   });
 
 export type Environment = z.infer<typeof environmentSchema>;
 
 export const validateEnvironment = (input: Record<string, unknown>): Environment =>
   environmentSchema.parse(input);
+
+export const storefrontOrigin = (environment: Pick<Environment, 'WEB_URL'>): string =>
+  new URL(environment.WEB_URL).origin;
+
+export const adminOrigin = (environment: Pick<Environment, 'WEB_URL' | 'ADMIN_WEB_URL'>): string =>
+  new URL(environment.ADMIN_WEB_URL ?? environment.WEB_URL).origin;
+
+export const allowedBrowserOrigins = (
+  environment: Pick<Environment, 'WEB_URL' | 'ADMIN_WEB_URL'>,
+): string[] => [...new Set([storefrontOrigin(environment), adminOrigin(environment)])];
+
+export const isAdministratorBrowserPath = (path: string): boolean =>
+  /^\/api\/v1\/(?:admin(?:\/|$)|auth\/admin(?:\/|$))/.test(path.split('?', 1)[0] ?? '') ||
+  /^\/api\/docs(?:\/|$|-)/.test(path.split('?', 1)[0] ?? '');
+
+export const browserOriginForPath = (
+  environment: Pick<Environment, 'WEB_URL' | 'ADMIN_WEB_URL'>,
+  path: string,
+): string =>
+  isAdministratorBrowserPath(path) ? adminOrigin(environment) : storefrontOrigin(environment);
+
+export const openApiEnabled = (
+  environment: Pick<Environment, 'NODE_ENV' | 'OPENAPI_ENABLED'>,
+): boolean => environment.OPENAPI_ENABLED ?? environment.NODE_ENV !== 'production';

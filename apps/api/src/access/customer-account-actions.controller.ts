@@ -12,6 +12,7 @@ import { NoStoreInterceptor } from '../common/http/no-store.interceptor';
 import { CustomerAccountActionsService } from './customer-account-actions.service';
 import {
   AccountLifecycleDto,
+  AnonymizeCustomerAccountDto,
   CustomerAccountResponseDto,
   DisableCustomerAccountDto,
 } from './dto/admin-account.dto';
@@ -54,5 +55,19 @@ export class CustomerAccountActionsController {
     @Req() request: Request,
   ) {
     return this.accounts.disable(id, input, request.auth!.userId, request);
+  }
+
+  @Post(':id/anonymize')
+  @UseGuards(CsrfGuard, RecentAuthenticationGuard)
+  @ApiOperation({
+    summary: 'Anonymize an eligible customer while preserving immutable commerce history',
+  })
+  @ApiOkResponse({ type: CustomerAccountResponseDto })
+  anonymize(
+    @Param('id') id: string,
+    @Body() input: AnonymizeCustomerAccountDto,
+    @Req() request: Request,
+  ) {
+    return this.accounts.anonymize(id, input, request.auth!.userId, request);
   }
 }

@@ -44,6 +44,22 @@ describe('outbox contracts', () => {
     ).toThrow();
   });
 
+  it('accepts only bounded media deletion coordinates', () => {
+    expect(
+      parseEventPayload(OUTBOX_EVENT_TYPES.MEDIA_OBJECT_DELETE, 1, {
+        bucket: 'local-media',
+        objectKey: 'products/product-1/image.png',
+      }),
+    ).toMatchObject({ eventType: OUTBOX_EVENT_TYPES.MEDIA_OBJECT_DELETE });
+    expect(() =>
+      parseEventPayload(OUTBOX_EVENT_TYPES.MEDIA_OBJECT_DELETE, 1, {
+        bucket: 'local-media',
+        objectKey: 'products/product-1/image.png',
+        credentials: 'forbidden',
+      }),
+    ).toThrow();
+  });
+
   it('decodes bounded JSON returned as text by a raw MySQL query', () => {
     expect(parseStoredJson('{"notificationId":"notification-a"}')).toEqual({
       notificationId: 'notification-a',

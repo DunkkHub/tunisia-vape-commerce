@@ -11,7 +11,6 @@ test.beforeEach(async ({ page }) => {
             maintenanceMode: false,
             prelaunchMode: false,
             checkoutEnabled: false,
-            legalReviewCompleted: false,
             minimumAge: 18,
             ageGateRequired: false,
             ageConfirmed: true,

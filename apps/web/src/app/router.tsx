@@ -41,6 +41,7 @@ import {
   ProductPage,
   ProfilePage,
   RegisterPage,
+  SecurityPage,
   WishlistPage,
 } from './lazy-pages';
 
@@ -106,15 +107,19 @@ export const appRoutes: RouteObject[] = [
       { path: 'brands/:slug', element: routeElement(<CatalogPage mode="brand" />) },
       { path: 'search', element: routeElement(<CatalogPage mode="search" />) },
       { path: 'products/:slug', element: routeElement(<ProductPage />) },
-      { path: 'cart', element: routeElement(<CartPage />) },
-      { path: 'checkout', element: routeElement(<CheckoutPage />) },
-      { path: 'order-confirmation/:orderNumber', element: routeElement(<OrderConfirmationPage />) },
       { path: 'login', element: routeElement(<CustomerLoginPage />) },
       { path: 'register', element: routeElement(<RegisterPage />) },
       { path: 'password-reset', element: routeElement(<PasswordResetPage />) },
+      { path: 'password-reset/confirm', element: routeElement(<PasswordResetPage />) },
       {
         element: <CustomerGuard />,
         children: [
+          { path: 'cart', element: routeElement(<CartPage />) },
+          { path: 'checkout', element: routeElement(<CheckoutPage />) },
+          {
+            path: 'order-confirmation/:orderNumber',
+            element: routeElement(<OrderConfirmationPage />),
+          },
           {
             path: 'account',
             element: routeElement(<AccountLayout />),
@@ -124,6 +129,7 @@ export const appRoutes: RouteObject[] = [
               { path: 'orders', element: routeElement(<OrdersPage />) },
               { path: 'orders/:orderNumber', element: routeElement(<OrderTrackingPage />) },
               { path: 'wishlist', element: routeElement(<WishlistPage />) },
+              { path: 'security', element: routeElement(<SecurityPage />) },
             ],
           },
         ],

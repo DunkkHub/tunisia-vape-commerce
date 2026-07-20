@@ -35,6 +35,16 @@ describe('administrator inventory access policy', () => {
     const createLocation = AdminInventoryController.prototype.createLocation;
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const createItem = AdminInventoryController.prototype.createItem;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const receiveBatch = AdminInventoryController.prototype.receiveBatch;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const adjustments = AdminInventoryController.prototype.adjustments;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const decideAdjustment = AdminInventoryController.prototype.decideAdjustment;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const transfer = AdminInventoryController.prototype.transfer;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const transfers = AdminInventoryController.prototype.transfers;
 
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, read)).toEqual(['inventory.read']);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, movements)).toEqual(['inventory.read']);
@@ -43,6 +53,13 @@ describe('administrator inventory access policy', () => {
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, threshold)).toEqual(['inventory.adjust']);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, createLocation)).toEqual(['inventory.adjust']);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, createItem)).toEqual(['inventory.adjust']);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, receiveBatch)).toEqual(['inventory.adjust']);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, adjustments)).toEqual(['inventory.read']);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, decideAdjustment)).toEqual([
+      'inventory.approve',
+    ]);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, transfer)).toEqual(['inventory.transfer']);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, transfers)).toEqual(['inventory.read']);
     expect(Reflect.getMetadata(GUARDS_METADATA, adjust)).toEqual([
       CsrfGuard,
       RecentAuthenticationGuard,
@@ -56,6 +73,18 @@ describe('administrator inventory access policy', () => {
       RecentAuthenticationGuard,
     ]);
     expect(Reflect.getMetadata(GUARDS_METADATA, createItem)).toEqual([
+      CsrfGuard,
+      RecentAuthenticationGuard,
+    ]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, receiveBatch)).toEqual([
+      CsrfGuard,
+      RecentAuthenticationGuard,
+    ]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, decideAdjustment)).toEqual([
+      CsrfGuard,
+      RecentAuthenticationGuard,
+    ]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, transfer)).toEqual([
       CsrfGuard,
       RecentAuthenticationGuard,
     ]);

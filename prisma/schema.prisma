@@ -761,6 +761,7 @@ enum InventoryAdjustmentStatus {
   APPROVED
   REJECTED
   APPLIED
+  EXPIRED
 }
 
 model InventoryLocation {
@@ -793,6 +794,8 @@ model InventoryItem {
   movements      StockMovement[]
   reservations   StockReservation[]
   adjustments    InventoryAdjustment[]
+  transfersOut   InventoryTransfer[]   @relation("InventoryTransferSource")
+  transfersIn    InventoryTransfer[]   @relation("InventoryTransferDestination")
 
   @@unique([variantId, locationId, lotKey])
   @@index([variantId, locationId])
@@ -801,23 +804,27 @@ model InventoryItem {
 }
 
 model StockMovement {
-  id              String            @id @default(cuid()) @db.VarChar(30)
-  inventoryItemId String            @db.VarChar(30)
-  locationId      String            @db.VarChar(30)
-  batchId         String?           @db.VarChar(30)
-  type            StockMovementType
-  quantityDelta   Int
-  onHandAfter     Int
-  referenceType   String?           @db.VarChar(80)
-  referenceId     String?           @db.VarChar(30)
-  reasonCode      String?           @db.VarChar(80)
-  note            String?           @db.VarChar(1000)
-  actorUserId     String?           @db.VarChar(30)
-  requestId       String?           @db.VarChar(100)
-  occurredAt      DateTime          @default(now()) @db.DateTime(3)
-  inventoryItem   InventoryItem     @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
-  location        InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
-  batch           ProductBatch?     @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  id                 String             @id @default(cuid()) @db.VarChar(30)
+  inventoryItemId    String             @db.VarChar(30)
+  locationId         String             @db.VarChar(30)
+  batchId            String?            @db.VarChar(30)
+  type               StockMovementType
+  quantityDelta      Int
+  onHandAfter        Int
+  referenceType      String?            @db.VarChar(80)
+  referenceId        String?            @db.VarChar(30)
+  reasonCode         String?            @db.VarChar(80)
+  note               String?            @db.VarChar(1000)
+  actorUserId        String?            @db.VarChar(30)
+  requestId          String?            @db.VarChar(100)
+  idempotencyKeyHash String?            @unique @db.Char(64)
+  requestFingerprint String?            @db.Char(64)
+  occurredAt         DateTime           @default(now()) @db.DateTime(3)
+  inventoryItem      InventoryItem      @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  location           InventoryLocation  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  batch              ProductBatch?      @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  transferOut        InventoryTransfer? @relation("InventoryTransferSourceMovement")
+  transferIn         InventoryTransfer? @relation("InventoryTransferDestinationMovement")
 
   @@index([inventoryItemId, occurredAt])
   @@index([type, occurredAt])
@@ -859,7 +866,11 @@ model InventoryAdjustment {
   status          InventoryAdjustmentStatus @default(PENDING_APPROVAL)
   requestedBy     String                    @db.VarChar(30)
   approvedBy      String?                   @db.VarChar(30)
+  decisionReason  String?                   @db.VarChar(500)
+  expectedVersion Int                       @default(1)
+  onHandBefore    Int                       @default(0)
   requestedAt     DateTime                  @default(now()) @db.DateTime(3)
+  expiresAt       DateTime?                 @db.DateTime(3)
   decidedAt       DateTime?                 @db.DateTime(3)
   appliedAt       DateTime?                 @db.DateTime(3)
   stockMovementId String?                   @unique @db.VarChar(30)
@@ -867,6 +878,28 @@ model InventoryAdjustment {
 
   @@index([status, requestedAt])
   @@index([inventoryItemId, requestedAt])
+}
+
+model InventoryTransfer {
+  id                         String        @id @default(cuid()) @db.VarChar(30)
+  sourceInventoryItemId      String        @db.VarChar(30)
+  destinationInventoryItemId String        @db.VarChar(30)
+  quantity                   Int
+  idempotencyKeyHash         String        @unique @db.Char(64)
+  requestFingerprint         String        @db.Char(64)
+  requestedBy                String        @db.VarChar(30)
+  note                       String?       @db.VarChar(1000)
+  sourceMovementId           String        @unique @db.VarChar(30)
+  destinationMovementId      String        @unique @db.VarChar(30)
+  occurredAt                 DateTime      @default(now()) @db.DateTime(3)
+  sourceInventoryItem        InventoryItem @relation("InventoryTransferSource", fields: [sourceInventoryItemId], references: [id], onDelete: Restrict)
+  destinationInventoryItem   InventoryItem @relation("InventoryTransferDestination", fields: [destinationInventoryItemId], references: [id], onDelete: Restrict)
+  sourceMovement             StockMovement @relation("InventoryTransferSourceMovement", fields: [sourceMovementId], references: [id], onDelete: Restrict)
+  destinationMovement        StockMovement @relation("InventoryTransferDestinationMovement", fields: [destinationMovementId], references: [id], onDelete: Restrict)
+
+  @@index([sourceInventoryItemId, occurredAt])
+  @@index([destinationInventoryItemId, occurredAt])
+  @@index([occurredAt, id])
 }
 
 // Cart and Wishlist
@@ -1345,7 +1378,7 @@ model Order {
   promotionSnapshot                 Json?
   preferredDeliveryDate             DateTime?              @db.Date
   deliveryInstructions              String?                @db.VarChar(1000)
-  ageConfirmedAt                    DateTime               @db.DateTime(3)
+  ageConfirmedAt                    DateTime?              @db.DateTime(3)
   minimumAgeSnapshot                Int
   ageVerificationAtDeliveryRequired Boolean                @default(false)
   phoneConfirmationRequired         Boolean                @default(false)
@@ -1748,6 +1781,22 @@ model DeliveryManifestItem {
   @@index([deliveryId])
 }
 
+model DeliveryStatusImport {
+  id              String   @id @default(cuid()) @db.VarChar(30)
+  importKey       String   @db.VarChar(80)
+  dryRun          Boolean
+  payloadHash     String   @db.Char(64)
+  rowCount        Int
+  appliedCount    Int      @default(0)
+  result          Json
+  createdByUserId String   @db.VarChar(30)
+  createdAt       DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([importKey, dryRun])
+  @@index([createdByUserId, createdAt])
+  @@index([createdAt])
+}
+
 model ShippingLabel {
   id             String    @id @default(cuid()) @db.VarChar(30)
   deliveryId     String    @db.VarChar(30)
@@ -1816,24 +1865,26 @@ enum CashReconciliationEventType {
 }
 
 model CashCollection {
-  id                String               @id @default(cuid()) @db.VarChar(30)
-  orderId           String               @db.VarChar(30)
-  deliveryId        String?              @db.VarChar(30)
-  courierId         String?              @db.VarChar(30)
-  status            CashCollectionStatus @default(EXPECTED)
-  expectedMillimes  Int
-  collectedMillimes Int                  @default(0)
-  collectedByUserId String?              @db.VarChar(30)
-  collectedAt       DateTime?            @db.DateTime(3)
-  method            String               @default("CASH") @db.VarChar(40)
-  evidenceObjectKey String?              @db.VarChar(1024)
-  note              String?              @db.VarChar(1000)
-  createdAt         DateTime             @default(now()) @db.DateTime(3)
-  updatedAt         DateTime             @updatedAt @db.DateTime(3)
-  order             Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  delivery          Delivery?            @relation(fields: [deliveryId], references: [id], onDelete: Restrict)
-  courier           Courier?             @relation(fields: [courierId], references: [id], onDelete: Restrict)
-  remittanceItems   CashRemittanceItem[]
+  id                       String               @id @default(cuid()) @db.VarChar(30)
+  orderId                  String               @db.VarChar(30)
+  deliveryId               String?              @db.VarChar(30)
+  courierId                String?              @db.VarChar(30)
+  status                   CashCollectionStatus @default(EXPECTED)
+  expectedMillimes         Int
+  collectedMillimes        Int                  @default(0)
+  collectedByUserId        String?              @db.VarChar(30)
+  collectedAt              DateTime?            @db.DateTime(3)
+  method                   String               @default("CASH") @db.VarChar(40)
+  evidenceObjectKey        String?              @db.VarChar(1024)
+  note                     String?              @db.VarChar(1000)
+  recordIdempotencyKeyHash String?              @unique(map: "CashCollection_recordIdempotencyKeyHash_key") @db.Char(64)
+  recordRequestHash        String?              @db.Char(64)
+  createdAt                DateTime             @default(now()) @db.DateTime(3)
+  updatedAt                DateTime             @updatedAt @db.DateTime(3)
+  order                    Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  delivery                 Delivery?            @relation(fields: [deliveryId], references: [id], onDelete: Restrict)
+  courier                  Courier?             @relation(fields: [courierId], references: [id], onDelete: Restrict)
+  remittanceItems          CashRemittanceItem[]
 
   @@index([orderId, status])
   @@index([courierId, status, collectedAt])
@@ -2243,6 +2294,9 @@ enum NotificationEvent {
   DELIVERY_FAILED
   ORDER_CANCELLED
   RETURN_UPDATE
+  SECURITY_ALERT
+  LOW_STOCK_ALERT
+  ADMIN_ORDER_CREATED
 }
 
 model Notification {

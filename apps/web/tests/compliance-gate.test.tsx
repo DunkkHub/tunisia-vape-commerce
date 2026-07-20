@@ -6,7 +6,7 @@ import { json, renderRoute, requestUrl, statusPayload, unauthorized } from './te
 
 afterEach(() => vi.unstubAllEnvs());
 
-it('does not mount catalog, home, or cart queries before age confirmation', async () => {
+it('does not mount catalog or home before age confirmation and never reads an anonymous cart', async () => {
   vi.stubEnv('VITE_STOREFRONT_DESIGN_PREVIEW', 'true');
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
@@ -57,7 +57,7 @@ it('does not mount catalog, home, or cart queries before age confirmation', asyn
   urls = fetchMock.mock.calls.map(([input]) => requestUrl(input));
   expect(urls.some((url) => url.includes('/storefront/home'))).toBe(true);
   expect(urls.some((url) => url.includes('/catalog/facets'))).toBe(true);
-  expect(urls.some((url) => url.includes('/cart/summary'))).toBe(true);
+  expect(urls.some((url) => url.includes('/cart/summary'))).toBe(false);
 });
 
 it('keeps prelaunch blocking when the local preview switch is disabled', async () => {

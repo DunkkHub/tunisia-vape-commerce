@@ -8,11 +8,26 @@ import {
 import { Prisma } from '@prisma/client';
 import type { Request } from 'express';
 import { SUPER_ADMINISTRATOR_ROLE_KEY } from '../auth/guards/super-administrator.guard';
+import { hashAdminPassword } from '../auth/admin-password';
+import { CryptoService } from '../common/security/crypto.service';
 import { PrismaService } from '../database/prisma.service';
-import type { AccountLifecycleDto, DisableCustomerAccountDto } from './dto/admin-account.dto';
+import type {
+  AccountLifecycleDto,
+  AnonymizeCustomerAccountDto,
+  DisableCustomerAccountDto,
+} from './dto/admin-account.dto';
 
 const CUSTOMER_ACCOUNT_INCLUDE = {
-  user: { select: { id: true, email: true, audience: true, status: true, version: true } },
+  user: {
+    select: {
+      id: true,
+      email: true,
+      emailNormalized: true,
+      audience: true,
+      status: true,
+      version: true,
+    },
+  },
 } as const;
 
 type CustomerAccount = Prisma.CustomerProfileGetPayload<{
@@ -29,7 +44,10 @@ const responseCode = (error: unknown): string | undefined => {
 
 @Injectable()
 export class CustomerAccountActionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly crypto: CryptoService,
+  ) {}
 
   suspend(id: string, input: AccountLifecycleDto, actorUserId: string, request: Request) {
     return this.lifecycle('suspend', id, input, actorUserId, request);
@@ -41,6 +59,152 @@ export class CustomerAccountActionsService {
 
   disable(id: string, input: DisableCustomerAccountDto, actorUserId: string, request: Request) {
     return this.lifecycle('disable', id, input, actorUserId, request);
+  }
+
+  async anonymize(
+    id: string,
+    input: AnonymizeCustomerAccountDto,
+    actorUserId: string,
+    request: Request,
+  ) {
+    const passwordHash = await hashAdminPassword(this.crypto.randomToken());
+    const phoneDigest = this.crypto.hashToken(`customer-anonymization:${id}`);
+    const anonymizedPhone = `+999${[...phoneDigest.slice(0, 12)]
+      .map((character) => Number.parseInt(character, 16) % 10)
+      .join('')}`;
+    try {
+      const record = await this.prisma.$transaction(async (transaction) => {
+        await this.lockAndRequireActor(transaction, actorUserId);
+        const target = await transaction.customerProfile.findFirst({
+          where: { id, user: { is: { audience: 'CUSTOMER' } } },
+          include: CUSTOMER_ACCOUNT_INCLUDE,
+        });
+        if (!target) throw this.notFound();
+        this.assertVersions(target, input);
+        if (!['SUSPENDED', 'DISABLED'].includes(target.user.status) || !target.suspendedAt) {
+          throw this.stateConflict('CUSTOMER_ACCOUNT_MUST_BE_DISABLED_FIRST');
+        }
+        const activeOrderCount = await transaction.order.count({
+          where: {
+            customerId: target.id,
+            status: {
+              notIn: ['DELIVERED', 'REFUSED', 'FAILED', 'RETURNED', 'CANCELLED'],
+            },
+          },
+        });
+        if (activeOrderCount > 0) {
+          throw new ConflictException({
+            code: 'CUSTOMER_ACTIVE_ORDERS_EXIST',
+            message: 'The customer still has an active order workflow.',
+          });
+        }
+
+        const now = new Date();
+        const recipientHashes = [
+          this.crypto.hashToken(target.phoneE164),
+          ...(target.user.emailNormalized
+            ? [this.crypto.hashToken(target.user.emailNormalized)]
+            : []),
+        ];
+        await this.revokeCustomerAccess(transaction, target.user.id, 'customer_anonymized', now);
+        await Promise.all([
+          transaction.session.updateMany({
+            where: { userId: target.user.id, audience: 'CUSTOMER' },
+            data: { ipAddress: null, userAgent: null },
+          }),
+          transaction.notification.updateMany({
+            where: { recipientHash: { in: recipientHashes } },
+            data: { encryptedRecipient: null },
+          }),
+          transaction.address.updateMany({
+            where: { customerId: target.id },
+            data: {
+              label: null,
+              fullName: 'Anonymized customer',
+              phoneE164: anonymizedPhone,
+              street: 'REDACTED',
+              building: null,
+              floor: null,
+              apartment: null,
+              landmark: null,
+              deliveryInstructions: null,
+              isDefault: false,
+              deletedAt: now,
+              version: { increment: 1 },
+            },
+          }),
+        ]);
+        const userUpdate = await transaction.user.updateMany({
+          where: { id: target.user.id, version: input.expectedUserVersion },
+          data: {
+            email: null,
+            emailNormalized: null,
+            passwordHash,
+            status: 'ANONYMIZED',
+            failedLoginCount: 0,
+            lockedUntil: null,
+            deletedAt: now,
+            version: { increment: 1 },
+          },
+        });
+        const profileUpdate = await transaction.customerProfile.updateMany({
+          where: { id: target.id, version: input.expectedProfileVersion },
+          data: {
+            firstName: 'Anonymized',
+            lastName: 'Customer',
+            phoneE164: anonymizedPhone,
+            phoneSearch: anonymizedPhone,
+            dateOfBirth: null,
+            marketingConsent: false,
+            suspensionReason: 'Customer record anonymized by an authorized administrator.',
+            anonymizedAt: now,
+            version: { increment: 1 },
+          },
+        });
+        if (userUpdate.count !== 1 || profileUpdate.count !== 1) {
+          throw new ConflictException({
+            code: 'CUSTOMER_ACCOUNT_VERSION_CONFLICT',
+            message: 'The customer account changed. Refresh and confirm the action again.',
+          });
+        }
+        await transaction.customerDeletionRequest.create({
+          data: {
+            customerId: target.id,
+            status: 'COMPLETED',
+            completedAt: now,
+            processedBy: actorUserId,
+            retainedFields: {
+              orderSnapshots: true,
+              deliveryAndCashHistory: true,
+              consentAndAuditHistory: true,
+              internalNotes: true,
+            },
+          },
+        });
+        const updated = await transaction.customerProfile.findUniqueOrThrow({
+          where: { id: target.id },
+          include: CUSTOMER_ACCOUNT_INCLUDE,
+        });
+        await this.writeSuccessEvents(transaction, {
+          actorUserId,
+          targetUserId: target.user.id,
+          action: 'customer.account.anonymize',
+          request,
+          before: { status: target.user.status },
+          after: {
+            status: updated.user.status,
+            retainedCommercialHistory: true,
+            reason: input.reason.trim(),
+          },
+          severity: 'HIGH',
+        });
+        return updated;
+      });
+      return { data: this.serialize(record) };
+    } catch (error) {
+      await this.recordDenied('customer.account.anonymize', id, actorUserId, request, error);
+      throw error;
+    }
   }
 
   private async lifecycle(

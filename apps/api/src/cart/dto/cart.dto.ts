@@ -34,8 +34,20 @@ export class CartItemParamDto {
 }
 
 export class CartImageDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  url!: string;
+
   @ApiProperty({ nullable: true })
-  id!: string | null;
+  altText!: string | null;
+
+  @ApiProperty({ required: false })
+  width?: number;
+
+  @ApiProperty({ required: false })
+  height?: number;
 }
 
 export class CartVariantDto {

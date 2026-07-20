@@ -21,7 +21,6 @@ test('prelaunch page stays readable without clipping at compact viewports', asyn
             maintenanceMode: false,
             prelaunchMode: true,
             checkoutEnabled: false,
-            legalReviewCompleted: false,
             minimumAge: 0,
             ageGateRequired: false,
             ageConfirmed: false,

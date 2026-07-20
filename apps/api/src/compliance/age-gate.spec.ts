@@ -16,6 +16,23 @@ const requestWithSignedCookie = (payload: Record<string, unknown>): Request =>
   }) as unknown as Request;
 
 describe('signed storefront age gate', () => {
+  it('allows protected storefront reads when the operator disables the entry gate', async () => {
+    const configurableService = new AgeGateService(
+      {
+        complianceSetting: {
+          findMany: () =>
+            Promise.resolve([
+              { key: 'minimum_purchase_age', value: 18 },
+              { key: 'age_gate.entry.enabled', value: false },
+            ]),
+        },
+      } as unknown as PrismaService,
+      { get: () => 'development' } as unknown as ConfigService<Environment, true>,
+    );
+
+    await expect(configurableService.assertConfirmed({} as Request)).resolves.toBeUndefined();
+  });
+
   it('accepts only a current signed-cookie payload for the configured age', () => {
     const now = Date.now();
     expect(
@@ -27,6 +44,21 @@ describe('signed storefront age gate', () => {
           expiresAt: new Date(now + 60_000).toISOString(),
         }),
         18,
+      ),
+    ).toBe(true);
+  });
+
+  it('uses the operator-configured positive minimum instead of hard-coding eighteen', () => {
+    const now = Date.now();
+    expect(
+      service.isConfirmed(
+        requestWithSignedCookie({
+          subject: 'a'.repeat(43),
+          minimumAge: 16,
+          confirmedAt: new Date(now - 1_000).toISOString(),
+          expiresAt: new Date(now + 60_000).toISOString(),
+        }),
+        16,
       ),
     ).toBe(true);
   });

@@ -2,6 +2,7 @@ import { Queue, Worker, type Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import pino from 'pino';
 import { bullConnectionFromUrl, parseWorkerEnvironment } from './environment.js';
+import { ConfiguredMediaDeletionAdapter } from './media-deletion-adapter.js';
 import { outboxJobSchema, safeErrorCode } from './outbox-contracts.js';
 import { OutboxProcessor } from './outbox-processor.js';
 import { OutboxPublisher, type OutboxJobData } from './outbox-publisher.js';
@@ -17,10 +18,20 @@ const logger = pino({
       'token',
       'cookie',
       'authorization',
+      'recipient',
+      'encryptedRecipient',
+      'resetToken',
+      'body',
+      'subject',
       '*.password',
       '*.token',
       '*.cookie',
       '*.authorization',
+      '*.recipient',
+      '*.encryptedRecipient',
+      '*.resetToken',
+      '*.body',
+      '*.subject',
       'job.data.payload',
       'payload',
     ],
@@ -39,7 +50,15 @@ const repository = new OutboxRepository(
   environment.OUTBOX_RETRY_BASE_MS,
   environment.OUTBOX_RETRY_MAX_MS,
 );
-const processor = new OutboxProcessor(prisma, repository, environment, logger);
+const mediaDeletionAdapter = new ConfiguredMediaDeletionAdapter(environment);
+const processor = new OutboxProcessor(
+  prisma,
+  repository,
+  environment,
+  logger,
+  undefined,
+  mediaDeletionAdapter,
+);
 const publisher = new OutboxPublisher(repository, queue, logger);
 const sources = new OutboxSources(prisma, environment);
 
@@ -143,6 +162,7 @@ const shutdown = async (signal: string): Promise<void> => {
   }
   await worker.close();
   await queue.close();
+  mediaDeletionAdapter.close();
   await prisma.$disconnect();
 };
 
@@ -179,6 +199,7 @@ void start().catch(async (error: unknown) => {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   await worker.close(true).catch(() => undefined);
   await queue.close().catch(() => undefined);
+  mediaDeletionAdapter.close();
   await prisma.$disconnect().catch(() => undefined);
   process.exitCode = 1;
 });

@@ -18,7 +18,7 @@ All amounts are integer millimes in TND. Original events are append-only; correc
 | Action            | Minimum permission            | Control                                      |
 | ----------------- | ----------------------------- | -------------------------------------------- |
 | View cash         | cash.read                     | Scope and PII minimization                   |
-| Record collection | cash.collect                  | Assigned delivery/store shift; idempotent    |
+| Record collection | cash.collect                  | Recent auth; assigned shift; idempotent      |
 | Create remittance | cash.remit                    | Courier custody and evidence                 |
 | Reconcile/close   | cash.reconcile                | Full admin 2FA, recent auth, reason/evidence |
 | Export report     | reports.export plus cash.read | Bounded, formula-safe, audited               |
@@ -86,7 +86,7 @@ Suspected theft or systemic mismatch follows docs/INCIDENT_RESPONSE.md. Do not a
 
 Order payment projections may include PAYMENT_PENDING, CASH_EXPECTED, CASH_COLLECTED_BY_COURIER, CASH_COLLECTED_AT_STORE, CASH_PARTIALLY_COLLECTED, CASH_REMITTED, RECONCILIATION_DISCREPANCY, REFUNDED, and CANCELLED. These are projections derived from events and validated transitions; changing a projection does not replace event history.
 
-Remittances move through DRAFT, SUBMITTED, UNDER_REVIEW, ACCEPTED, DISCREPANCY, and CANCELLED/REVERSED according to the implemented schema. Submitted/accepted batches cannot be deleted.
+Remittances move through `DRAFT`, `SUBMITTED`, and then `VERIFIED` or `DISCREPANCY`; `REJECTED` and `CANCELLED` are reserved terminal values in the schema. Submitted/verified batches cannot be deleted. Verification must be performed by a different administrator from the one who submitted/received the remittance.
 
 ## Daily close
 
@@ -102,6 +102,8 @@ Remittances move through DRAFT, SUBMITTED, UNDER_REVIEW, ACCEPTED, DISCREPANCY, 
 ## Reporting
 
 Every report labels event basis and UTC/Africa-Tunis cutoff. Required views include expected COD, collected by courier/store, held by each courier, remitted, unremitted aging, discrepancy, daily reconciliation, and courier history. Never combine orders created with delivered revenue or reconciled cash.
+
+The administrator cash screen exposes filterable collection and remittance lists plus `GET /api/v1/admin/cash/collections/export.csv` (`COD_COLLECTIONS_V1`) and `GET /api/v1/admin/cash/remittances/export.csv` (`COD_REMITTANCES_V1`). Both exports require `cash.read`, `reports.export`, and recent authentication; they are audited, capped at 500 filtered rows, contain integer millimes, omit customer contact/address data, and neutralize spreadsheet formula prefixes.
 
 ## Tests
 

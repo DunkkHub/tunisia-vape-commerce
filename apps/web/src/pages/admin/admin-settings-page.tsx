@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { RefreshCw, Save, ShieldCheck } from 'lucide-react';
-import { type FormEvent } from 'react';
+import { Download, RefreshCw, Save, ShieldCheck } from 'lucide-react';
+import { type FormEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { adminDataClient } from '../../api/admin-data-client';
@@ -19,8 +19,36 @@ const parsedValue = (setting: AdminSettingRecord, raw: string): string | number 
   return raw;
 };
 
+const manageableSettingKeys = new Set([
+  'checkout.enabled',
+  'maintenance.mode',
+  'prelaunch.mode',
+  'store.name',
+  'store.phone',
+  'store.email',
+  'store.address',
+  'store.currency',
+  'store.timezone',
+  'store.default_locale',
+  'notifications.admin_order_created.enabled',
+  'notifications.customer_order_created.enabled',
+  'notifications.customer_order_sms.enabled',
+  'notifications.security_alert_email',
+  'notifications.order_alert_email',
+  'notifications.low_stock_alert_email',
+  'notifications.operational_alert_locale',
+  'minimum_purchase_age',
+  'age_gate.entry.enabled',
+  'age_gate.checkout.enabled',
+  'consent.terms.required',
+  'consent.privacy.required',
+  'consent.recording.enabled',
+  'delivery.age_verification_required',
+]);
+
 export function AdminSettingsPage() {
   const { t } = useTranslation();
+  const [exportMessage, setExportMessage] = useState('');
   const settings = useQuery({
     queryKey: ['admin', 'settings', 'operational'],
     queryFn: () => adminDataClient.settings(),
@@ -37,6 +65,20 @@ export function AdminSettingsPage() {
     }) => adminDataClient.updateSetting(setting, value, reason),
     onSuccess: () => void settings.refetch(),
   });
+  const exportConfiguration = useMutation({
+    mutationFn: () => adminDataClient.exportSettings(),
+    onSuccess: (payload) => {
+      const objectUrl = URL.createObjectURL(
+        new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
+      );
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = 'store-configuration.json';
+      link.click();
+      URL.revokeObjectURL(objectUrl);
+      setExportMessage(t('admin.settingsPanel.exportReady'));
+    },
+  });
   const submit = (setting: AdminSettingRecord, event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -52,24 +94,47 @@ export function AdminSettingsPage() {
         <div>
           <span className="admin-kicker">{t('brand.adminShort')}</span>
           <h1>{t('admin.settings')}</h1>
-          <p>{t('admin.resourceSubtitle')}</p>
+          <p>{t('admin.settingsPanel.subtitle')}</p>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => void settings.refetch()}
-          disabled={settings.isFetching}
-        >
-          <RefreshCw aria-hidden="true" size={18} />
-          {t('admin.refresh')}
-        </Button>
+        <div className="admin-heading-actions">
+          <Button
+            type="button"
+            variant="ghost"
+            loading={exportConfiguration.isPending}
+            disabled={exportConfiguration.isPending}
+            onClick={() => {
+              setExportMessage('');
+              exportConfiguration.mutate();
+            }}
+          >
+            <Download aria-hidden="true" size={18} />
+            {t('admin.settingsPanel.export')}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => void settings.refetch()}
+            disabled={settings.isFetching}
+          >
+            <RefreshCw aria-hidden="true" size={18} />
+            {t('admin.refresh')}
+          </Button>
+        </div>
       </header>
+      {exportMessage ? (
+        <p className="form-banner form-banner--success" role="status">
+          {exportMessage}
+        </p>
+      ) : null}
       {settings.isPending ? <LoadingState label={t('common.loading')} tone="admin" /> : null}
       {settings.isError ? <ErrorState onRetry={() => void settings.refetch()} /> : null}
       {settings.data?.items.length === 0 ? <EmptyState title={t('admin.emptyResource')} /> : null}
       <div className="admin-stock-sections">
         {settings.data?.items.map((setting) => {
-          const manageable = !setting.redacted && setting.valueType !== 'JSON';
+          const manageable =
+            !setting.redacted &&
+            setting.valueType !== 'JSON' &&
+            manageableSettingKeys.has(setting.key);
           return (
             <form
               className="admin-panel"
@@ -79,18 +144,25 @@ export function AdminSettingsPage() {
               <h2>{setting.key}</h2>
               <p>{setting.description}</p>
               <small>
-                {setting.scope} · version {setting.version} ·{' '}
+                {t('admin.settingsPanel.metadata', {
+                  scope: setting.scope,
+                  version: setting.version,
+                })}{' '}
                 <LocalDate value={setting.updatedAt} />
               </small>
               {setting.legallyReviewed ? (
                 <p className="form-banner form-banner--success">
-                  <ShieldCheck aria-hidden="true" size={17} /> Revue enregistrée
+                  <ShieldCheck aria-hidden="true" size={17} />
+                  {t('admin.settingsPanel.reviewRecorded')}
                 </p>
+              ) : null}
+              {!manageable ? (
+                <p className="form-banner">{t('admin.settingsPanel.notManageable')}</p>
               ) : null}
               {setting.valueType === 'BOOLEAN' ? (
                 <SelectField
                   name="value"
-                  label="Valeur"
+                  label={t('admin.settingsPanel.value')}
                   defaultValue={String(setting.value)}
                   disabled={!manageable}
                 >
@@ -100,7 +172,7 @@ export function AdminSettingsPage() {
               ) : (
                 <FormField
                   name="value"
-                  label="Valeur"
+                  label={t('admin.settingsPanel.value')}
                   type={setting.valueType === 'INTEGER' ? 'number' : 'text'}
                   defaultValue={
                     typeof setting.value === 'string' || typeof setting.value === 'number'
@@ -112,7 +184,7 @@ export function AdminSettingsPage() {
               )}
               <FormField
                 name="reason"
-                label="Motif obligatoire de la modification"
+                label={t('admin.settingsPanel.reason')}
                 maxLength={500}
                 required
                 disabled={!manageable}
@@ -124,13 +196,13 @@ export function AdminSettingsPage() {
                 disabled={!manageable || update.isPending}
               >
                 <Save aria-hidden="true" size={17} />
-                Enregistrer
+                {t('common.save')}
               </Button>
             </form>
           );
         })}
       </div>
-      {update.isError ? <ErrorState compact /> : null}
+      {update.isError || exportConfiguration.isError ? <ErrorState compact /> : null}
     </div>
   );
 }

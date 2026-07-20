@@ -59,12 +59,8 @@ export const initializeCommerceFoundation = async (
       data: { value: 'Tunis integration facility' },
     }),
     prisma.complianceSetting.update({
-      where: { key: 'legal_review.completed' },
-      data: { value: true, legallyReviewed: true, reviewedAt: new Date() },
-    }),
-    prisma.complianceSetting.update({
       where: { key: 'minimum_purchase_age' },
-      data: { value: 18, legallyReviewed: true, reviewedAt: new Date() },
+      data: { value: 18 },
     }),
   ]);
   const category = await prisma.category.create({
@@ -243,20 +239,44 @@ export const createSellableVariant = async (
   return { product, variant, inventory };
 };
 
-export const checkoutInput = (
+export const checkoutInput = async (
+  prisma: PrismaClient,
+  customerUserId: string,
   variantId: string,
   geography: GeographyFixture,
   quantity = 1,
-): CheckoutOrderDto => ({
-  items: [{ variantId, quantity }],
-  localityId: geography.localityId,
-  express: false,
-  customerName: 'Integration Customer',
-  phone: '+21620111222',
-  email: 'buyer@example.test',
-  address: { street: '1 Integration Street', postalCode: geography.postalCode },
-  consent: { ageConfirmed: true, termsAccepted: true, privacyAccepted: true },
-});
+): Promise<CheckoutOrderDto> => {
+  const customer = await prisma.customerProfile.findUniqueOrThrow({
+    where: { userId: customerUserId },
+    select: { id: true },
+  });
+  const existing = await prisma.cart.findFirst({
+    where: { customerId: customer.id, status: 'ACTIVE' },
+    orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+    select: { id: true },
+  });
+  const cart =
+    existing ??
+    (await prisma.cart.create({
+      data: { customerId: customer.id, status: 'ACTIVE', currency: 'TND' },
+      select: { id: true },
+    }));
+  await prisma.$transaction([
+    prisma.cartItem.deleteMany({ where: { cartId: cart.id } }),
+    prisma.cartItem.create({ data: { cartId: cart.id, variantId, quantity } }),
+    prisma.cart.update({ where: { id: cart.id }, data: { version: { increment: 1 } } }),
+  ]);
+  return {
+    items: [{ variantId, quantity }],
+    localityId: geography.localityId,
+    express: false,
+    customerName: 'Integration Customer',
+    phone: '+21620111222',
+    email: 'buyer@example.test',
+    address: { street: '1 Integration Street', postalCode: geography.postalCode },
+    consent: { ageConfirmed: true, termsAccepted: true, privacyAccepted: true },
+  };
+};
 
 export const requestFixture = (userId?: string): Request =>
   ({

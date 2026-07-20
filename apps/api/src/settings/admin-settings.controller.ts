@@ -1,5 +1,14 @@
-import { Body, Controller, Param, Patch, Req, UseGuards, UseInterceptors } from '@nestjs/common';
-import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Param,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { ApiCookieAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { AdminSessionGuard } from '../auth/guards/admin-session.guard';
@@ -9,7 +18,11 @@ import { RecentAuthenticationGuard } from '../auth/guards/recent-authentication.
 import { RequirePermissions } from '../auth/permissions.decorator';
 import { NoStoreInterceptor } from '../common/http/no-store.interceptor';
 import { AdminSettingsService } from './admin-settings.service';
-import { SettingKeyParametersDto, UpdateOperationalSettingDto } from './dto/admin-settings.dto';
+import {
+  SettingKeyParametersDto,
+  StoreConfigurationExportResponseDto,
+  UpdateOperationalSettingDto,
+} from './dto/admin-settings.dto';
 
 @ApiTags('administrator-settings')
 @ApiCookieAuth('admin')
@@ -19,6 +32,15 @@ import { SettingKeyParametersDto, UpdateOperationalSettingDto } from './dto/admi
 @Throttle({ default: { limit: 20, ttl: 60_000 } })
 export class AdminSettingsController {
   constructor(private readonly settings: AdminSettingsService) {}
+
+  @Post('export')
+  @UseGuards(CsrfGuard, RecentAuthenticationGuard)
+  @RequirePermissions('settings.manage')
+  @ApiOperation({ summary: 'Generate an audited, bounded configuration export without secrets' })
+  @ApiOkResponse({ type: StoreConfigurationExportResponseDto })
+  exportConfiguration(@Req() request: Request) {
+    return this.settings.exportConfiguration(request);
+  }
 
   @Patch('store/:key')
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)

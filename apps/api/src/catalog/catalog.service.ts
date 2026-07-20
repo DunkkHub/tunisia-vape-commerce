@@ -5,6 +5,7 @@ import type { Request } from 'express';
 import { AgeGateService } from '../compliance/age-gate.service';
 import type { Environment } from '../config/environment';
 import { PrismaService } from '../database/prisma.service';
+import { publicProductImageUrl } from '../product-media/product-media.service';
 import {
   buildPublicProductWhere,
   catalogProductOrderBy,
@@ -16,6 +17,22 @@ export type StorefrontLocale = 'fr' | 'ar';
 
 const PUBLIC_FACET_LIMIT = 50;
 const DATABASE_INT_MAX = 2_147_483_647;
+
+const publicImageSelect = {
+  id: true,
+  objectKeyHash: true,
+  altTextFr: true,
+  altTextAr: true,
+  width: true,
+  height: true,
+} satisfies Prisma.ProductImageSelect;
+
+const publicImages = {
+  where: { deletedAt: null, moderationStatus: 'APPROVED' as const },
+  orderBy: [{ isPrimary: 'desc' as const }, { sortOrder: 'asc' as const }, { id: 'asc' as const }],
+  take: 20,
+  select: publicImageSelect,
+};
 
 const publicProductSelect = (now: Date) =>
   ({
@@ -38,6 +55,7 @@ const publicProductSelect = (now: Date) =>
     minimumAge: true,
     featured: true,
     brand: { select: { name: true, slug: true } },
+    images: publicImages,
     variants: {
       where: {
         publicationStatus: 'PUBLISHED',
@@ -53,6 +71,7 @@ const publicProductSelect = (now: Date) =>
         priceMillimes: true,
         promotionalPriceMillimes: true,
         lowStockThreshold: true,
+        images: { ...publicImages, take: 10 },
         inventoryItems: {
           where: {
             OR: [
@@ -134,6 +153,17 @@ const displayPrice = (product: PublicProductRecord) => {
   return candidates[0] ?? { list: 0, promotional: null, effective: 0 };
 };
 
+const serializeImage = (
+  image: PublicProductRecord['images'][number],
+  locale: StorefrontLocale,
+) => ({
+  id: image.id,
+  url: publicProductImageUrl(image.objectKeyHash),
+  altText: locale === 'ar' ? image.altTextAr : image.altTextFr,
+  width: image.width ?? undefined,
+  height: image.height ?? undefined,
+});
+
 const serializeSummary = (product: PublicProductRecord, locale: StorefrontLocale) => {
   const price = displayPrice(product);
   const variants = product.variants.map((variant) => ({
@@ -141,6 +171,8 @@ const serializeSummary = (product: PublicProductRecord, locale: StorefrontLocale
     threshold: variant.lowStockThreshold,
   }));
   const totalAvailable = variants.reduce((total, variant) => total + variant.available, 0);
+  const primaryImage =
+    product.images?.[0] ?? product.variants.find((variant) => variant.images?.[0])?.images?.[0];
   return {
     id: product.id,
     name: locale === 'ar' ? product.nameAr : product.nameFr,
@@ -156,8 +188,7 @@ const serializeSummary = (product: PublicProductRecord, locale: StorefrontLocale
     lowStock:
       variants.length === 0 || variants.some((variant) => variant.available <= variant.threshold),
     ageRestricted: product.minimumAge !== null || product.containsNicotine,
-    // Object-storage keys are intentionally not exposed. A media-delivery adapter can populate this.
-    primaryImage: null,
+    primaryImage: primaryImage ? serializeImage(primaryImage, locale) : null,
   };
 };
 
@@ -165,7 +196,7 @@ const serializeDetail = (product: PublicProductRecord, locale: StorefrontLocale)
   ...serializeSummary(product, locale),
   description: locale === 'ar' ? product.descriptionAr : product.descriptionFr,
   sku: product.sku ?? product.variants[0]?.sku ?? '',
-  images: [],
+  images: (product.images ?? []).map((image) => serializeImage(image, locale)),
   variants: product.variants.map((variant) => ({
     id: variant.id,
     name: locale === 'ar' ? variant.nameAr : variant.nameFr,
@@ -178,7 +209,7 @@ const serializeDetail = (product: PublicProductRecord, locale: StorefrontLocale)
         ? variant.promotionalPriceMillimes
         : null,
     availableQuantity: availableQuantity(variant),
-    image: null,
+    image: variant.images?.[0] ? serializeImage(variant.images[0], locale) : null,
   })),
   warningText: locale === 'ar' ? product.warningAr : product.warningFr,
   attributes: product.attributes.flatMap((attribute) =>
@@ -227,15 +258,30 @@ export class CatalogService {
         select: { key: true, value: true },
       }),
       this.prisma.complianceSetting.findMany({
-        where: { key: { in: ['minimum_purchase_age', 'legal_review.completed'] } },
+        where: {
+          key: {
+            in: [
+              'minimum_purchase_age',
+              'age_gate.entry.enabled',
+              'age_gate.checkout.enabled',
+              'consent.terms.required',
+              'consent.privacy.required',
+              'consent.recording.enabled',
+            ],
+          },
+        },
         select: { key: true, value: true },
       }),
     ]);
     const store = new Map(storeSettings.map((setting) => [setting.key, setting.value]));
     const compliance = new Map(complianceSettings.map((setting) => [setting.key, setting.value]));
     const minimumAge = jsonInteger(compliance.get('minimum_purchase_age')) ?? 0;
-    const ageConfirmed = minimumAge >= 18 && this.ageGate.isConfirmed(request, minimumAge);
-    const minimumAgeConfigured = minimumAge >= 18;
+    const configuredBoolean = (key: string): boolean =>
+      !compliance.has(key) || jsonBoolean(compliance.get(key));
+    const ageGateEnabled = configuredBoolean('age_gate.entry.enabled');
+    const ageConfirmed =
+      !ageGateEnabled || (minimumAge >= 1 && this.ageGate.isConfirmed(request, minimumAge));
+    const minimumAgeConfigured = minimumAge >= 1;
 
     return {
       data: {
@@ -246,15 +292,17 @@ export class CatalogService {
         prelaunchMode:
           this.config.get('PRELAUNCH_MODE', { infer: true }) ||
           jsonBoolean(store.get('prelaunch.mode')) ||
-          !minimumAgeConfigured,
+          (ageGateEnabled && !minimumAgeConfigured),
         checkoutEnabled:
           this.config.get('CHECKOUT_ENABLED', { infer: true }) &&
           jsonBoolean(store.get('checkout.enabled')),
-        legalReviewCompleted:
-          this.config.get('LEGAL_REVIEW_COMPLETED', { infer: true }) &&
-          jsonBoolean(compliance.get('legal_review.completed')),
         minimumAge,
-        ageGateRequired: minimumAgeConfigured && !ageConfirmed,
+        ageGateEnabled,
+        checkoutAgeConfirmationRequired: configuredBoolean('age_gate.checkout.enabled'),
+        termsAcceptanceRequired: configuredBoolean('consent.terms.required'),
+        privacyAcceptanceRequired: configuredBoolean('consent.privacy.required'),
+        consentRecordingEnabled: configuredBoolean('consent.recording.enabled'),
+        ageGateRequired: ageGateEnabled && minimumAgeConfigured && !ageConfirmed,
         ageConfirmed,
       },
     };
