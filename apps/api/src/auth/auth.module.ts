@@ -11,6 +11,7 @@ import { CustomerSessionGuard } from './guards/customer-session.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RecentAuthenticationGuard } from './guards/recent-authentication.guard';
 import { TrustedOriginGuard } from './guards/trusted-origin.guard';
+import { SuperAdministratorGuard } from './guards/super-administrator.guard';
 import { SessionService } from './session.service';
 import { CryptoService } from '../common/security/crypto.service';
 
@@ -29,6 +30,7 @@ import { CryptoService } from '../common/security/crypto.service';
     PermissionsGuard,
     RecentAuthenticationGuard,
     TrustedOriginGuard,
+    SuperAdministratorGuard,
   ],
   exports: [
     CryptoService,
@@ -39,6 +41,7 @@ import { CryptoService } from '../common/security/crypto.service';
     PermissionsGuard,
     RecentAuthenticationGuard,
     TrustedOriginGuard,
+    SuperAdministratorGuard,
   ],
 })
 export class AuthModule {}

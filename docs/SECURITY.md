@@ -14,15 +14,16 @@ Security is deny-by-default and layered across Nginx, NestJS guards/validation, 
 - Admin password success never creates an authorized admin session. Mandatory TOTP or a one-time recovery code completes authentication.
 - A customer principal can never be upgraded to an admin principal based on a role field from the browser.
 
-Production cookies are host-only, Secure, HttpOnly, SameSite=Lax unless a documented flow requires stricter behavior, and narrowly scoped to the serving host. Separate store/admin hosts are preferred. Mutation requests also require a session-bound CSRF token and valid Origin. Session identifiers are opaque 256-bit random values and only their keyed hash is persisted where practical.
+Production cookies are host-only, Secure, HttpOnly, SameSite=Lax unless a documented flow requires stricter behavior, and narrowly scoped to the serving host. Production requires distinct storefront and administrator origins/hosts; local development may deliberately use one origin. Mutation requests also require a session-bound CSRF token and valid Origin. Session identifiers are opaque 256-bit random values and only their keyed hash is persisted where practical.
 
 ## Passwords, MFA, and tokens
 
 - Hash passwords with Argon2id using parameters benchmarked on the production class and reviewed annually; keep a pepper in the secret manager if adopted.
 - Enforce length and breached/common-password checks for admins; do not use composition rules that encourage predictable passwords.
 - Normalize email/phone for lookup but preserve display values separately.
-- Verification, invitation, reset, and pending-2FA tokens are high entropy, short lived, single use, and stored as hashes.
+- Verification, invitation, reset, and pending-2FA tokens are high entropy, short lived, single use, and stored as hashes. Completing a customer password reset atomically consumes every outstanding customer reset token for that account before revoking its customer sessions.
 - Encrypt TOTP seeds with the field-encryption key and bind associated data to the admin ID/purpose.
+- Generate enrollment QR codes locally from the server-issued `otpauth://` URI. Keep an encrypted, unverified seed stable across password retries so a scanned enrollment cannot be invalidated implicitly; replace it only after verification or through an authorized reset flow.
 - Hash individual recovery codes, show them once, consume atomically, and notify/log their use.
 - Rotate the session on login, MFA completion, password change, privilege change, and recent-auth completion.
 
@@ -32,13 +33,23 @@ Every protected controller declares an authenticated principal type and permissi
 
 Dangerous actions require permission plus recent authentication, explicit confirmation input, reason, and audit. Cash reconciliation and the most sensitive role/compliance changes should support separate approver policy. Super Administrator does not bypass domain state machines or immutable history.
 
+### Exact Super Administrator account lifecycle boundary
+
+The account-lifecycle controllers use an exact server-derived `super-administrator` role guard in addition to normal permission checks. Possessing `users.manage`, `customers.suspend`, or `system.manage`, or sending a role name from the browser, never satisfies this role gate. Mutations add administrator CSRF and recent-authentication guards, and the service revalidates that the actor is an active, non-suspended administrator with verified TOTP and the exact role inside the database transaction.
+
+Role-row locking serializes the super-administrator availability decision. An administrator cannot change their own lifecycle state, and a super-administrator cannot be suspended or anonymized unless another active, non-suspended, TOTP-enrolled super-administrator remains. Expected user/profile versions prevent stale confirmations from overwriting a concurrent account change. Creation through the management API cannot assign `super-administrator`; that escalation requires a separate approved workflow.
+
+Suspending an administrator revokes only active `ADMIN` sessions for that user. Suspending, disabling, or explicitly revoking sessions for a customer affects only the `CUSTOMER` realm. Reactivation never issues a session. Administrator anonymization is suspended-first and removes role assignments, MFA/recovery/reset material and direct identifiers while retaining stable audit references. Customer disable is access control only. The distinct customer anonymization action requires an exact Super Administrator, recent authentication, expected versions, explicit confirmation, no non-terminal orders, and an audit record; it removes direct account/address/credential data and encrypted notification recipients while preserving immutable commercial, consent, internal-note, security, and audit history.
+
+The first administrator remains a bootstrap exception performed only with `pnpm admin:create` in an interactive trusted TTY. The command refuses to run once any administrator exists, locks the Super Administrator role row, assigns the seeded exact role, requires TOTP enrollment at first login, and appends a system audit event. It has no default password, command-line password, or seeded account.
+
 ## Request and response safety
 
 - Globally reject unknown fields, transform only declared types, and cap nesting, array length, text size, and request body.
 - Parse money only as integer millimes or validated decimal input converted exactly at the boundary.
 - Use response DTO allowlists; never serialize Prisma records directly.
 - Use stable safe errors with requestId. Production does not expose causes, SQL, paths, or stack traces.
-- Allow CORS only from exact configured storefront/admin origins. Never combine credentials with a wildcard origin.
+- Allow credentialed CORS only from the exact `WEB_URL` and `ADMIN_WEB_URL` origins. Production validates that both are HTTPS origin-only URLs and distinct, and that their hostnames match `STOREFRONT_HOST` and `ADMIN_HOST`. Never combine credentials with a wildcard origin or an independently configured catch-all list.
 - Enforce JSON/content types and reject ambiguous duplicate parameters.
 - Configure request, upstream, database, Redis, and provider timeouts.
 
@@ -50,7 +61,9 @@ React does not render untrusted HTML. If business-approved rich content is intro
 
 ## CSRF and CORS
 
-Cookie SameSite is defense in depth, not the only CSRF control. The API issues a realm-specific synchronizer token bound to the server session. POST, PUT, PATCH, and DELETE require it in a custom header and validate Origin/Fetch Metadata. Tokens rotate on authentication transitions. Login CSRF is considered and the admin/customer login buckets and tokens are separate.
+Cookie SameSite is defense in depth, not the only CSRF control. The API issues a realm-specific synchronizer token bound to the server session. `TrustedOriginGuard` applies globally: storefront/customer routes accept only `WEB_URL`, administrator routes and optional OpenAPI docs accept only `ADMIN_WEB_URL`, cross-site Fetch Metadata is denied, and requests carrying an unconfigured Origin are denied. POST, PUT, PATCH, and DELETE additionally require the realm-specific token in a custom header. Tokens rotate on authentication transitions. Login CSRF is considered and the admin/customer login buckets and tokens are separate.
+
+The production edge repeats this boundary before NestJS. The storefront virtual host never serves `/admin`, forwards `/api/v1/admin` or `/api/v1/auth/admin`, or exposes any `/api/docs*` OpenAPI UI/schema route; the administrator virtual host does not forward customer authentication; unknown hosts are dropped. OpenAPI UI is absent by default in production and exists only after the explicit validated `OPENAPI_ENABLED=true` opt-in, on the protected admin host.
 
 ## Sessions and Redis
 
@@ -69,7 +82,18 @@ Production Redis uses authentication, TLS/private networking, eviction policy th
 
 ## Uploads and object storage
 
-Uploads land in a private quarantine prefix using random server keys. Validate declared MIME, signature, decoded format, dimensions/pixel count, size, and allowed extensions; strip path data/metadata; reject SVG and executables. Scan before promotion, re-encode images, create bounded responsive variants, and record uploader/time/hash. Downloads use short-lived scoped URLs or an authenticated proxy. Bucket versioning and lifecycle rules are enabled.
+Uploads use random server keys and a private storage boundary. Validate declared MIME, signature, exact container boundary, decoded format, dimensions/pixel count, size, page count, and allowed extensions; reject SVG, executables, animation, corruption, and appended/polyglot content. Auto-orient and re-encode accepted JPEG, PNG, WebP, or supported AVIF bytes, retain only the color profile needed for fidelity, strip EXIF/XMP/comments and path data, sanitize the original filename for audit display, and record uploader/time/hash. Each image has exactly one product or variant owner, duplicate checksums are owner-scoped, and replacement/deletion uses optimistic versions plus durable cleanup. Downloads use the age-gated checksum-verifying media proxy. Bucket versioning and lifecycle rules are enabled.
+
+## Catalog import and external-source safety
+
+- Catalog import requires a full TOTP administrator session, `catalog.import`, administrator CSRF, recent authentication, throttling, explicit confirmation, and audit. A browser-supplied role or pending-2FA challenge cannot authorize it.
+- CSV/JSON is limited to 2 MiB and 2,000 rows, uses an exact versioned schema, rejects spreadsheet-formula prefixes, validates every typed field, and persists a dry run before mutation.
+- Apply binds the canonical payload to an import key/mode fingerprint and revalidates the stored preview. A concurrent unique-key loser is replayed only after loading the committed winner and matching that fingerprint; other unique failures remain failures. Default options preserve manual price, status, stock, and images; import cannot publish or create inventory.
+- Official Wotofo fetches use HTTPS and exact `www.wotofo.com` product paths plus the reviewed `cdn.shopify.com` Wotofo asset prefix. Generic image downloads are disabled by default and require an exact operator-configured DNS hostname, HTTPS, public-only DNS answers, and redirect destinations that remain on that allowlist. IP literals are rejected and validated public addresses are pinned into the outbound connection to prevent DNS rebinding. Retries, timeouts, redirects, response sizes and concurrency are bounded, and an official option mismatch fails closed.
+- Downloaded media passes through the same raster validator/re-encoder/storage service as a manual upload. Active images are never replaced without the preview's explicit `overrideImages` authorization; source URL hashes, payload/content checksums, verification state, and owner provenance are retained. A changed-source override moves the prior canonical key to a reserved historical key while leaving that source row's provenance and old image link intact, then creates a new canonical record. Audit links both records using safe IDs, hashes, and checksums without copying raw source URLs. Generic media commits as non-primary `PENDING` content with provenance and import-row checkpoints in the same database transaction. It is visible only through the authenticated ownership-checked administrator content route until a CSRF/recent-auth/version/audit protected approve decision. Generic provenance is never promoted to officially verified merely because transport or human visual validation succeeded.
+- Renewable token-owned Redis leases serialize the same batch and global catalogue-media capacity across API instances. Work is capped at 30 candidates per product and 150 per batch, with three product groups active. Two attempts, two redirects per attempt, 10-second request timeouts, and a five-second maximum synchronous retry delay bound remote-fetch scheduling to 5,200 seconds; the gateway's 7,200-second read timeout is scoped to the exact media-import administrator route and does not broaden ordinary API timeouts.
+- Imported image metadata and checkpoints are transactional in MySQL, but object storage cannot participate in that transaction. Database failures trigger best-effort object deletion. Bucket versioning, lifecycle controls, object inventory, and monitored reconciliation are still required to detect an object orphaned by a process failure after upload and before commit.
+- Automatic rollback is all-or-nothing, create-only, version guarded, and archival. It stops rather than overwriting a later manual change. Backup and object-storage recovery remain separate controls.
 
 ## Checkout, inventory, delivery, and COD
 

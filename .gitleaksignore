@@ -1,0 +1,5 @@
+# Exact historical fingerprints for documented placeholders and a non-secret load-test token.
+d20bbdd9cd5da6fa81a324a80ccc026cfa22a3a2:.env.production.example:generic-api-key:26
+d20bbdd9cd5da6fa81a324a80ccc026cfa22a3a2:docs/DEPLOYMENT.md:generic-api-key:29
+d20bbdd9cd5da6fa81a324a80ccc026cfa22a3a2:tests/load/fixture.example.json:generic-api-key:63
+0fc81b62c9398eb30dcd28ecf5553d9db1e1b9ea:docs/DEPLOYMENT.md:generic-api-key:23

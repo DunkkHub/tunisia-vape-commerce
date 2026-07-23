@@ -42,6 +42,9 @@ export const OrderTrackingPage = lazy(async () => ({
 export const WishlistPage = lazy(async () => ({
   default: (await import('../pages/store/account-pages')).WishlistPage,
 }));
+export const SecurityPage = lazy(async () => ({
+  default: (await import('../pages/store/account-pages')).SecurityPage,
+}));
 export const InfoPage = lazy(async () => ({
   default: (await import('../pages/store/content-pages')).InfoPage,
 }));
@@ -66,6 +69,30 @@ export const AdminProductEditorPage = lazy(async () => ({
 export const AdminInventoryPage = lazy(async () => ({
   default: (await import('../pages/admin/admin-inventory-page')).AdminInventoryPage,
 }));
+export const AdminInventoryDetailPage = lazy(async () => ({
+  default: (await import('../pages/admin/admin-inventory-detail-page')).AdminInventoryDetailPage,
+}));
+export const AdminOrderDetailPage = lazy(async () => ({
+  default: (await import('../pages/admin/admin-order-detail-page')).AdminOrderDetailPage,
+}));
+export const AdminSettingsPage = lazy(async () => ({
+  default: (await import('../pages/admin/admin-settings-page')).AdminSettingsPage,
+}));
+export const AdminDeliveryPage = lazy(async () => ({
+  default: (await import('../pages/admin/admin-delivery-page')).AdminDeliveryPage,
+}));
+export const AdminCashPage = lazy(async () => ({
+  default: (await import('../pages/admin/admin-cash-page')).AdminCashPage,
+}));
+export const AdminAdministratorsPage = lazy(async () => ({
+  default: (await import('../pages/admin/admin-access-pages')).AdminAdministratorsPage,
+}));
+export const AdminCustomersPage = lazy(async () => ({
+  default: (await import('../pages/admin/admin-access-pages')).AdminCustomersPage,
+}));
 export const AdminResourcePage = lazy(async () => ({
   default: (await import('../pages/admin/admin-resource-page')).AdminResourcePage,
+}));
+export const AdminCatalogImportsPage = lazy(async () => ({
+  default: (await import('../pages/admin/admin-catalog-imports-page')).AdminCatalogImportsPage,
 }));

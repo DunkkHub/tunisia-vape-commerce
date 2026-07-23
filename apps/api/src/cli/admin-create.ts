@@ -1,7 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
-import argon2, { argon2id } from 'argon2';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
+import { adminPasswordFailures, hashAdminPassword } from '../auth/admin-password';
 
 const prisma = new PrismaClient();
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -46,16 +47,6 @@ const readSecret = async (prompt: string): Promise<string> => {
   });
 };
 
-const validatePassword = (password: string): string[] => {
-  const failures: string[] = [];
-  if (password.length < 14 || password.length > 128) failures.push('must be 14-128 characters');
-  if (!/[a-z]/.test(password)) failures.push('must contain a lowercase letter');
-  if (!/[A-Z]/.test(password)) failures.push('must contain an uppercase letter');
-  if (!/[0-9]/.test(password)) failures.push('must contain a number');
-  if (!/[^A-Za-z0-9]/.test(password)) failures.push('must contain a symbol');
-  return failures;
-};
-
 const run = async (): Promise<void> => {
   const terminal = createInterface({ input: stdin, output: stdout });
   const email = (await terminal.question('Administrator email: '))
@@ -72,45 +63,64 @@ const run = async (): Promise<void> => {
   const password = await readSecret('Password (hidden): ');
   const confirmation = await readSecret('Confirm password (hidden): ');
   if (password !== confirmation) throw new Error('Passwords do not match');
-  const failures = validatePassword(password);
+  const failures = adminPasswordFailures(password);
   if (failures.length) throw new Error(`Password ${failures.join(', ')}`);
 
-  const passwordHash = await argon2.hash(password, {
-    type: argon2id,
-    memoryCost: 19_456,
-    timeCost: 3,
-    parallelism: 1,
-  });
-  const superAdministrator = await prisma.role.findUnique({
-    where: { key: 'super-administrator' },
-    select: { id: true },
-  });
-  if (!superAdministrator) {
-    throw new Error(
-      'Structural seed is missing the Super Administrator role; run pnpm prisma:seed',
+  const passwordHash = await hashAdminPassword(password);
+  await prisma.$transaction(async (transaction) => {
+    await transaction.$queryRaw(
+      Prisma.sql`SELECT id FROM Role WHERE \`key\` = ${'super-administrator'} FOR UPDATE`,
     );
-  }
+    const superAdministrator = await transaction.role.findUnique({
+      where: { key: 'super-administrator' },
+      select: { id: true },
+    });
+    if (!superAdministrator) {
+      throw new Error(
+        'Structural seed is missing the Super Administrator role; run pnpm prisma:seed',
+      );
+    }
+    const existingAdministrators = await transaction.user.count({
+      where: { audience: 'ADMIN' },
+    });
+    if (existingAdministrators !== 0) {
+      throw new Error(
+        'The first administrator already exists; create subsequent administrators from the protected access-management API',
+      );
+    }
 
-  await prisma.user.create({
-    data: {
-      audience: 'ADMIN',
-      email,
-      emailNormalized: email,
-      passwordHash,
-      status: 'ACTIVE',
-      emailVerifiedAt: new Date(),
-      passwordChangedAt: new Date(),
-      adminProfile: {
-        create: {
-          displayName,
-          mustEnrollTwoFactor: true,
-          invitationAcceptedAt: new Date(),
+    const created = await transaction.user.create({
+      data: {
+        audience: 'ADMIN',
+        email,
+        emailNormalized: email,
+        passwordHash,
+        status: 'ACTIVE',
+        emailVerifiedAt: new Date(),
+        passwordChangedAt: new Date(),
+        adminProfile: {
+          create: {
+            displayName,
+            mustEnrollTwoFactor: true,
+            invitationAcceptedAt: new Date(),
+          },
+        },
+        roles: {
+          create: { roleId: superAdministrator.id },
         },
       },
-      roles: {
-        create: { roleId: superAdministrator.id },
+      select: { id: true },
+    });
+    await transaction.auditLog.create({
+      data: {
+        actorType: 'SYSTEM',
+        action: 'admin.bootstrap.created',
+        resourceType: 'User',
+        resourceId: created.id,
+        outcome: 'SUCCESS',
+        requestId: `admin-create:${randomUUID()}`,
       },
-    },
+    });
   });
 
   stdout.write('Administrator created. TOTP enrollment is required at first login.\n');

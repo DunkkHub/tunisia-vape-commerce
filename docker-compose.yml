@@ -6,29 +6,30 @@ x-app-environment: &app-environment
   DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:-mysql://migration_user:change_me@mysql:3306/vape_store}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379}
   WEB_URL: ${COMPOSE_WEB_URL:-http://localhost:8080}
+  ADMIN_WEB_URL: ${COMPOSE_ADMIN_WEB_URL:-${COMPOSE_WEB_URL:-http://localhost:8080}}
+  OPENAPI_ENABLED: ${OPENAPI_ENABLED:-true}
   API_URL: http://api:3000
   PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8080/api/v1}
   SESSION_SECRET: ${SESSION_SECRET:-development-only-session-secret-change-before-staging}
   COOKIE_SECRET: ${COOKIE_SECRET:-development-only-cookie-secret-change-before-staging}
   FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:-development-only-field-encryption-key-change-before-staging}
+  MEDIA_STORAGE_DRIVER: ${MEDIA_STORAGE_DRIVER:-s3}
+  MEDIA_LOCAL_ROOT: ${MEDIA_LOCAL_ROOT:-uploads/media}
+  CATALOG_IMPORT_MEDIA_HOSTS: ${CATALOG_IMPORT_MEDIA_HOSTS:-}
   S3_ENDPOINT: http://minio:9000
   S3_REGION: ${S3_REGION:-us-east-1}
   S3_BUCKET: ${S3_BUCKET:-vape-store}
   S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minio_local_admin}
   S3_SECRET_KEY: ${S3_SECRET_KEY:-change_me_minio}
   S3_FORCE_PATH_STYLE: 'true'
-  SMTP_HOST: mailpit
-  SMTP_PORT: '1025'
-  SMS_PROVIDER: ${SMS_PROVIDER:-console}
   DEFAULT_LOCALE: ${DEFAULT_LOCALE:-fr}
   SUPPORTED_LOCALES: ${SUPPORTED_LOCALES:-fr,ar}
   CURRENCY: TND
   TIMEZONE: Africa/Tunis
   MINIMUM_PURCHASE_AGE: ${MINIMUM_PURCHASE_AGE:-18}
-  LEGAL_REVIEW_COMPLETED: ${LEGAL_REVIEW_COMPLETED:-false}
-  CHECKOUT_ENABLED: ${CHECKOUT_ENABLED:-false}
+  CHECKOUT_ENABLED: ${CHECKOUT_ENABLED:-true}
   MAINTENANCE_MODE: ${MAINTENANCE_MODE:-false}
-  PRELAUNCH_MODE: ${PRELAUNCH_MODE:-true}
+  PRELAUNCH_MODE: ${PRELAUNCH_MODE:-false}
   CUSTOMER_SESSION_IDLE_MINUTES: ${CUSTOMER_SESSION_IDLE_MINUTES:-10080}
   ADMIN_SESSION_IDLE_MINUTES: ${ADMIN_SESSION_IDLE_MINUTES:-30}
   RATE_LIMIT_REDIS_PREFIX: ${RATE_LIMIT_REDIS_PREFIX:-vape-store}
@@ -171,6 +172,7 @@ services:
     environment:
       <<: *app-environment
       NODE_ENV: development
+      DATABASE_URL: ${DATABASE_MIGRATION_URL:-mysql://migration_user:change_me@mysql:3306/vape_store}
     depends_on:
       mysql:
         condition: service_healthy
@@ -192,8 +194,6 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
-      mailpit:
-        condition: service_healthy
     expose: ['3000']
     read_only: true
     tmpfs:
@@ -211,6 +211,22 @@ services:
     restart: unless-stopped
     environment:
       <<: *app-environment
+      NOTIFICATION_ADAPTER: ${NOTIFICATION_ADAPTER:-smtp}
+      NOTIFICATION_BRIDGE_ENABLED: ${NOTIFICATION_BRIDGE_ENABLED:-true}
+      SMS_ENABLED: ${SMS_ENABLED:-false}
+      NOTIFICATION_CONNECT_TIMEOUT_MS: ${NOTIFICATION_CONNECT_TIMEOUT_MS:-5000}
+      NOTIFICATION_REQUEST_TIMEOUT_MS: ${NOTIFICATION_REQUEST_TIMEOUT_MS:-10000}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-no-reply@local.test}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-Tunisia Vape Commerce}
+      SMS_WEBHOOK_URL: ${SMS_WEBHOOK_URL:-}
+      SMS_WEBHOOK_AUTH_TOKEN: ${SMS_WEBHOOK_AUTH_TOKEN:-}
+      SMS_SENDER: ${SMS_SENDER:-TunisiaVape}
     depends_on:
       migrate:
         condition: service_completed_successfully

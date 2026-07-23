@@ -1,0 +1,155 @@
+services:
+  mysql:
+    ports: !reset []
+    environment:
+      MYSQL_ROOT_PASSWORD: null
+      MYSQL_PASSWORD: null
+      MYSQL_MIGRATION_PASSWORD: null
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_app_password
+      MYSQL_MIGRATION_PASSWORD_FILE: /run/secrets/mysql_migration_password
+    secrets:
+      - mysql_root_password
+      - mysql_app_password
+      - mysql_migration_password
+    stop_grace_period: 1m
+
+  redis:
+    ports: !reset []
+    command: ['/bin/sh', '/usr/local/bin/production-redis-entrypoint.sh']
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    volumes:
+      - ./docker/redis/production-entrypoint.sh:/usr/local/bin/production-redis-entrypoint.sh:ro
+    secrets:
+      - redis_password
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'REDISCLI_AUTH="$$(cat /run/secrets/redis_password)" redis-cli ping | grep -q PONG',
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    stop_grace_period: 30s
+
+  minio:
+    ports: !reset []
+
+  mailpit:
+    ports: !reset []
+
+  migrate:
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL is required}
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL is required}
+      COOKIE_SECRET: ${COOKIE_SECRET:?COOKIE_SECRET is required}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY is required}
+      WEB_URL: ${WEB_URL:?WEB_URL is required}
+      ADMIN_WEB_URL: ${ADMIN_WEB_URL:?ADMIN_WEB_URL is required}
+
+  api:
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      WEB_URL: ${WEB_URL:?WEB_URL is required}
+      ADMIN_WEB_URL: ${ADMIN_WEB_URL:?ADMIN_WEB_URL is required}
+      STOREFRONT_HOST: ${STOREFRONT_HOST:?STOREFRONT_HOST is required}
+      ADMIN_HOST: ${ADMIN_HOST:?ADMIN_HOST is required}
+      OPENAPI_ENABLED: ${OPENAPI_ENABLED:-false}
+      COOKIE_SECRET: ${COOKIE_SECRET:?COOKIE_SECRET is required}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY is required}
+      EXPECTED_MIGRATION_NAME: ${EXPECTED_MIGRATION_NAME:?EXPECTED_MIGRATION_NAME is required}
+      HEALTHCHECK_TIMEOUT_MS: ${HEALTHCHECK_TIMEOUT_MS:-2000}
+      WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${WORKER_HEARTBEAT_MAX_AGE_SECONDS:-60}
+      MEDIA_STORAGE_DRIVER: s3
+      S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
+      S3_REGION: ${S3_REGION:?S3_REGION is required}
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-10485760}
+      UPLOAD_MAX_PIXELS: ${UPLOAD_MAX_PIXELS:-40000000}
+      CATALOG_IMPORT_MEDIA_HOSTS: ${CATALOG_IMPORT_MEDIA_HOSTS:-}
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:3000/api/v1/health/ready']
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 45s
+    stop_grace_period: 30s
+
+  worker:
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      WEB_URL: ${WEB_URL:?WEB_URL is required}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY is required}
+      MEDIA_STORAGE_DRIVER: s3
+      S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
+      S3_REGION: ${S3_REGION:?S3_REGION is required}
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+      NOTIFICATION_ADAPTER: smtp-webhook
+      NOTIFICATION_BRIDGE_ENABLED: ${NOTIFICATION_BRIDGE_ENABLED:-true}
+      SMS_ENABLED: ${SMS_ENABLED:-false}
+      NOTIFICATION_CONNECT_TIMEOUT_MS: ${NOTIFICATION_CONNECT_TIMEOUT_MS:-5000}
+      NOTIFICATION_REQUEST_TIMEOUT_MS: ${NOTIFICATION_REQUEST_TIMEOUT_MS:-10000}
+      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST is required}
+      SMTP_PORT: ${SMTP_PORT:?SMTP_PORT is required}
+      SMTP_SECURE: ${SMTP_SECURE:?SMTP_SECURE is required}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:?SMTP_REQUIRE_TLS is required}
+      SMTP_USER: ${SMTP_USER:?SMTP_USER is required}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?SMTP_PASSWORD is required}
+      EMAIL_FROM: ${EMAIL_FROM:?EMAIL_FROM is required}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-Tunisia Vape Commerce}
+      SMS_WEBHOOK_URL: ${SMS_WEBHOOK_URL:-}
+      SMS_WEBHOOK_AUTH_TOKEN: ${SMS_WEBHOOK_AUTH_TOKEN:-}
+      SMS_SENDER: ${SMS_SENDER:-TunisiaVape}
+      EXPECTED_MIGRATION_NAME: ${EXPECTED_MIGRATION_NAME:?EXPECTED_MIGRATION_NAME is required}
+      WORKER_HEALTHCHECK_MAX_AGE_SECONDS: ${WORKER_HEALTHCHECK_MAX_AGE_SECONDS:-60}
+    healthcheck:
+      test: ['CMD', 'node', 'worker/dist/healthcheck.js']
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 1m
+
+  web:
+    stop_grace_period: 15s
+
+  nginx:
+    environment:
+      STOREFRONT_HOST: ${STOREFRONT_HOST:?STOREFRONT_HOST is required}
+      ADMIN_HOST: ${ADMIN_HOST:?ADMIN_HOST is required}
+    volumes: !override
+      - ./docker/nginx/production-gateway.conf.template:/etc/nginx/templates/default.conf.template:ro
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'wget -q --header="Host: $${STOREFRONT_HOST}" -O /dev/null http://127.0.0.1:8080/',
+        ]
+      interval: 20s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    stop_grace_period: 30s
+
+secrets:
+  mysql_root_password:
+    file: ${MYSQL_ROOT_PASSWORD_FILE:?MYSQL_ROOT_PASSWORD_FILE is required}
+  mysql_app_password:
+    file: ${MYSQL_APP_PASSWORD_FILE:?MYSQL_APP_PASSWORD_FILE is required}
+  mysql_migration_password:
+    file: ${MYSQL_MIGRATION_PASSWORD_FILE:?MYSQL_MIGRATION_PASSWORD_FILE is required}
+  redis_password:
+    file: ${REDIS_PASSWORD_FILE:?REDIS_PASSWORD_FILE is required}

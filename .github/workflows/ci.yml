@@ -16,16 +16,16 @@ env:
   NODE_ENV: test
   DATABASE_URL: mysql://app_user:ci_app_password@127.0.0.1:3306/vape_store
   DATABASE_MIGRATION_URL: mysql://root:ci_root_password@127.0.0.1:3306/vape_store
-  TEST_DATABASE_ADMIN_URL: mysql://root:ci_root_password@127.0.0.1:3306
-  TEST_REDIS_URL: redis://127.0.0.1:6379/15
+  TEST_DATABASE_ADMIN_URL: mysql://root:ci_root_password@127.0.0.1:3306/mysql
   REDIS_URL: redis://127.0.0.1:6379
+  TEST_REDIS_URL: redis://127.0.0.1:6379/15
+  TEST_E2E_REDIS_URL: redis://127.0.0.1:6379/14
   WEB_URL: http://127.0.0.1:4173
   COOKIE_SECRET: ci-only-cookie-secret-that-is-never-used-outside-ci
   FIELD_ENCRYPTION_KEY: ci-only-field-key-that-is-never-used-outside-ci
-  LEGAL_REVIEW_COMPLETED: 'false'
-  CHECKOUT_ENABLED: 'false'
+  CHECKOUT_ENABLED: 'true'
   MAINTENANCE_MODE: 'false'
-  PRELAUNCH_MODE: 'true'
+  PRELAUNCH_MODE: 'false'
   MINIMUM_PURCHASE_AGE: '18'
 
 jobs:
@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: pnpm
@@ -56,6 +56,7 @@ jobs:
         image: mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_ROOT_HOST: '%'
           MYSQL_DATABASE: vape_store
           MYSQL_USER: app_user
           MYSQL_PASSWORD: ci_app_password
@@ -78,16 +79,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm prisma:generate
-      - run: pnpm prisma:migrate:deploy
-      - run: pnpm test:unit
-      - run: pnpm test:integration
-      - run: pnpm test:security
+      - name: Apply migrations to clean MySQL 8.4 with the migration identity
+        run: pnpm prisma:migrate:deploy
+        env:
+          DATABASE_URL: ${{ env.DATABASE_MIGRATION_URL }}
+      - name: Run API, web and worker unit tests
+        run: pnpm test:unit
+      - name: Run disposable MySQL and Redis integration tests including structural seed
+        run: pnpm test:integration
+      - name: Run security regression tests
+        run: pnpm test:security
+      - name: Test backup, restore and production Compose tooling
+        run: pnpm test:operations
 
   build:
     name: Production builds
@@ -97,7 +106,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: pnpm
@@ -119,16 +128,45 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     needs: [quality]
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: vape_store
+          MYSQL_USER: app_user
+          MYSQL_PASSWORD: ci_app_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_root_password --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=3s
+          --health-retries=12
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma:generate
       - run: pnpm --filter @vape/web exec playwright install --with-deps chromium
-      - run: pnpm test:e2e
+      - name: Run fast mocked browser regressions
+        run: pnpm test:e2e
+      - name: Run disposable MySQL, Redis, API and browser commerce path
+        run: pnpm test:e2e:operational
       - uses: actions/upload-artifact@v7
         if: always()
         with:

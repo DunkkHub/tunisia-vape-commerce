@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   Matches,
@@ -22,6 +23,8 @@ export const PUBLIC_PRODUCT_TYPES = [
   'DEVICE',
   'E_LIQUID',
   'POD',
+  'PREFILLED_POD_KIT',
+  'PREFILLED_REPLACEMENT_POD',
   'COIL',
   'DISPOSABLE',
   'ACCESSORY',
@@ -107,6 +110,22 @@ export class CatalogProductsQueryDto extends BoundedPageQueryDto {
   @Matches(/\S/)
   @ApiPropertyOptional({ maxLength: 160 })
   flavor?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(DATABASE_INT_MAX)
+  @ApiPropertyOptional({ minimum: 1, maximum: DATABASE_INT_MAX })
+  puffCount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  @Max(99_999)
+  @ApiPropertyOptional({ minimum: 0, maximum: 99_999, description: 'Milligrams.' })
+  nicotineStrengthMg?: number;
 
   @IsOptional()
   @Type(() => Number)

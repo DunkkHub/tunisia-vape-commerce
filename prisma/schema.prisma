@@ -445,10 +445,62 @@ enum ProductType {
   DEVICE
   E_LIQUID
   POD
+  PREFILLED_POD_KIT
+  PREFILLED_REPLACEMENT_POD
   COIL
   DISPOSABLE
   ACCESSORY
   OTHER
+}
+
+enum FlavorCategory {
+  FRUIT
+  MIXED_FRUIT
+  MINT
+  ICE
+  DRINK
+  TOBACCO
+  DESSERT
+  CANDY
+  CLEAR
+  OTHER
+}
+
+enum CatalogImportFormat {
+  CSV
+  JSON
+  WOTOFO
+}
+
+enum CatalogImportSource {
+  ADMIN_UPLOAD
+  WOTOFO_OFFICIAL
+}
+
+enum CatalogImportStatus {
+  PREVIEW_VALID
+  PREVIEW_INVALID
+  APPLYING
+  APPLIED
+  APPLIED_WITH_WARNINGS
+  FAILED
+  ROLLED_BACK
+}
+
+enum CatalogImportRowStatus {
+  VALID
+  INVALID
+  CREATED
+  UPDATED
+  SKIPPED
+  FAILED
+  ROLLED_BACK
+}
+
+enum CatalogSourceEntityType {
+  PRODUCT
+  VARIANT
+  IMAGE
 }
 
 enum ImageModerationStatus {
@@ -509,50 +561,55 @@ model Category {
 }
 
 model Product {
-  id                       String               @id @default(cuid()) @db.VarChar(30)
-  brandId                  String?              @db.VarChar(30)
-  categoryId               String               @db.VarChar(30)
-  nameFr                   String               @db.VarChar(240)
-  nameAr                   String               @db.VarChar(240)
-  slug                     String               @unique @db.VarChar(260)
-  sku                      String?              @unique @db.VarChar(100)
-  barcode                  String?              @unique @db.VarChar(100)
+  id                       String                @id @default(cuid()) @db.VarChar(30)
+  brandId                  String?               @db.VarChar(30)
+  categoryId               String                @db.VarChar(30)
+  nameFr                   String                @db.VarChar(240)
+  nameAr                   String                @db.VarChar(240)
+  slug                     String                @unique @db.VarChar(260)
+  sku                      String?               @unique @db.VarChar(100)
+  barcode                  String?               @unique @db.VarChar(100)
   productType              ProductType
-  shortDescriptionFr       String?              @db.VarChar(1000)
-  shortDescriptionAr       String?              @db.VarChar(1000)
-  descriptionFr            String?              @db.LongText
-  descriptionAr            String?              @db.LongText
-  containsNicotine         Boolean              @default(false)
-  nicotineStrengthMg       Decimal?             @db.Decimal(8, 3)
-  flavor                   String?              @db.VarChar(160)
-  deviceType               String?              @db.VarChar(160)
+  family                   String?               @db.VarChar(120)
+  model                    String?               @db.VarChar(160)
+  shortDescriptionFr       String?               @db.VarChar(1000)
+  shortDescriptionAr       String?               @db.VarChar(1000)
+  descriptionFr            String?               @db.LongText
+  descriptionAr            String?               @db.LongText
+  containsNicotine         Boolean               @default(false)
+  nicotineStrengthMg       Decimal?              @db.Decimal(8, 3)
+  flavor                   String?               @db.VarChar(160)
+  deviceType               String?               @db.VarChar(160)
   puffCount                Int?
-  coilResistanceOhm        Decimal?             @db.Decimal(8, 3)
-  liquidCapacityMl         Decimal?             @db.Decimal(8, 3)
-  deviceCompatibility      String?              @db.VarChar(500)
+  coilResistanceOhm        Decimal?              @db.Decimal(8, 3)
+  liquidCapacityMl         Decimal?              @db.Decimal(8, 3)
+  deviceCompatibility      String?               @db.VarChar(500)
   baseCostMillimes         Int?
   basePriceMillimes        Int?
   promotionalPriceMillimes Int?
-  taxCategory              String?              @db.VarChar(80)
-  taxRateBps               Int                  @default(0)
-  warningFr                String?              @db.Text
-  warningAr                String?              @db.Text
+  taxCategory              String?               @db.VarChar(80)
+  taxRateBps               Int                   @default(0)
+  warningFr                String?               @db.Text
+  warningAr                String?               @db.Text
   minimumAge               Int?
-  publicationStatus        PublicationStatus    @default(DRAFT)
-  featured                 Boolean              @default(false)
-  seoTitleFr               String?              @db.VarChar(255)
-  seoTitleAr               String?              @db.VarChar(255)
-  seoDescriptionFr         String?              @db.VarChar(500)
-  seoDescriptionAr         String?              @db.VarChar(500)
-  publishedAt              DateTime?            @db.DateTime(3)
-  suspendedAt              DateTime?            @db.DateTime(3)
-  archivedAt               DateTime?            @db.DateTime(3)
-  deletedAt                DateTime?            @db.DateTime(3)
-  version                  Int                  @default(1)
-  createdAt                DateTime             @default(now()) @db.DateTime(3)
-  updatedAt                DateTime             @updatedAt @db.DateTime(3)
-  brand                    Brand?               @relation(fields: [brandId], references: [id], onDelete: Restrict)
-  category                 Category             @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  publicationStatus        PublicationStatus     @default(DRAFT)
+  featured                 Boolean               @default(false)
+  requiresPricing          Boolean               @default(false)
+  requiresStock            Boolean               @default(false)
+  needsMediaReview         Boolean               @default(false)
+  seoTitleFr               String?               @db.VarChar(255)
+  seoTitleAr               String?               @db.VarChar(255)
+  seoDescriptionFr         String?               @db.VarChar(500)
+  seoDescriptionAr         String?               @db.VarChar(500)
+  publishedAt              DateTime?             @db.DateTime(3)
+  suspendedAt              DateTime?             @db.DateTime(3)
+  archivedAt               DateTime?             @db.DateTime(3)
+  deletedAt                DateTime?             @db.DateTime(3)
+  version                  Int                   @default(1)
+  createdAt                DateTime              @default(now()) @db.DateTime(3)
+  updatedAt                DateTime              @updatedAt @db.DateTime(3)
+  brand                    Brand?                @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  category                 Category              @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   variants                 ProductVariant[]
   images                   ProductImage[]
   attributes               ProductAttribute[]
@@ -560,23 +617,42 @@ model Product {
   promotionLinks           PromotionProduct[]
   orderItems               OrderItem[]
   restrictions             ProductRestriction[]
+  sourceRecords            CatalogSourceRecord[]
 
   @@index([publicationStatus, publishedAt])
   @@index([categoryId, publicationStatus])
   @@index([brandId, publicationStatus])
   @@index([featured, publicationStatus])
+  @@index([puffCount, publicationStatus])
+  @@index([requiresPricing, requiresStock, needsMediaReview])
   @@index([deletedAt])
+}
+
+model Flavor {
+  id            String           @id @default(cuid()) @db.VarChar(30)
+  canonicalName String           @unique @db.VarChar(160)
+  slug          String           @unique @db.VarChar(180)
+  nameFr        String           @db.VarChar(160)
+  nameAr        String           @db.VarChar(160)
+  category      FlavorCategory
+  createdAt     DateTime         @default(now()) @db.DateTime(3)
+  updatedAt     DateTime         @updatedAt @db.DateTime(3)
+  variants      ProductVariant[]
+
+  @@index([category, canonicalName])
 }
 
 model ProductVariant {
   id                       String                    @id @default(cuid()) @db.VarChar(30)
   productId                String                    @db.VarChar(30)
+  flavorId                 String?                   @db.VarChar(30)
   nameFr                   String                    @db.VarChar(200)
   nameAr                   String                    @db.VarChar(200)
   sku                      String                    @unique @db.VarChar(100)
   barcode                  String?                   @unique @db.VarChar(100)
   color                    String?                   @db.VarChar(100)
-  costMillimes             Int
+  nicotineStrengthMg       Decimal?                  @db.Decimal(8, 3)
+  costMillimes             Int?
   priceMillimes            Int
   promotionalPriceMillimes Int?
   taxRateBps               Int                       @default(0)
@@ -593,6 +669,7 @@ model ProductVariant {
   createdAt                DateTime                  @default(now()) @db.DateTime(3)
   updatedAt                DateTime                  @updatedAt @db.DateTime(3)
   product                  Product                   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  flavor                   Flavor?                   @relation(fields: [flavorId], references: [id], onDelete: Restrict)
   images                   ProductImage[]
   attributes               ProductVariantAttribute[]
   batches                  ProductBatch[]
@@ -600,8 +677,11 @@ model ProductVariant {
   cartItems                CartItem[]
   wishlistItems            WishlistItem[]
   orderItems               OrderItem[]
+  sourceRecords            CatalogSourceRecord[]
 
   @@index([productId, publicationStatus, sortOrder])
+  @@index([flavorId, publicationStatus])
+  @@index([nicotineStrengthMg, publicationStatus])
   @@index([publicationStatus, deletedAt])
 }
 
@@ -613,6 +693,7 @@ model ProductImage {
   objectKeyHash    String                @unique @db.Char(64)
   bucket           String                @db.VarChar(120)
   contentType      String                @db.VarChar(100)
+  originalFilename String?               @db.VarChar(255)
   byteSize         Int
   checksumSha256   String                @db.Char(64)
   width            Int?
@@ -623,13 +704,97 @@ model ProductImage {
   isPrimary        Boolean               @default(false)
   moderationStatus ImageModerationStatus @default(PENDING)
   createdAt        DateTime              @default(now()) @db.DateTime(3)
+  updatedAt        DateTime              @updatedAt @db.DateTime(3)
   deletedAt        DateTime?             @db.DateTime(3)
-  product          Product?              @relation(fields: [productId], references: [id], onDelete: Cascade)
-  variant          ProductVariant?       @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  product          Product?              @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  variant          ProductVariant?       @relation(fields: [variantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceRecords    CatalogSourceRecord[]
 
   @@index([productId, sortOrder])
   @@index([variantId, sortOrder])
+  @@index([checksumSha256])
   @@index([moderationStatus, createdAt])
+}
+
+model CatalogImportBatch {
+  id              String              @id @default(cuid()) @db.VarChar(30)
+  importKey       String              @db.VarChar(100)
+  dryRun          Boolean
+  payloadHash     String              @db.Char(64)
+  format          CatalogImportFormat
+  source          CatalogImportSource
+  schemaVersion   String              @db.VarChar(20)
+  status          CatalogImportStatus
+  partialMode     Boolean             @default(false)
+  overridePrice   Boolean             @default(false)
+  overrideStatus  Boolean             @default(false)
+  overrideImages  Boolean             @default(false)
+  rowCount        Int
+  appliedCount    Int                 @default(0)
+  payload         Json?
+  result          Json
+  previewBatchId  String?             @db.VarChar(30)
+  createdByUserId String              @db.VarChar(30)
+  createdAt       DateTime            @default(now()) @db.DateTime(3)
+  completedAt     DateTime?           @db.DateTime(3)
+  rolledBackAt    DateTime?           @db.DateTime(3)
+  rows            CatalogImportRow[]
+
+  @@unique([importKey, dryRun])
+  @@index([createdByUserId, createdAt])
+  @@index([status, createdAt])
+  @@index([previewBatchId])
+}
+
+model CatalogImportRow {
+  id                 String                 @id @default(cuid()) @db.VarChar(30)
+  batchId            String                 @db.VarChar(30)
+  rowNumber          Int
+  stableIdentity     String                 @db.VarChar(320)
+  payloadHash        String                 @db.Char(64)
+  status             CatalogImportRowStatus
+  action             String                 @db.VarChar(40)
+  issues             Json
+  beforeSnapshot     Json?
+  afterSnapshot      Json?
+  productId          String?                @db.VarChar(30)
+  variantId          String?                @db.VarChar(30)
+  productPostVersion Int?
+  postVersion        Int?
+  createdAt          DateTime               @default(now()) @db.DateTime(3)
+  batch              CatalogImportBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, rowNumber])
+  @@index([batchId, status])
+  @@index([stableIdentity])
+  @@index([productId])
+  @@index([variantId])
+}
+
+model CatalogSourceRecord {
+  id            String                  @id @default(cuid()) @db.VarChar(30)
+  source        CatalogImportSource
+  entityType    CatalogSourceEntityType
+  externalKey   String                  @db.VarChar(320)
+  sourceUrl     String                  @db.VarChar(2048)
+  sourceUrlHash String                  @db.Char(64)
+  contentHash   String?                 @db.Char(64)
+  verifiedAt    DateTime?               @db.DateTime(3)
+  metadata      Json?
+  productId     String?                 @db.VarChar(30)
+  variantId     String?                 @db.VarChar(30)
+  imageId       String?                 @db.VarChar(30)
+  createdAt     DateTime                @default(now()) @db.DateTime(3)
+  updatedAt     DateTime                @updatedAt @db.DateTime(3)
+  product       Product?                @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  variant       ProductVariant?         @relation(fields: [variantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  image         ProductImage?           @relation(fields: [imageId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([source, entityType, externalKey])
+  @@index([sourceUrlHash])
+  @@index([productId])
+  @@index([variantId])
+  @@index([imageId])
 }
 
 model ProductAttribute {
@@ -761,6 +926,7 @@ enum InventoryAdjustmentStatus {
   APPROVED
   REJECTED
   APPLIED
+  EXPIRED
 }
 
 model InventoryLocation {
@@ -793,6 +959,8 @@ model InventoryItem {
   movements      StockMovement[]
   reservations   StockReservation[]
   adjustments    InventoryAdjustment[]
+  transfersOut   InventoryTransfer[]   @relation("InventoryTransferSource")
+  transfersIn    InventoryTransfer[]   @relation("InventoryTransferDestination")
 
   @@unique([variantId, locationId, lotKey])
   @@index([variantId, locationId])
@@ -801,23 +969,27 @@ model InventoryItem {
 }
 
 model StockMovement {
-  id              String            @id @default(cuid()) @db.VarChar(30)
-  inventoryItemId String            @db.VarChar(30)
-  locationId      String            @db.VarChar(30)
-  batchId         String?           @db.VarChar(30)
-  type            StockMovementType
-  quantityDelta   Int
-  onHandAfter     Int
-  referenceType   String?           @db.VarChar(80)
-  referenceId     String?           @db.VarChar(30)
-  reasonCode      String?           @db.VarChar(80)
-  note            String?           @db.VarChar(1000)
-  actorUserId     String?           @db.VarChar(30)
-  requestId       String?           @db.VarChar(100)
-  occurredAt      DateTime          @default(now()) @db.DateTime(3)
-  inventoryItem   InventoryItem     @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
-  location        InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
-  batch           ProductBatch?     @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  id                 String             @id @default(cuid()) @db.VarChar(30)
+  inventoryItemId    String             @db.VarChar(30)
+  locationId         String             @db.VarChar(30)
+  batchId            String?            @db.VarChar(30)
+  type               StockMovementType
+  quantityDelta      Int
+  onHandAfter        Int
+  referenceType      String?            @db.VarChar(80)
+  referenceId        String?            @db.VarChar(30)
+  reasonCode         String?            @db.VarChar(80)
+  note               String?            @db.VarChar(1000)
+  actorUserId        String?            @db.VarChar(30)
+  requestId          String?            @db.VarChar(100)
+  idempotencyKeyHash String?            @unique @db.Char(64)
+  requestFingerprint String?            @db.Char(64)
+  occurredAt         DateTime           @default(now()) @db.DateTime(3)
+  inventoryItem      InventoryItem      @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  location           InventoryLocation  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  batch              ProductBatch?      @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  transferOut        InventoryTransfer? @relation("InventoryTransferSourceMovement")
+  transferIn         InventoryTransfer? @relation("InventoryTransferDestinationMovement")
 
   @@index([inventoryItemId, occurredAt])
   @@index([type, occurredAt])
@@ -859,7 +1031,11 @@ model InventoryAdjustment {
   status          InventoryAdjustmentStatus @default(PENDING_APPROVAL)
   requestedBy     String                    @db.VarChar(30)
   approvedBy      String?                   @db.VarChar(30)
+  decisionReason  String?                   @db.VarChar(500)
+  expectedVersion Int                       @default(1)
+  onHandBefore    Int                       @default(0)
   requestedAt     DateTime                  @default(now()) @db.DateTime(3)
+  expiresAt       DateTime?                 @db.DateTime(3)
   decidedAt       DateTime?                 @db.DateTime(3)
   appliedAt       DateTime?                 @db.DateTime(3)
   stockMovementId String?                   @unique @db.VarChar(30)
@@ -867,6 +1043,28 @@ model InventoryAdjustment {
 
   @@index([status, requestedAt])
   @@index([inventoryItemId, requestedAt])
+}
+
+model InventoryTransfer {
+  id                         String        @id @default(cuid()) @db.VarChar(30)
+  sourceInventoryItemId      String        @db.VarChar(30)
+  destinationInventoryItemId String        @db.VarChar(30)
+  quantity                   Int
+  idempotencyKeyHash         String        @unique @db.Char(64)
+  requestFingerprint         String        @db.Char(64)
+  requestedBy                String        @db.VarChar(30)
+  note                       String?       @db.VarChar(1000)
+  sourceMovementId           String        @unique @db.VarChar(30)
+  destinationMovementId      String        @unique @db.VarChar(30)
+  occurredAt                 DateTime      @default(now()) @db.DateTime(3)
+  sourceInventoryItem        InventoryItem @relation("InventoryTransferSource", fields: [sourceInventoryItemId], references: [id], onDelete: Restrict)
+  destinationInventoryItem   InventoryItem @relation("InventoryTransferDestination", fields: [destinationInventoryItemId], references: [id], onDelete: Restrict)
+  sourceMovement             StockMovement @relation("InventoryTransferSourceMovement", fields: [sourceMovementId], references: [id], onDelete: Restrict)
+  destinationMovement        StockMovement @relation("InventoryTransferDestinationMovement", fields: [destinationMovementId], references: [id], onDelete: Restrict)
+
+  @@index([sourceInventoryItemId, occurredAt])
+  @@index([destinationInventoryItemId, occurredAt])
+  @@index([occurredAt, id])
 }
 
 // Cart and Wishlist
@@ -1345,7 +1543,7 @@ model Order {
   promotionSnapshot                 Json?
   preferredDeliveryDate             DateTime?              @db.Date
   deliveryInstructions              String?                @db.VarChar(1000)
-  ageConfirmedAt                    DateTime               @db.DateTime(3)
+  ageConfirmedAt                    DateTime?              @db.DateTime(3)
   minimumAgeSnapshot                Int
   ageVerificationAtDeliveryRequired Boolean                @default(false)
   phoneConfirmationRequired         Boolean                @default(false)
@@ -1748,6 +1946,22 @@ model DeliveryManifestItem {
   @@index([deliveryId])
 }
 
+model DeliveryStatusImport {
+  id              String   @id @default(cuid()) @db.VarChar(30)
+  importKey       String   @db.VarChar(80)
+  dryRun          Boolean
+  payloadHash     String   @db.Char(64)
+  rowCount        Int
+  appliedCount    Int      @default(0)
+  result          Json
+  createdByUserId String   @db.VarChar(30)
+  createdAt       DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([importKey, dryRun])
+  @@index([createdByUserId, createdAt])
+  @@index([createdAt])
+}
+
 model ShippingLabel {
   id             String    @id @default(cuid()) @db.VarChar(30)
   deliveryId     String    @db.VarChar(30)
@@ -1816,24 +2030,26 @@ enum CashReconciliationEventType {
 }
 
 model CashCollection {
-  id                String               @id @default(cuid()) @db.VarChar(30)
-  orderId           String               @db.VarChar(30)
-  deliveryId        String?              @db.VarChar(30)
-  courierId         String?              @db.VarChar(30)
-  status            CashCollectionStatus @default(EXPECTED)
-  expectedMillimes  Int
-  collectedMillimes Int                  @default(0)
-  collectedByUserId String?              @db.VarChar(30)
-  collectedAt       DateTime?            @db.DateTime(3)
-  method            String               @default("CASH") @db.VarChar(40)
-  evidenceObjectKey String?              @db.VarChar(1024)
-  note              String?              @db.VarChar(1000)
-  createdAt         DateTime             @default(now()) @db.DateTime(3)
-  updatedAt         DateTime             @updatedAt @db.DateTime(3)
-  order             Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  delivery          Delivery?            @relation(fields: [deliveryId], references: [id], onDelete: Restrict)
-  courier           Courier?             @relation(fields: [courierId], references: [id], onDelete: Restrict)
-  remittanceItems   CashRemittanceItem[]
+  id                       String               @id @default(cuid()) @db.VarChar(30)
+  orderId                  String               @db.VarChar(30)
+  deliveryId               String?              @db.VarChar(30)
+  courierId                String?              @db.VarChar(30)
+  status                   CashCollectionStatus @default(EXPECTED)
+  expectedMillimes         Int
+  collectedMillimes        Int                  @default(0)
+  collectedByUserId        String?              @db.VarChar(30)
+  collectedAt              DateTime?            @db.DateTime(3)
+  method                   String               @default("CASH") @db.VarChar(40)
+  evidenceObjectKey        String?              @db.VarChar(1024)
+  note                     String?              @db.VarChar(1000)
+  recordIdempotencyKeyHash String?              @unique(map: "CashCollection_recordIdempotencyKeyHash_key") @db.Char(64)
+  recordRequestHash        String?              @db.Char(64)
+  createdAt                DateTime             @default(now()) @db.DateTime(3)
+  updatedAt                DateTime             @updatedAt @db.DateTime(3)
+  order                    Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  delivery                 Delivery?            @relation(fields: [deliveryId], references: [id], onDelete: Restrict)
+  courier                  Courier?             @relation(fields: [courierId], references: [id], onDelete: Restrict)
+  remittanceItems          CashRemittanceItem[]
 
   @@index([orderId, status])
   @@index([courierId, status, collectedAt])
@@ -2243,6 +2459,9 @@ enum NotificationEvent {
   DELIVERY_FAILED
   ORDER_CANCELLED
   RETURN_UPDATE
+  SECURITY_ALERT
+  LOW_STOCK_ALERT
+  ADMIN_ORDER_CREATED
 }
 
 model Notification {
@@ -2445,6 +2664,17 @@ enum BackgroundJobStatus {
   CANCELLED
 }
 
+enum OutboxEventStatus {
+  PENDING
+  LEASED
+  PUBLISHED
+  PROCESSING
+  RETRY
+  PROCESSED
+  DEAD_LETTER
+  CANCELLED
+}
+
 enum SystemHealthStatus {
   HEALTHY
   DEGRADED
@@ -2499,6 +2729,35 @@ model BackgroundJobRecord {
   @@unique([queue, externalJobId])
   @@index([queue, status, scheduledAt])
   @@index([status, nextRetryAt])
+}
+
+model OutboxEvent {
+  id               String            @id @default(cuid()) @db.VarChar(30)
+  deterministicKey String            @unique @db.VarChar(191)
+  aggregateType    String            @db.VarChar(80)
+  aggregateId      String            @db.VarChar(80)
+  eventType        String            @db.VarChar(120)
+  eventVersion     Int               @default(1)
+  payload          Json
+  status           OutboxEventStatus @default(PENDING)
+  availableAt      DateTime          @default(now()) @db.DateTime(3)
+  leaseOwner       String?           @db.VarChar(160)
+  leaseExpiresAt   DateTime?         @db.DateTime(3)
+  attemptCount     Int               @default(0)
+  maxAttempts      Int               @default(8)
+  lastAttemptAt    DateTime?         @db.DateTime(3)
+  publishedAt      DateTime?         @db.DateTime(3)
+  publishedJobId   String?           @db.VarChar(191)
+  processedAt      DateTime?         @db.DateTime(3)
+  deadLetteredAt   DateTime?         @db.DateTime(3)
+  safeErrorCode    String?           @db.VarChar(100)
+  createdAt        DateTime          @default(now()) @db.DateTime(3)
+  updatedAt        DateTime          @updatedAt @db.DateTime(3)
+
+  @@index([status, availableAt, id])
+  @@index([status, leaseExpiresAt])
+  @@index([aggregateType, aggregateId, createdAt])
+  @@index([eventType, createdAt])
 }
 
 model SystemHealthRecord {

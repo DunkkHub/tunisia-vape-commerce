@@ -1,10 +1,10 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Banknote, LockKeyhole, MapPin, ShieldCheck } from 'lucide-react';
-import { useRef } from 'react';
+import { useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { z } from 'zod';
 
 import { storefrontClient } from '../../api/storefront-client';
@@ -12,12 +12,22 @@ import type { CheckoutPayload } from '../../api/types';
 import { useStorefrontStatus } from '../../components/compliance/storefront-status-context';
 import { Button } from '../../components/ui/button';
 import { CheckboxField, FormField, SelectField } from '../../components/ui/form-field';
+import { Price } from '../../components/ui/price';
 
 function optionalText() {
   return z.string().trim().optional();
 }
 
-function checkoutSchema(t: (key: string) => string) {
+function checkoutSchema(
+  t: (key: string) => string,
+  requirements: {
+    age: boolean;
+    terms: boolean;
+    privacy: boolean;
+  },
+) {
+  const confirmation = (required: boolean, message: string) =>
+    required ? z.boolean().refine(Boolean, message) : z.boolean();
   return z.object({
     fullName: z.string().trim().min(2, t('validation.required')),
     phone: z
@@ -25,31 +35,38 @@ function checkoutSchema(t: (key: string) => string) {
       .trim()
       .regex(/^\+216[24579]\d{7}$/, t('validation.phone')),
     email: z.union([z.literal(''), z.email(t('validation.email'))]),
-    governorateId: z.string().min(1, t('validation.required')),
-    delegationId: z.string().min(1, t('validation.required')),
-    localityId: z.string().min(1, t('validation.required')),
-    postalCode: z.string().regex(/^\d{4}$/, t('validation.postalCode')),
-    street: z.string().trim().min(3, t('validation.required')),
+    governorateId: optionalText(),
+    delegationId: optionalText(),
+    localityId: optionalText(),
+    postalCode: z.union([z.literal(''), z.string().regex(/^\d{4}$/, t('validation.postalCode'))]),
+    street: optionalText(),
     building: optionalText(),
     floor: optionalText(),
     apartment: optionalText(),
     landmark: optionalText(),
     deliveryInstructions: optionalText(),
-    deliveryMethod: z.enum(['DELIVERY', 'PICKUP']),
-    preferredDeliveryDate: optionalText(),
-    preferredDeliveryTimeWindowId: optionalText(),
-    adultConfirmation: z.boolean().refine(Boolean, t('validation.adult')),
-    termsAccepted: z.boolean().refine(Boolean, t('validation.terms')),
-    privacyAccepted: z.boolean().refine(Boolean, t('validation.terms')),
+    deliveryMethodId: z.string().min(1, t('validation.required')),
+    adultConfirmation: confirmation(requirements.age, t('validation.adult')),
+    termsAccepted: confirmation(requirements.terms, t('validation.terms')),
+    privacyAccepted: confirmation(requirements.privacy, t('validation.terms')),
   });
 }
 
 export function CheckoutPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const status = useStorefrontStatus();
-  const idempotencyKey = useRef(globalThis.crypto.randomUUID());
-  const schema = checkoutSchema(t);
+  const [idempotency, setIdempotency] = useState({
+    key: globalThis.crypto.randomUUID(),
+    fingerprint: '',
+  });
+  const requirements = {
+    age: status.checkoutAgeConfirmationRequired ?? true,
+    terms: status.termsAcceptanceRequired ?? true,
+    privacy: status.privacyAcceptanceRequired ?? true,
+  };
+  const schema = checkoutSchema(t, requirements);
   type FormValues = z.input<typeof schema>;
   const {
     register,
@@ -57,19 +74,26 @@ export function CheckoutPage() {
     control,
     formState: { errors },
     setValue,
+    setError,
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      deliveryMethod: 'DELIVERY',
+      deliveryMethodId: '',
       adultConfirmation: false,
       termsAccepted: false,
       privacyAccepted: false,
       email: '',
+      governorateId: '',
+      delegationId: '',
+      localityId: '',
+      postalCode: '',
+      street: '',
     },
   });
   const governorateId = useWatch({ control, name: 'governorateId' }) ?? '';
   const delegationId = useWatch({ control, name: 'delegationId' }) ?? '';
   const localityId = useWatch({ control, name: 'localityId' }) ?? '';
+  const deliveryMethodId = useWatch({ control, name: 'deliveryMethodId' }) ?? '';
   const governorates = useQuery({
     queryKey: ['geography', 'governorates'],
     queryFn: storefrontClient.governorates,
@@ -84,15 +108,38 @@ export function CheckoutPage() {
     queryFn: () => storefrontClient.localities(delegationId),
     enabled: Boolean(delegationId),
   });
-  const windows = useQuery({
-    queryKey: ['delivery', 'windows', localityId],
-    queryFn: () => storefrontClient.deliveryWindows(localityId),
-    enabled: Boolean(localityId),
+  const cart = useQuery({ queryKey: ['cart'], queryFn: storefrontClient.cart });
+  const deliveryMethods = useQuery({
+    queryKey: ['delivery', 'methods', localityId],
+    queryFn: () => storefrontClient.deliveryMethods(localityId || undefined),
+  });
+  const selectedMethod = deliveryMethods.data?.find((method) => method.id === deliveryMethodId);
+  const quoteItems =
+    cart.data?.items.map((item) => ({ variantId: item.variant!.id, quantity: item.quantity })) ??
+    [];
+  const quoteInput = selectedMethod
+    ? {
+        items: quoteItems,
+        ...(selectedMethod.type === 'COURIER'
+          ? { localityId }
+          : { pickupLocationId: selectedMethod.id }),
+      }
+    : null;
+  const quote = useQuery({
+    queryKey: ['checkout', 'quote', quoteInput],
+    queryFn: () => storefrontClient.checkoutQuote(quoteInput!),
+    enabled:
+      quoteItems.length > 0 &&
+      Boolean(selectedMethod) &&
+      (selectedMethod?.type !== 'COURIER' || Boolean(localityId)),
+    retry: false,
   });
   const checkoutMutation = useMutation({
-    mutationFn: (payload: CheckoutPayload) =>
-      storefrontClient.checkout(payload, idempotencyKey.current),
+    mutationFn: ({ payload, key }: { payload: CheckoutPayload; key: string }) =>
+      storefrontClient.checkout(payload, key),
     onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ['cart'] });
+      void queryClient.invalidateQueries({ queryKey: ['cart', 'summary'] });
       void navigate(`/order-confirmation/${encodeURIComponent(result.orderNumber)}`, {
         replace: true,
         state: result,
@@ -101,18 +148,70 @@ export function CheckoutPage() {
   });
 
   const placeOrder = handleSubmit((values) => {
-    if (!status.checkoutEnabled || !status.legalReviewCompleted) return;
+    if (!status.checkoutEnabled) return;
+    if (!selectedMethod || !quote.data || quoteItems.length === 0) return;
     const parsed = schema.parse(values);
+    if (selectedMethod.type === 'COURIER') {
+      if (!parsed.governorateId) setError('governorateId', { message: t('validation.required') });
+      if (!parsed.delegationId) setError('delegationId', { message: t('validation.required') });
+      if (!parsed.localityId) setError('localityId', { message: t('validation.required') });
+      if (!parsed.postalCode) setError('postalCode', { message: t('validation.required') });
+      if (!parsed.street || parsed.street.length < 3) {
+        setError('street', { message: t('validation.required') });
+      }
+      if (
+        !parsed.governorateId ||
+        !parsed.delegationId ||
+        !parsed.localityId ||
+        !parsed.postalCode ||
+        !parsed.street ||
+        parsed.street.length < 3
+      ) {
+        return;
+      }
+    }
     const payload: CheckoutPayload = {
-      ...parsed,
+      items: quoteItems,
+      ...(selectedMethod.type === 'COURIER'
+        ? { localityId: parsed.localityId }
+        : { pickupLocationId: selectedMethod.id }),
+      customerName: parsed.fullName,
+      phone: parsed.phone,
       email: parsed.email || undefined,
-      adultConfirmation: true,
-      termsAccepted: true,
-      privacyAccepted: true,
+      ...(selectedMethod.type === 'COURIER'
+        ? {
+            address: {
+              street: parsed.street!,
+              postalCode: parsed.postalCode || undefined,
+              building: parsed.building || undefined,
+              floor: parsed.floor || undefined,
+              apartment: parsed.apartment || undefined,
+              landmark: parsed.landmark || undefined,
+              instructions: parsed.deliveryInstructions || undefined,
+            },
+          }
+        : {}),
+      consent: {
+        ageConfirmed: parsed.adultConfirmation,
+        termsAccepted: parsed.termsAccepted,
+        privacyAccepted: parsed.privacyAccepted,
+      },
     };
-    checkoutMutation.mutate(payload);
+    const fingerprint = JSON.stringify(payload);
+    let key = idempotency.key;
+    if (!idempotency.fingerprint) {
+      setIdempotency({ key, fingerprint });
+    } else if (idempotency.fingerprint !== fingerprint) {
+      key = globalThis.crypto.randomUUID();
+      setIdempotency({ key, fingerprint });
+    }
+    checkoutMutation.mutate({ payload, key });
   });
-  const allowed = status.checkoutEnabled && status.legalReviewCompleted;
+  const allowed =
+    status.checkoutEnabled &&
+    quoteItems.length > 0 &&
+    Boolean(selectedMethod) &&
+    Boolean(quote.data);
 
   return (
     <div className="checkout-page container page-pad">
@@ -173,6 +272,7 @@ export function CheckoutPage() {
                   onChange: () => {
                     setValue('delegationId', '');
                     setValue('localityId', '');
+                    setValue('deliveryMethodId', '');
                   },
                 })}
               >
@@ -187,7 +287,12 @@ export function CheckoutPage() {
                 label={t('checkout.delegation')}
                 disabled={!governorateId}
                 error={errors.delegationId?.message}
-                {...register('delegationId', { onChange: () => setValue('localityId', '') })}
+                {...register('delegationId', {
+                  onChange: () => {
+                    setValue('localityId', '');
+                    setValue('deliveryMethodId', '');
+                  },
+                })}
               >
                 <option value="">—</option>
                 {delegations.data?.map((item) => (
@@ -200,7 +305,9 @@ export function CheckoutPage() {
                 label={t('checkout.locality')}
                 disabled={!delegationId}
                 error={errors.localityId?.message}
-                {...register('localityId')}
+                {...register('localityId', {
+                  onChange: () => setValue('deliveryMethodId', ''),
+                })}
               >
                 <option value="">—</option>
                 {localities.data
@@ -240,52 +347,65 @@ export function CheckoutPage() {
           <fieldset>
             <legend>{t('checkout.preferences')}</legend>
             <div className="field-grid">
-              <SelectField label={t('checkout.method')} {...register('deliveryMethod')}>
-                <option value="DELIVERY">{t('checkout.deliveryMethod')}</option>
-                <option value="PICKUP">{t('checkout.pickupMethod')}</option>
-              </SelectField>
-              <FormField
-                label={t('checkout.date')}
-                type="date"
-                {...register('preferredDeliveryDate')}
-              />
               <SelectField
-                label={t('checkout.timeWindow')}
-                disabled={!localityId}
-                {...register('preferredDeliveryTimeWindowId')}
+                label={t('checkout.method')}
+                error={errors.deliveryMethodId?.message}
+                {...register('deliveryMethodId')}
               >
                 <option value="">—</option>
-                {windows.data?.map((window) => (
-                  <option key={window.id} value={window.id}>
-                    {window.label}
+                {deliveryMethods.data?.map((method) => (
+                  <option key={method.id} value={method.id}>
+                    {method.label} —{' '}
+                    {method.type === 'COURIER'
+                      ? t('checkout.deliveryMethod')
+                      : t('checkout.pickupMethod')}
                   </option>
                 ))}
               </SelectField>
             </div>
           </fieldset>
-          <fieldset>
-            <legend>
-              <ShieldCheck aria-hidden="true" size={19} />
-              {t('checkout.consent')}
-            </legend>
-            <div className="consent-list">
-              <CheckboxField
-                label={t('checkout.adult')}
-                error={errors.adultConfirmation?.message}
-                {...register('adultConfirmation')}
-              />
-              <CheckboxField
-                label={t('checkout.terms')}
-                error={errors.termsAccepted?.message}
-                {...register('termsAccepted')}
-              />
-              <CheckboxField
-                label={t('checkout.privacy')}
-                error={errors.privacyAccepted?.message}
-                {...register('privacyAccepted')}
-              />
-            </div>
-          </fieldset>
+          {requirements.age || requirements.terms || requirements.privacy ? (
+            <fieldset>
+              <legend>
+                <ShieldCheck aria-hidden="true" size={19} />
+                {t('checkout.consent')}
+              </legend>
+              <div className="consent-list">
+                {requirements.age ? (
+                  <CheckboxField
+                    label={t('checkout.adult')}
+                    error={errors.adultConfirmation?.message}
+                    {...register('adultConfirmation')}
+                  />
+                ) : null}
+                {requirements.terms ? (
+                  <CheckboxField
+                    label={t('checkout.terms')}
+                    error={errors.termsAccepted?.message}
+                    {...register('termsAccepted')}
+                  />
+                ) : null}
+                {requirements.privacy ? (
+                  <CheckboxField
+                    label={t('checkout.privacy')}
+                    error={errors.privacyAccepted?.message}
+                    {...register('privacyAccepted')}
+                  />
+                ) : null}
+                {(requirements.terms || requirements.privacy) && (
+                  <p className="consent-list__links">
+                    {requirements.terms ? (
+                      <Link to="/legal/terms">{t('checkout.terms')}</Link>
+                    ) : null}
+                    {requirements.terms && requirements.privacy ? ' · ' : null}
+                    {requirements.privacy ? (
+                      <Link to="/legal/privacy">{t('checkout.privacy')}</Link>
+                    ) : null}
+                  </p>
+                )}
+              </div>
+            </fieldset>
+          ) : null}
         </div>
         <aside className="checkout-summary">
           <h2>{t('checkout.summary')}</h2>
@@ -293,6 +413,33 @@ export function CheckoutPage() {
             <ShieldCheck aria-hidden="true" />
             {t('checkout.serverNote')}
           </p>
+          {quote.data ? (
+            <dl>
+              <div>
+                <dt>{t('cart.subtotal')}</dt>
+                <dd>
+                  <Price millimes={quote.data.subtotalMillimes} />
+                </dd>
+              </div>
+              <div>
+                <dt>{t('checkout.deliveryMethod')}</dt>
+                <dd>
+                  <Price millimes={quote.data.deliveryTotalMillimes} />
+                </dd>
+              </div>
+              <div>
+                <dt>{t('checkout.summary')}</dt>
+                <dd>
+                  <Price millimes={quote.data.grandTotalMillimes} />
+                </dd>
+              </div>
+            </dl>
+          ) : null}
+          {quote.isError ? (
+            <p className="form-banner form-banner--error" role="alert">
+              {t('checkout.quoteFailed')}
+            </p>
+          ) : null}
           {checkoutMutation.isError ? (
             <p className="form-banner form-banner--error" role="alert">
               {t('checkout.orderFailed')}

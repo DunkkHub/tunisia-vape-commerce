@@ -65,7 +65,7 @@ describe('AdminCommerceReadsService', () => {
     expect(input.where.OR[0]).toEqual({ orderNumber: { contains: 'CMD 0001' } });
   });
 
-  it('returns only the minimized customer table contract', async () => {
+  it('returns only the bounded customer-management table contract', async () => {
     const findMany = vi.fn().mockResolvedValue([
       {
         id: 'customer-1',
@@ -73,7 +73,15 @@ describe('AdminCommerceReadsService', () => {
         lastName: 'Trabelsi',
         phoneE164: '+21620111222',
         createdAt: new Date('2026-07-11T08:00:00.000Z'),
-        user: { status: 'ACTIVE' as const },
+        suspendedAt: null,
+        suspensionReason: null,
+        version: 2,
+        user: {
+          id: 'customer-user-1',
+          email: 'sami@example.test',
+          status: 'ACTIVE' as const,
+          version: 3,
+        },
       },
     ]);
     const prisma = {
@@ -89,9 +97,15 @@ describe('AdminCommerceReadsService', () => {
         items: [
           {
             id: 'customer-1',
+            userId: 'customer-user-1',
             fullName: 'Sami Trabelsi',
             normalizedPhone: '+21620111222',
+            email: 'sami@example.test',
             status: 'ACTIVE',
+            suspendedAt: null,
+            suspensionReason: null,
+            userVersion: 3,
+            profileVersion: 2,
             createdAt: '2026-07-11T08:00:00.000Z',
           },
         ],

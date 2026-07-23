@@ -8,11 +8,13 @@ const permissions = [
   'products.update',
   'products.archive',
   'products.delete',
+  'catalog.import',
   'categories.manage',
   'brands.manage',
   'suppliers.manage',
   'inventory.read',
   'inventory.adjust',
+  'inventory.approve',
   'inventory.transfer',
   'orders.read',
   'orders.create',
@@ -77,6 +79,7 @@ const roleDefinitions: ReadonlyArray<{
       'products.create',
       'products.update',
       'products.archive',
+      'catalog.import',
       'categories.manage',
       'brands.manage',
       'suppliers.manage',
@@ -87,7 +90,13 @@ const roleDefinitions: ReadonlyArray<{
     key: 'inventory-manager',
     name: 'Inventory Manager',
     description: 'Inventory visibility, approved adjustments, and transfers.',
-    permissions: ['products.read', 'inventory.read', 'inventory.adjust', 'inventory.transfer'],
+    permissions: [
+      'products.read',
+      'inventory.read',
+      'inventory.adjust',
+      'inventory.approve',
+      'inventory.transfer',
+    ],
   },
   {
     key: 'order-manager',
@@ -132,6 +141,7 @@ const roleDefinitions: ReadonlyArray<{
       'deliveries.update',
       'couriers.manage',
       'cash.read',
+      'reports.export',
     ],
   },
   {
@@ -196,8 +206,8 @@ const storeSettings = [
   {
     key: 'checkout.enabled',
     valueType: SettingValueType.BOOLEAN,
-    value: false,
-    description: 'Global checkout kill switch. Disabled by default.',
+    value: true,
+    description: 'Global checkout kill switch. Operational prerequisites still fail closed.',
   },
   {
     key: 'maintenance.mode',
@@ -208,8 +218,8 @@ const storeSettings = [
   {
     key: 'prelaunch.mode',
     valueType: SettingValueType.BOOLEAN,
-    value: true,
-    description: 'Keeps the public store in pre-launch mode until explicitly disabled.',
+    value: false,
+    description: 'Keeps the public store in pre-launch mode when explicitly enabled.',
   },
   {
     key: 'store.name',
@@ -253,20 +263,90 @@ const storeSettings = [
     value: 'fr',
     description: 'Default public locale.',
   },
+  {
+    key: 'notifications.admin_order_created.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Queues an internal administrator notification when an order is created.',
+  },
+  {
+    key: 'notifications.customer_order_created.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Queues a customer order-received notification for the configured adapter.',
+  },
+  {
+    key: 'notifications.customer_order_sms.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: false,
+    description:
+      'Adds SMS to customer order lifecycle notifications. Keep disabled until an SMS provider is configured.',
+  },
+  {
+    key: 'notifications.security_alert_email',
+    valueType: SettingValueType.STRING,
+    value: '',
+    description:
+      'Recipient for coalesced security alerts. Empty disables security-alert email without affecting security event recording.',
+  },
+  {
+    key: 'notifications.order_alert_email',
+    valueType: SettingValueType.STRING,
+    value: '',
+    description:
+      'Recipient for internal new-order alerts. Empty disables internal email without affecting customer order receipts.',
+  },
+  {
+    key: 'notifications.low_stock_alert_email',
+    valueType: SettingValueType.STRING,
+    value: '',
+    description:
+      'Recipient for coalesced low-stock alerts. Empty disables email while dashboard low-stock reporting remains available.',
+  },
+  {
+    key: 'notifications.operational_alert_locale',
+    valueType: SettingValueType.STRING,
+    value: 'fr',
+    description: 'French or Arabic locale for internal security and inventory alert email.',
+  },
 ] as const;
 
 const complianceSettings = [
   {
-    key: 'legal_review.completed',
-    valueType: SettingValueType.BOOLEAN,
-    value: false,
-    description: 'Must be explicitly enabled after documented qualified legal review.',
-  },
-  {
     key: 'minimum_purchase_age',
     valueType: SettingValueType.INTEGER,
-    value: 0,
-    description: 'Zero means unconfigured and must block checkout.',
+    value: 18,
+    description: 'Operator-configured minimum purchase age; the software default is 18.',
+  },
+  {
+    key: 'age_gate.entry.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Shows and enforces the storefront entry age confirmation when enabled.',
+  },
+  {
+    key: 'age_gate.checkout.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Requires an explicit age confirmation during checkout when enabled.',
+  },
+  {
+    key: 'consent.terms.required',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Requires the operator-configured terms confirmation when enabled.',
+  },
+  {
+    key: 'consent.privacy.required',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Requires the operator-configured privacy confirmation when enabled.',
+  },
+  {
+    key: 'consent.recording.enabled',
+    valueType: SettingValueType.BOOLEAN,
+    value: true,
+    description: 'Records enabled customer confirmations and their request evidence.',
   },
   {
     key: 'delivery.age_verification_required',
@@ -286,7 +366,7 @@ const featureFlags = [
   {
     key: 'guest_checkout',
     enabled: false,
-    description: 'Guest checkout remains disabled until checkout and legal gates pass.',
+    description: 'Guest checkout remains disabled until its operational flow is configured.',
   },
   {
     key: 'manual_delivery_quotes',

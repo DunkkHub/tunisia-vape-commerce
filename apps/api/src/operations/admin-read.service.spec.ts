@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import type { Request } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaService } from '../database/prisma.service';
 import { AdminReadService } from './admin-read.service';
@@ -16,6 +17,7 @@ describe('AdminReadService inventory', () => {
         lowStockThreshold: 4,
         publicationStatus: 'PUBLISHED',
         updatedAt: new Date('2026-07-12T12:00:00.000Z'),
+        flavor: null,
         product: {
           id: 'product-1',
           nameFr: 'Menthe fraîche',
@@ -104,6 +106,7 @@ describe('AdminReadService inventory', () => {
       [
         {
           select: {
+            flavor: { select: { canonicalName: true } };
             inventoryItems: {
               where: { OR: unknown[] };
               select: { reservations: { where: unknown } };
@@ -113,8 +116,10 @@ describe('AdminReadService inventory', () => {
       ]
     >;
     const select = findManyCalls[0]?.[0].select as {
+      flavor: { select: { canonicalName: boolean } };
       inventoryItems: { where: { OR: unknown[] }; select: { reservations: { where: unknown } } };
     };
+    expect(select.flavor).toEqual({ select: { canonicalName: true } });
     expect(select.inventoryItems.where.OR[0]).toEqual({ batchId: null });
     const eligibleBatch = select.inventoryItems.where.OR[1] as {
       batch: { is: { archivedAt: null; OR: unknown[] } };
@@ -133,6 +138,206 @@ describe('AdminReadService inventory', () => {
     expect(sql.sql).toContain('batch.expiryDate');
     expect(sql.values).toContain('marque-a');
     expect(sql.values).toContain('E_LIQUID');
+  });
+
+  it('uses an imported variant flavor relation for filtering, search, rows, and grouped stock', async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: 'variant-imported-1',
+        sku: 'WOTOFO-ICE-1',
+        nameFr: 'Framboise bleue glacée',
+        nameAr: 'توت أزرق مثلج',
+        lowStockThreshold: 2,
+        publicationStatus: 'DRAFT',
+        updatedAt: new Date('2026-07-20T12:00:00.000Z'),
+        flavor: { canonicalName: 'Blue Razz Ice' },
+        product: {
+          id: 'product-imported-1',
+          nameFr: 'Wotofo NexPOD',
+          nameAr: 'ووتوفو نكسبود',
+          productType: 'POD',
+          flavor: null,
+          publicationStatus: 'DRAFT',
+          brand: { id: 'brand-wotofo', name: 'Wotofo', slug: 'wotofo' },
+        },
+        inventoryItems: [{ onHandQuantity: 9, reservations: [{ quantity: 2 }] }],
+      },
+    ]);
+    const count = vi.fn().mockResolvedValue(1);
+    const queryRaw = vi.fn().mockResolvedValue([
+      {
+        brandId: 'brand-wotofo',
+        brandName: 'Wotofo',
+        productType: 'POD',
+        flavor: 'Blue Razz Ice',
+        onHandQuantity: 9n,
+        reservedQuantity: 2n,
+      },
+    ]);
+    const prisma = {
+      productVariant: { findMany, count },
+      $queryRaw: queryRaw,
+      $transaction: transaction,
+    } as unknown as PrismaService;
+    const service = new AdminReadService(prisma);
+
+    const result = await service.inventory(
+      {
+        page: 1,
+        limit: 20,
+        q: 'Framboise',
+        brand: 'wotofo',
+        productType: 'POD',
+        flavor: 'blue-razz-ice',
+      },
+      'fr',
+    );
+
+    expect(result.data.items[0]).toMatchObject({
+      id: 'variant-imported-1',
+      flavor: 'Blue Razz Ice',
+      onHandQuantity: 9,
+      reservedQuantity: 2,
+      remainingQuantity: 7,
+    });
+    expect(result.data.grouping.byFlavor).toEqual([
+      {
+        flavor: 'Blue Razz Ice',
+        onHandQuantity: 9,
+        reservedQuantity: 2,
+        remainingQuantity: 7,
+      },
+    ]);
+
+    const findManyCalls = findMany.mock.calls as unknown as Array<
+      [
+        {
+          where: {
+            AND: Array<{ OR: Array<Record<string, unknown>> }>;
+          };
+        },
+      ]
+    >;
+    const filters = findManyCalls[0]?.[0].where.AND ?? [];
+    expect(filters[0]).toEqual({
+      OR: [
+        {
+          flavor: {
+            is: {
+              OR: [
+                { canonicalName: { equals: 'blue-razz-ice' } },
+                { slug: { equals: 'blue-razz-ice' } },
+                { nameFr: { equals: 'blue-razz-ice' } },
+                { nameAr: { equals: 'blue-razz-ice' } },
+              ],
+            },
+          },
+        },
+        {
+          AND: [{ flavorId: null }, { product: { is: { flavor: { equals: 'blue-razz-ice' } } } }],
+        },
+      ],
+    });
+    expect(filters[1]?.OR).toContainEqual({
+      flavor: {
+        is: {
+          OR: [
+            { canonicalName: { contains: 'Framboise' } },
+            { slug: { contains: 'Framboise' } },
+            { nameFr: { contains: 'Framboise' } },
+            { nameAr: { contains: 'Framboise' } },
+          ],
+        },
+      },
+    });
+    expect(filters[1]?.OR).toContainEqual({
+      AND: [{ flavorId: null }, { product: { is: { flavor: { contains: 'Framboise' } } } }],
+    });
+
+    const queryRawCalls = queryRaw.mock.calls as unknown as Array<[Prisma.Sql]>;
+    const sql = queryRawCalls[0]?.[0] as Prisma.Sql;
+    expect(sql.sql).toContain('LEFT JOIN Flavor AS flavorRecord');
+    expect(sql.sql).toContain('flavorRecord.canonicalName');
+    expect(sql.sql).toContain('variant.flavorId IS NULL AND p.flavor');
+    expect(sql.values).toContain('blue-razz-ice');
+    expect(sql.values).toContain('Framboise');
+  });
+
+  it('exports relational flavors first and retains product flavor for legacy variants', async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: 'variant-imported-1',
+        sku: 'WOTOFO-ICE-1',
+        nameFr: 'Framboise bleue glacée',
+        nameAr: 'توت أزرق مثلج',
+        lowStockThreshold: 2,
+        publicationStatus: 'DRAFT',
+        updatedAt: new Date('2026-07-20T12:00:00.000Z'),
+        flavor: { canonicalName: 'Blue Razz Ice' },
+        product: {
+          id: 'product-imported-1',
+          nameFr: 'Wotofo NexPOD',
+          nameAr: 'ووتوفو نكسبود',
+          productType: 'POD',
+          flavor: 'Legacy value must not win',
+          publicationStatus: 'DRAFT',
+          brand: { id: 'brand-wotofo', name: 'Wotofo', slug: 'wotofo' },
+        },
+        inventoryItems: [{ onHandQuantity: 9, reservations: [{ quantity: 2 }] }],
+      },
+      {
+        id: 'variant-legacy-1',
+        sku: 'LEGACY-MINT-1',
+        nameFr: 'Menthe classique',
+        nameAr: 'نعناع كلاسيكي',
+        lowStockThreshold: 1,
+        publicationStatus: 'PUBLISHED',
+        updatedAt: new Date('2026-07-19T12:00:00.000Z'),
+        flavor: null,
+        product: {
+          id: 'product-legacy-1',
+          nameFr: 'Produit historique',
+          nameAr: 'منتج قديم',
+          productType: 'E_LIQUID',
+          flavor: 'Classic Mint',
+          publicationStatus: 'PUBLISHED',
+          brand: null,
+        },
+        inventoryItems: [{ onHandQuantity: 3, reservations: [] }],
+      },
+    ]);
+    const auditCreate = vi.fn().mockResolvedValue({ id: 'audit-export-1' });
+    const interactiveTransaction = vi.fn(
+      async (
+        callback: (transactionClient: {
+          productVariant: { findMany: typeof findMany };
+          auditLog: { create: typeof auditCreate };
+        }) => Promise<unknown>,
+      ) => callback({ productVariant: { findMany }, auditLog: { create: auditCreate } }),
+    );
+    const prisma = {
+      $transaction: interactiveTransaction,
+    } as unknown as PrismaService;
+    const service = new AdminReadService(prisma);
+    const request = {
+      auth: { userId: 'admin-1' },
+      requestId: 'request-relational-export',
+      ip: '127.0.0.1',
+      socket: { remoteAddress: '127.0.0.1' },
+      get: vi.fn().mockReturnValue('vitest'),
+    } as unknown as Request;
+
+    const result = await service.exportInventory({ page: 1, limit: 20 }, 'fr', request);
+
+    expect(result.rowCount).toBe(2);
+    expect(result.csv).toContain(',Blue Razz Ice,');
+    expect(result.csv).toContain(',Classic Mint,');
+    expect(result.csv).not.toContain('Legacy value must not win');
+    const auditCalls = auditCreate.mock.calls as unknown as Array<
+      [{ data: { action: string; afterSummary: { rowCount: number } } }]
+    >;
+    expect(auditCalls[0]?.[0].data.action).toBe('inventory.csv_exported');
+    expect(auditCalls[0]?.[0].data.afterSummary.rowCount).toBe(2);
   });
 });
 

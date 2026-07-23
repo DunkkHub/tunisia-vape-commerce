@@ -5,16 +5,23 @@ import type {
   CatalogFacets,
   CategorySummary,
   CheckoutPayload,
+  CheckoutQuote,
+  CheckoutQuoteRequest,
   CheckoutResult,
+  DeliveryMethodOption,
   DeliveryWindowOption,
   GeographyOption,
   LegalDocument,
+  CreateCustomerAddressPayload,
+  CustomerOrderDetail,
   OrderSummary,
   Pagination,
   ProductDetail,
   ProductSummary,
   StoreContent,
   StorefrontStatus,
+  UpdateCustomerAddressPayload,
+  WishlistMutationResult,
 } from './types';
 
 function storeRequest<T>(path: string, init?: RequestInit) {
@@ -55,6 +62,11 @@ export const storefrontClient = {
       headers: { 'Idempotency-Key': idempotencyKey },
       body: jsonBody(payload),
     }),
+  checkoutQuote: (payload: CheckoutQuoteRequest) =>
+    storeRequest<CheckoutQuote>('/checkout/quote', {
+      method: 'POST',
+      body: jsonBody(payload),
+    }),
   governorates: () => storeRequest<GeographyOption[]>('/geography/governorates'),
   delegations: (governorateId: string) =>
     storeRequest<GeographyOption[]>(
@@ -68,11 +80,49 @@ export const storefrontClient = {
     storeRequest<DeliveryWindowOption[]>(
       `/delivery/windows?localityId=${encodeURIComponent(localityId)}`,
     ),
-  orders: () => storeRequest<Pagination<OrderSummary>>('/customers/me/orders'),
+  deliveryMethods: (localityId?: string) =>
+    storeRequest<DeliveryMethodOption[]>(
+      `/delivery/methods${localityId ? `?localityId=${encodeURIComponent(localityId)}` : ''}`,
+    ),
+  orders: () => storeRequest<Pagination<OrderSummary>>('/orders'),
   order: (orderNumber: string) =>
-    storeRequest<OrderSummary>(`/customers/me/orders/${encodeURIComponent(orderNumber)}`),
+    storeRequest<CustomerOrderDetail>(`/orders/${encodeURIComponent(orderNumber)}`),
+  cancelOrder: (orderNumber: string, expectedVersion: number, reason: string) =>
+    storeRequest<CustomerOrderDetail>(`/orders/${encodeURIComponent(orderNumber)}/cancel`, {
+      method: 'POST',
+      body: jsonBody({
+        expectedVersion,
+        confirmed: true,
+        confirmation: 'CANCEL_ORDER',
+        reason,
+      }),
+    }),
   addresses: () => storeRequest<AddressSummary[]>('/customers/me/addresses'),
+  createAddress: (payload: CreateCustomerAddressPayload) =>
+    storeRequest<AddressSummary>('/customers/me/addresses', {
+      method: 'POST',
+      body: jsonBody(payload),
+    }),
+  updateAddress: (addressId: string, payload: UpdateCustomerAddressPayload) =>
+    storeRequest<AddressSummary>(`/customers/me/addresses/${encodeURIComponent(addressId)}`, {
+      method: 'PATCH',
+      body: jsonBody(payload),
+    }),
+  deleteAddress: (addressId: string, expectedVersion: number) =>
+    storeRequest<{ id: string; deleted: true }>(
+      `/customers/me/addresses/${encodeURIComponent(addressId)}?expectedVersion=${expectedVersion}`,
+      { method: 'DELETE' },
+    ),
   wishlist: () => storeRequest<Pagination<ProductSummary>>('/wishlist'),
+  addWishlistItem: (variantId: string) =>
+    storeRequest<WishlistMutationResult>('/wishlist/items', {
+      method: 'POST',
+      body: jsonBody({ variantId }),
+    }),
+  removeWishlistItem: (variantId: string) =>
+    storeRequest<WishlistMutationResult>(`/wishlist/items/${encodeURIComponent(variantId)}`, {
+      method: 'DELETE',
+    }),
   legal: (slug: string) =>
     storeRequest<LegalDocument>(`/legal/documents/${encodeURIComponent(slug)}`),
   content: (slug: string) =>

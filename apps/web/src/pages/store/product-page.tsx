@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Check, Minus, Plus, ShieldAlert, Truck } from 'lucide-react';
+import { ArrowLeft, Check, Heart, Minus, Plus, ShieldAlert, Truck } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 
+import { ApiError } from '../../api/http';
 import { storefrontClient } from '../../api/storefront-client';
+import { useCustomerAuth } from '../../auth/customer-auth-context';
 import { Button } from '../../components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
 import { Price } from '../../components/ui/price';
@@ -12,6 +14,9 @@ import { Price } from '../../components/ui/price';
 export function ProductPage() {
   const { slug = '' } = useParams();
   const { t } = useTranslation();
+  const { user, isLoading: authLoading } = useCustomerAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const [quantity, setQuantity] = useState(1);
   const productQuery = useQuery({
@@ -20,7 +25,13 @@ export function ProductPage() {
     retry: false,
   });
   const [variantId, setVariantId] = useState('');
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const product = productQuery.data;
+  const wishlistQuery = useQuery({
+    queryKey: ['customer', 'wishlist'],
+    queryFn: storefrontClient.wishlist,
+    enabled: Boolean(user) && !authLoading,
+  });
 
   const defaultVariantId =
     product?.variants.find((variant) => variant.availableQuantity > 0)?.id ??
@@ -33,6 +44,25 @@ export function ProductPage() {
     () => product?.variants.find((variant) => variant.id === activeVariantId),
     [activeVariantId, product],
   );
+  const galleryImages = useMemo(() => {
+    if (!product) return [];
+
+    const images = [...product.images];
+    if (product.primaryImage) images.push(product.primaryImage);
+    if (selectedVariant?.image) images.unshift(selectedVariant.image);
+
+    return images.filter(
+      (image, index, candidates) =>
+        candidates.findIndex((candidate) => candidate.id === image.id) === index,
+    );
+  }, [product, selectedVariant]);
+  const selectedGalleryImage = galleryImages.find((image) => image.id === selectedImageId);
+  const activeImage =
+    selectedGalleryImage ??
+    selectedVariant?.image ??
+    product?.images[0] ??
+    product?.primaryImage ??
+    null;
   const available = selectedVariant?.availableQuantity ?? product?.availableQuantity ?? 0;
   const price =
     selectedVariant?.promotionalPriceMillimes ??
@@ -48,6 +78,33 @@ export function ProductPage() {
     onSuccess: (cart) => {
       queryClient.setQueryData(['cart'], cart);
       queryClient.setQueryData(['cart', 'summary'], { itemCount: cart.itemCount });
+    },
+  });
+  const savedToWishlist =
+    product !== undefined &&
+    wishlistQuery.data?.items.some((wishlistProduct) => wishlistProduct.id === product.id) === true;
+  const wishlistMutation = useMutation({
+    mutationFn: async () => {
+      if (!product || !activeVariantId) throw new Error(t('product.selectVariant'));
+      if (!savedToWishlist) return storefrontClient.addWishlistItem(activeVariantId);
+      const variantIds = [
+        activeVariantId,
+        ...product.variants
+          .map((variant) => variant.id)
+          .filter((candidate) => candidate !== activeVariantId),
+      ];
+      for (const candidate of variantIds) {
+        try {
+          return await storefrontClient.removeWishlistItem(candidate);
+        } catch (error) {
+          if (error instanceof ApiError && error.code === 'WISHLIST_ITEM_NOT_FOUND') continue;
+          throw error;
+        }
+      }
+      return { variantId: '', productId: product.id, saved: false as const };
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['customer', 'wishlist'] });
     },
   });
 
@@ -75,14 +132,14 @@ export function ProductPage() {
       </Link>
       <div className="product-detail">
         <div className="product-gallery">
-          {product.images[0] ? (
+          {activeImage ? (
             <img
-              src={product.images[0].url}
-              alt={
-                product.images[0].altText ?? t('product.imageAltFallback', { name: product.name })
-              }
-              width={900}
-              height={900}
+              className="product-gallery__main"
+              src={activeImage.url}
+              alt={activeImage.altText ?? t('product.imageAltFallback', { name: product.name })}
+              width={activeImage.width ?? 900}
+              height={activeImage.height ?? 900}
+              decoding="async"
             />
           ) : (
             <span className="product-gallery__placeholder" aria-hidden="true">
@@ -90,18 +147,35 @@ export function ProductPage() {
               <i />
             </span>
           )}
-          {product.images.length > 1 ? (
-            <div className="product-thumbs">
-              {product.images.slice(1, 5).map((image) => (
-                <img
-                  key={image.id}
-                  src={image.url}
-                  alt={image.altText ?? ''}
-                  width={120}
-                  height={120}
-                  loading="lazy"
-                />
-              ))}
+          {galleryImages.length > 1 ? (
+            <div
+              className="product-thumbs"
+              role="group"
+              aria-label={t('product.imageAltFallback', { name: product.name })}
+            >
+              {galleryImages.slice(0, 5).map((image, index) => {
+                const imageLabel =
+                  image.altText ?? t('product.imageAltFallback', { name: product.name });
+                return (
+                  <button
+                    key={image.id}
+                    className="product-thumb"
+                    type="button"
+                    aria-label={`${imageLabel} (${index + 1}/${Math.min(galleryImages.length, 5)})`}
+                    aria-pressed={image.id === activeImage?.id}
+                    onClick={() => setSelectedImageId(image.id)}
+                  >
+                    <img
+                      src={image.url}
+                      alt=""
+                      width={image.width ?? 120}
+                      height={image.height ?? 120}
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  </button>
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -137,7 +211,10 @@ export function ProductPage() {
                       value={variant.id}
                       checked={variant.id === activeVariantId}
                       disabled={variant.availableQuantity <= 0}
-                      onChange={() => setVariantId(variant.id)}
+                      onChange={() => {
+                        setVariantId(variant.id);
+                        setSelectedImageId(null);
+                      }}
                     />
                     <span>{variant.name}</span>
                   </label>
@@ -166,20 +243,60 @@ export function ProductPage() {
             </div>
             <Button
               type="button"
-              disabled={available <= 0 || !activeVariantId}
+              disabled={available <= 0 || !activeVariantId || authLoading}
               loading={addMutation.isPending}
-              onClick={() => addMutation.mutate()}
+              onClick={() => {
+                if (!user) {
+                  void navigate('/login', { state: { from: location.pathname } });
+                  return;
+                }
+                addMutation.mutate();
+              }}
             >
               {addMutation.isSuccess ? <Check aria-hidden="true" size={18} /> : null}
-              {t(addMutation.isPending ? 'product.adding' : 'product.add')}
+              {t(!user ? 'auth.login' : addMutation.isPending ? 'product.adding' : 'product.add')}
             </Button>
           </div>
+          <Button
+            className="product-wishlist-button"
+            type="button"
+            variant="secondary"
+            aria-pressed={user ? savedToWishlist : false}
+            disabled={authLoading || !activeVariantId || (Boolean(user) && wishlistQuery.isPending)}
+            loading={wishlistMutation.isPending}
+            onClick={() => {
+              if (!user) {
+                void navigate('/login', { state: { from: location.pathname } });
+                return;
+              }
+              wishlistMutation.mutate();
+            }}
+          >
+            <Heart aria-hidden="true" size={18} fill={savedToWishlist ? 'currentColor' : 'none'} />
+            {t(
+              !user
+                ? 'product.loginToWishlist'
+                : savedToWishlist
+                  ? 'product.removeWishlist'
+                  : 'product.addWishlist',
+            )}
+          </Button>
           {addMutation.isSuccess ? (
             <p className="form-banner form-banner--success" role="status">
               {t('product.added')}
             </p>
           ) : null}
           {addMutation.isError ? <ErrorState compact /> : null}
+          {wishlistMutation.isSuccess ? (
+            <p className="form-banner form-banner--success" role="status">
+              {t(wishlistMutation.data.saved ? 'product.wishlistAdded' : 'product.wishlistRemoved')}
+            </p>
+          ) : null}
+          {wishlistMutation.isError ? (
+            <p className="form-banner form-banner--error" role="alert">
+              {t('product.wishlistError')}
+            </p>
+          ) : null}
           <div className="delivery-note">
             <Truck aria-hidden="true" size={20} />
             <span>{t('product.delivery')}</span>

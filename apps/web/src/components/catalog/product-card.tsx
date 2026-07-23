@@ -1,13 +1,25 @@
-import { ArrowUpRight, ShieldCheck } from 'lucide-react';
+import { ArrowUpRight, Plus, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 
 import type { ProductSummary } from '../../api/types';
 import { Price } from '../ui/price';
 
-export function ProductCard({ product }: { product: ProductSummary }) {
-  const { t } = useTranslation();
+export function ProductCard({
+  product,
+  variant = 'default',
+}: {
+  product: ProductSummary;
+  variant?: 'default' | 'featured';
+}) {
+  const { t, i18n } = useTranslation();
+  const numberFormatter = new Intl.NumberFormat(i18n.resolvedLanguage === 'ar' ? 'ar-TN' : 'fr-TN');
   const price = product.promotionalPriceMillimes ?? product.priceMillimes;
+  const nicotineStrengths =
+    product.nicotineStrengthsMg ??
+    (product.nicotineStrengthMg === null || product.nicotineStrengthMg === undefined
+      ? []
+      : [product.nicotineStrengthMg]);
   const availability =
     product.availableQuantity <= 0
       ? t('catalog.unavailable')
@@ -16,7 +28,10 @@ export function ProductCard({ product }: { product: ProductSummary }) {
         : t('catalog.stockAvailable');
 
   return (
-    <article className="product-card">
+    <article
+      className={`product-card ${variant === 'featured' ? 'product-card--featured' : ''}`}
+      data-product-type={product.productType}
+    >
       <Link
         to={`/products/${product.slug}`}
         aria-label={t('catalog.openProduct', { name: product.name })}
@@ -58,6 +73,31 @@ export function ProductCard({ product }: { product: ProductSummary }) {
           <Link to={`/products/${product.slug}`}>{product.name}</Link>
         </h3>
         {product.shortDescription ? <p>{product.shortDescription}</p> : null}
+        {product.puffCount || nicotineStrengths.length > 0 || product.selectableFlavorCount ? (
+          <ul className="product-card__specs" aria-label={t('catalog.characteristics')}>
+            {product.puffCount ? (
+              <li>
+                {t('catalog.puffCountValue', {
+                  count: numberFormatter.format(product.puffCount),
+                })}
+              </li>
+            ) : null}
+            {nicotineStrengths.length > 0 ? (
+              <li>
+                {t('catalog.nicotineStrengthValue', {
+                  strength: nicotineStrengths.join(' / '),
+                })}
+              </li>
+            ) : null}
+            {product.selectableFlavorCount ? (
+              <li>
+                {t('catalog.selectableFlavorCount', {
+                  count: product.selectableFlavorCount,
+                })}
+              </li>
+            ) : null}
+          </ul>
+        ) : null}
         <div className="product-card__foot">
           <Price millimes={price} />
           <Link
@@ -65,7 +105,11 @@ export function ProductCard({ product }: { product: ProductSummary }) {
             to={`/products/${product.slug}`}
             aria-label={t('catalog.openProduct', { name: product.name })}
           >
-            <ArrowUpRight aria-hidden="true" size={19} />
+            {variant === 'featured' ? (
+              <Plus aria-hidden="true" size={20} />
+            ) : (
+              <ArrowUpRight aria-hidden="true" size={19} />
+            )}
           </Link>
         </div>
       </div>

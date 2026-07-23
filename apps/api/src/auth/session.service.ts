@@ -177,11 +177,13 @@ export class SessionService {
         ),
       ),
     ];
+    const roleKeys = session.user.roles.map(({ role }) => role.key);
     const context: AuthContext = {
       sessionId: session.id,
       userId: session.userId,
       audience,
       permissions,
+      roleKeys,
       twoFactorVerified: session.twoFactorVerified,
       authenticatedAt: session.authenticatedAt,
       expiresAt:

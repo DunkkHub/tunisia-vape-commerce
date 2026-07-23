@@ -1,73 +1,205 @@
-import { Worker, type Job } from 'bullmq';
+import { Queue, Worker, type Job } from 'bullmq';
+import { PrismaClient } from '@prisma/client';
 import pino from 'pino';
-import { z } from 'zod';
+import { bullConnectionFromUrl, parseWorkerEnvironment } from './environment.js';
+import { ConfiguredMediaDeletionAdapter } from './media-deletion-adapter.js';
+import { outboxJobSchema, safeErrorCode } from './outbox-contracts.js';
+import { OutboxProcessor } from './outbox-processor.js';
+import { OutboxPublisher, type OutboxJobData } from './outbox-publisher.js';
+import { OutboxRepository } from './outbox-repository.js';
+import { OutboxSources } from './outbox-sources.js';
 
-const environmentSchema = z.object({
-  REDIS_URL: z.url().default('redis://localhost:6379'),
-  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
-  SMS_PROVIDER: z.enum(['console', 'disabled']).default('console'),
-});
-
-const environment = environmentSchema.parse(process.env);
+const environment = parseWorkerEnvironment(process.env);
 const logger = pino({
   level: environment.LOG_LEVEL,
-  redact: ['job.data.password', 'job.data.token'],
+  redact: {
+    paths: [
+      'password',
+      'token',
+      'cookie',
+      'authorization',
+      'recipient',
+      'encryptedRecipient',
+      'resetToken',
+      'body',
+      'subject',
+      '*.password',
+      '*.token',
+      '*.cookie',
+      '*.authorization',
+      '*.recipient',
+      '*.encryptedRecipient',
+      '*.resetToken',
+      '*.body',
+      '*.subject',
+      'job.data.payload',
+      'payload',
+    ],
+    censor: '[REDACTED]',
+  },
 });
-const redisUrl = new URL(environment.REDIS_URL);
-const connection = {
-  host: redisUrl.hostname,
-  port: Number.parseInt(redisUrl.port || '6379', 10),
-  ...(redisUrl.username ? { username: decodeURIComponent(redisUrl.username) } : {}),
-  ...(redisUrl.password ? { password: decodeURIComponent(redisUrl.password) } : {}),
-  ...(redisUrl.pathname.length > 1 ? { db: Number.parseInt(redisUrl.pathname.slice(1), 10) } : {}),
-  ...(redisUrl.protocol === 'rediss:' ? { tls: {} } : {}),
-};
-
-interface NotificationJob {
-  notificationId: string;
-  channel: 'email' | 'sms';
-  recipient: string;
-  template: string;
-  locale: 'fr' | 'ar';
-}
-
-const handleNotification = (job: Job<NotificationJob>): Promise<void> => {
-  const safeRecipient = job.data.recipient.replace(/(^.).+(@.*$)/, '$1***$2');
-  logger.info(
-    {
-      jobId: job.id,
-      notificationId: job.data.notificationId,
-      channel: job.data.channel,
-      template: job.data.template,
-      recipient: safeRecipient,
-    },
-    'Processing notification',
-  );
-
-  if (job.data.channel === 'sms' && environment.SMS_PROVIDER === 'disabled') {
-    throw new Error('SMS adapter is disabled');
-  }
-  return Promise.resolve();
-};
-
-const worker = new Worker<NotificationJob>('notifications', handleNotification, {
-  connection,
-  concurrency: 10,
-  limiter: { max: 100, duration: 1_000 },
-});
-
-worker.on('completed', (job) => logger.info({ jobId: job.id }, 'Notification completed'));
-worker.on('failed', (job, error) =>
-  logger.error({ jobId: job?.id, error: error.message }, 'Notification failed'),
+const prisma = new PrismaClient();
+const connection = bullConnectionFromUrl(environment.REDIS_URL);
+const queue = new Queue<OutboxJobData>(environment.OUTBOX_QUEUE_NAME, { connection });
+const repository = new OutboxRepository(
+  prisma,
+  environment.WORKER_INSTANCE_ID,
+  environment.OUTBOX_BATCH_SIZE,
+  environment.OUTBOX_LEASE_MS,
+  environment.OUTBOX_PUBLISHED_LEASE_MS,
+  environment.OUTBOX_RETRY_BASE_MS,
+  environment.OUTBOX_RETRY_MAX_MS,
 );
-worker.on('error', (error) => logger.error({ error: error.message }, 'Worker error'));
+const mediaDeletionAdapter = new ConfiguredMediaDeletionAdapter(environment);
+const processor = new OutboxProcessor(
+  prisma,
+  repository,
+  environment,
+  logger,
+  undefined,
+  mediaDeletionAdapter,
+);
+const publisher = new OutboxPublisher(repository, queue, logger);
+const sources = new OutboxSources(prisma, environment);
+
+const worker = new Worker<OutboxJobData>(
+  environment.OUTBOX_QUEUE_NAME,
+  async (job: Job<OutboxJobData>) => {
+    const data = outboxJobSchema.parse(job.data);
+    await processor.process(data);
+  },
+  {
+    connection,
+    concurrency: environment.OUTBOX_CONCURRENCY,
+    lockDuration: environment.OUTBOX_LEASE_MS,
+    limiter: { max: 100, duration: 1_000 },
+  },
+);
+
+let stopping = false;
+let pollInProgress = false;
+let sourceInProgress = false;
+let lastPollSucceeded = true;
+let pollTimer: NodeJS.Timeout | undefined;
+let sourceTimer: NodeJS.Timeout | undefined;
+let heartbeatTimer: NodeJS.Timeout | undefined;
+
+const poll = async (): Promise<void> => {
+  if (stopping || pollInProgress) return;
+  pollInProgress = true;
+  try {
+    await publisher.pollOnce();
+    lastPollSucceeded = true;
+  } catch (error) {
+    lastPollSucceeded = false;
+    logger.error({ errorCode: safeErrorCode(error) }, 'Outbox poll failed');
+  } finally {
+    pollInProgress = false;
+  }
+};
+
+const scheduleSources = async (): Promise<void> => {
+  if (stopping || sourceInProgress) return;
+  sourceInProgress = true;
+  try {
+    await sources.enqueueScheduledWork();
+  } catch (error) {
+    logger.error({ errorCode: safeErrorCode(error) }, 'Outbox source scheduling failed');
+  } finally {
+    sourceInProgress = false;
+  }
+};
+
+const heartbeat = async (): Promise<void> => {
+  if (stopping) return;
+  try {
+    await prisma.systemHealthRecord.create({
+      data: {
+        component: 'durable-outbox-worker',
+        instanceId: environment.WORKER_INSTANCE_ID,
+        status: lastPollSucceeded && worker.isRunning() ? 'HEALTHY' : 'DEGRADED',
+        details: {
+          schemaVersion: 1,
+          queue: environment.OUTBOX_QUEUE_NAME,
+          polling: !pollInProgress,
+          sourceScheduling: !sourceInProgress,
+          notificationAdapter: environment.NOTIFICATION_ADAPTER,
+        },
+      },
+    });
+  } catch (error) {
+    logger.error({ errorCode: safeErrorCode(error) }, 'Worker heartbeat failed');
+  }
+};
+
+worker.on('completed', (job) =>
+  logger.debug({ jobId: job.id, outboxEventId: job.data.outboxEventId }, 'Outbox job completed'),
+);
+worker.on('failed', (job, error) =>
+  logger.error(
+    {
+      jobId: job?.id,
+      outboxEventId: job?.data.outboxEventId,
+      errorCode: safeErrorCode(error),
+    },
+    'Outbox job failed before durable retry scheduling',
+  ),
+);
+worker.on('error', (error) =>
+  logger.error({ errorCode: safeErrorCode(error) }, 'Outbox worker error'),
+);
 
 const shutdown = async (signal: string): Promise<void> => {
-  logger.info({ signal }, 'Worker shutting down');
+  if (stopping) return;
+  stopping = true;
+  if (pollTimer) clearInterval(pollTimer);
+  if (sourceTimer) clearInterval(sourceTimer);
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  logger.info({ signal }, 'Durable outbox worker shutting down');
+  const drainDeadline = Date.now() + 5_000;
+  while ((pollInProgress || sourceInProgress) && Date.now() < drainDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   await worker.close();
+  await queue.close();
+  mediaDeletionAdapter.close();
+  await prisma.$disconnect();
 };
 
-process.on('SIGTERM', () => void shutdown('SIGTERM'));
-process.on('SIGINT', () => void shutdown('SIGINT'));
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGINT', () => void shutdown('SIGINT'));
 
-logger.info('Notification worker started');
+const start = async (): Promise<void> => {
+  await prisma.$connect();
+  await queue.waitUntilReady();
+  await scheduleSources();
+  await poll();
+  await heartbeat();
+  pollTimer = setInterval(() => void poll(), environment.OUTBOX_POLL_INTERVAL_MS);
+  sourceTimer = setInterval(
+    () => void scheduleSources(),
+    environment.RESERVATION_EXPIRY_INTERVAL_MS,
+  );
+  heartbeatTimer = setInterval(() => void heartbeat(), environment.WORKER_HEARTBEAT_INTERVAL_MS);
+  logger.info(
+    {
+      component: 'durable-outbox-worker',
+      instanceId: environment.WORKER_INSTANCE_ID,
+      queue: environment.OUTBOX_QUEUE_NAME,
+      notificationAdapter: environment.NOTIFICATION_ADAPTER,
+    },
+    'Durable outbox worker started',
+  );
+};
+
+void start().catch(async (error: unknown) => {
+  logger.fatal({ errorCode: safeErrorCode(error) }, 'Durable outbox worker startup failed');
+  if (pollTimer) clearInterval(pollTimer);
+  if (sourceTimer) clearInterval(sourceTimer);
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  await worker.close(true).catch(() => undefined);
+  await queue.close().catch(() => undefined);
+  mediaDeletionAdapter.close();
+  await prisma.$disconnect().catch(() => undefined);
+  process.exitCode = 1;
+});

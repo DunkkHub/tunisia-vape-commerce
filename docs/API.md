@@ -14,97 +14,266 @@
 
 The API is authoritative for authorization, catalog publication, stock, promotion eligibility, delivery rates, tax, totals, state transitions, and COD balances.
 
+Legal and regulatory suitability is the responsibility of the purchaser/operator and is outside the software production-readiness assessment.
+
 ## Authentication realms
 
 Customer and admin authentication have separate controllers and trust boundaries.
 
 ### Customer authentication
 
-| Method | Route                                 | Authentication                      | Purpose                                 |
-| ------ | ------------------------------------- | ----------------------------------- | --------------------------------------- |
-| POST   | /api/v1/auth/customer/register        | Anonymous + customer throttle       | Create customer account                 |
-| POST   | /api/v1/auth/customer/login           | Anonymous + customer login throttle | Rotate/create customer session          |
-| POST   | /api/v1/auth/customer/logout          | Customer + CSRF                     | Revoke current customer session         |
-| GET    | /api/v1/auth/customer/session         | Customer                            | Current safe customer principal         |
-| GET    | /api/v1/auth/customer/sessions        | Customer                            | List customer's sessions                |
-| DELETE | /api/v1/auth/customer/sessions/:id    | Customer + CSRF                     | Revoke an owned customer session        |
-| POST   | /api/v1/auth/customer/password/forgot | Anonymous + reset throttle          | Generic reset response                  |
-| POST   | /api/v1/auth/customer/password/reset  | Anonymous + token throttle          | Consume reset token and revoke sessions |
-| POST   | /api/v1/auth/customer/email/verify    | Anonymous + token throttle          | Consume email verification token        |
-| POST   | /api/v1/auth/customer/phone/verify    | Customer + CSRF + throttle          | Verify through configured SMS adapter   |
-| POST   | /api/v1/auth/customer/2fa/*           | Customer + CSRF                     | Optional customer 2FA lifecycle         |
+| Method | Route                                        | Authentication                      | Purpose                                                            |
+| ------ | -------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------ |
+| POST   | /api/v1/auth/customer/register               | Anonymous + customer throttle       | Create customer account                                            |
+| POST   | /api/v1/auth/customer/login                  | Anonymous + customer login throttle | Rotate/create customer session                                     |
+| POST   | /api/v1/auth/customer/password-reset         | Anonymous + reset throttle          | Generic reset response                                             |
+| POST   | /api/v1/auth/customer/password-reset/confirm | Anonymous + token throttle          | Consume every outstanding customer reset token and revoke sessions |
+| GET    | /api/v1/auth/customer/session                | Customer                            | Current safe customer principal                                    |
+| POST   | /api/v1/auth/customer/logout                 | Customer + CSRF                     | Revoke current customer session                                    |
+| GET    | /api/v1/auth/customer/sessions               | Customer                            | List customer's sessions                                           |
+| DELETE | /api/v1/auth/customer/sessions/:id           | Customer + CSRF                     | Revoke an owned customer session                                   |
+| POST   | /api/v1/auth/customer/sessions/revoke-all    | Customer + CSRF                     | Revoke every customer session                                      |
 
 ### Administrator authentication
 
-| Method | Route                              | Authentication                     | Purpose                                           |
-| ------ | ---------------------------------- | ---------------------------------- | ------------------------------------------------- |
-| POST   | /api/v1/auth/admin/login           | Anonymous + strict admin throttle  | Verify password; issue pending challenge only     |
-| POST   | /api/v1/auth/admin/totp/verify     | Pending admin challenge + throttle | Mandatory TOTP; create full rotated admin session |
-| POST   | /api/v1/auth/admin/recovery/verify | Pending admin challenge + throttle | Consume one recovery code; create full session    |
-| POST   | /api/v1/auth/admin/logout          | Full admin + CSRF                  | Revoke current admin session                      |
-| GET    | /api/v1/auth/admin/session         | Full admin with 2FA                | Current safe admin principal/permissions          |
-| GET    | /api/v1/auth/admin/sessions        | Full admin with 2FA                | List administrator sessions                       |
-| DELETE | /api/v1/auth/admin/sessions/:id    | Full admin + CSRF                  | Revoke an owned session                           |
-| POST   | /api/v1/auth/admin/recent-auth     | Full admin + password/TOTP + CSRF  | Short-lived sensitive-action assertion            |
-| POST   | /api/v1/auth/admin/totp/enroll     | Restricted enrollment flow         | Enroll mandatory TOTP after CLI invitation        |
-| POST   | /api/v1/auth/admin/totp/confirm    | Restricted enrollment flow         | Confirm seed and issue recovery codes once        |
+| Method | Route                                  | Authentication                     | Purpose                                           |
+| ------ | -------------------------------------- | ---------------------------------- | ------------------------------------------------- |
+| POST   | /api/v1/auth/admin/login               | Anonymous + strict admin throttle  | Verify password; issue pending challenge only     |
+| POST   | /api/v1/auth/admin/totp                | Pending admin challenge + throttle | Mandatory TOTP; create full rotated admin session |
+| POST   | /api/v1/auth/admin/logout              | Full admin + CSRF                  | Revoke current admin session                      |
+| GET    | /api/v1/auth/admin/session             | Full admin with 2FA                | Current safe admin principal/permissions          |
+| GET    | /api/v1/auth/admin/sessions            | Full admin with 2FA                | List administrator sessions                       |
+| DELETE | /api/v1/auth/admin/sessions/:id        | Full admin + CSRF                  | Revoke an owned session                           |
+| POST   | /api/v1/auth/admin/sessions/revoke-all | Full admin + CSRF                  | Revoke every administrator session                |
 
 Customer UI login is /login. Admin UI login is /admin/login. The API never accepts a customer cookie in an admin credential extractor, never grants a pending challenge general access, and never treats a role value supplied by React as authority.
+
+When an administrator must enroll TOTP, `POST /api/v1/auth/admin/login` returns the pending challenge plus an `otpauth://` enrollment URI and manual-entry key. The admin UI creates the QR code locally; it does not send TOTP material to an external QR service. Repeating the password step reuses the existing encrypted, unverified seed so a QR already scanned by the administrator remains valid until enrollment succeeds or an authorized reset replaces it.
 
 Customer and admin cookies have distinct names and signing contexts; their Redis session prefixes, CSRF tokens, rate-limit buckets, session timeouts, logout, and revocation paths are separate. Staging/production should use separate hostnames with host-only cookies.
 
 ## Resource route groups
 
-This table is the target contract. OpenAPI and controller tests are the implementation truth and must identify temporarily unavailable operations.
-
-| Prefix                   | Representative resources                                             | Access                                                        |
-| ------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------- |
-| /api/v1/catalog          | products, categories, brands, search, suggestions                    | Public; published/non-archived only                           |
-| /api/v1/compliance       | active warnings, published legal documents, age/consent requirements | Public reads; no draft exposure                               |
-| /api/v1/geography        | governorates, delegations, localities, postal lookup, delivery quote | Public bounded reads; authoritative quote                     |
-| /api/v1/cart             | guest/customer cart and items                                        | Guest-cart credential or customer                             |
-| /api/v1/checkout         | validation and idempotent COD order creation                         | Guest/customer + CSRF + idempotency                           |
-| /api/v1/customer         | profile, addresses, orders, tracking, wishlist, privacy requests     | Customer ownership enforced                                   |
-| /api/v1/admin/products   | catalog, variants, images, suppliers, batches, import/export         | Full admin + granular catalog permissions                     |
-| /api/v1/admin/inventory  | items, movements, reservations, transfers, adjustments               | Full admin + inventory permissions                            |
-| /api/v1/admin/orders     | lists, details, notes, valid transitions, cancellation               | Full admin + order permissions                                |
-| /api/v1/admin/customers  | profiles, risk, tags, notes, blocklist, privacy workflows            | Full admin + customer permissions                             |
-| /api/v1/admin/delivery   | zones, rates, couriers, attempts, manifests, labels, transitions     | Full admin + delivery permissions                             |
-| /api/v1/admin/cash       | collections, remittances, discrepancies, reconciliation              | Full admin + cash permissions; recent auth for reconciliation |
-| /api/v1/admin/promotions | promotions, coupons, limits and redemptions                          | Full admin + promotions.manage                                |
-| /api/v1/admin/returns    | return requests, inspection, disposition and history                 | Full admin + relevant order/inventory permissions             |
-| /api/v1/admin/reports    | bounded reports and queued exports                                   | Full admin + reports permissions                              |
-| /api/v1/admin/access     | admins, roles, permissions, invitations, suspension                  | Full admin + users/roles permissions; recent auth             |
-| /api/v1/admin/settings   | store, features, notification templates, compliance/legal versions   | Full admin + specific settings/compliance permissions         |
-| /api/v1/admin/operations | audit, security, jobs, system health                                 | Full admin + audit/security/system permissions                |
-| /api/v1/health/live      | process liveness only                                                | Public, no dependency details                                 |
-| /api/v1/health/ready     | dependency readiness                                                 | Edge/orchestrator allowlist; safe summary                     |
+The following tables describe controllers present in the shared worktree. They are narrower than the eventual product specification; absent supplier, batch, promotion, return, export, provider, and guest-cart routes must not be inferred.
 
 ### Currently implemented commerce slice
 
-- `GET /api/v1/storefront/status` exposes the closed-by-default launch and age-gate state. `POST /api/v1/compliance/age-gate` records the self-attestation and issues a signed, HttpOnly, short-lived catalog cookie; it is explicitly not identity verification.
+- `GET /api/v1/storefront/status` exposes launch and age-gate state. `POST /api/v1/compliance/age-gate` records self-attestation and issues a signed, HttpOnly, short-lived catalog cookie; it is explicitly not identity verification.
 - `GET /api/v1/storefront/home`, `/api/v1/products`, and `/api/v1/products/:slug` return localized storefront DTOs after the age gate. The `/api/v1/catalog/*` aliases also provide bounded category, brand, and product reads. All product reads exclude unpublished, archived, suspended, deleted, or actively restricted records; advisory availability excludes archived/expired batches and active, unexpired reservations.
-- Public product lists can combine `q`/`search`, `category`, `brand`, `productType`, `flavor`, `minPriceMillimes`, `maxPriceMillimes`, `featured`, and allowlisted `sort` values. Brand/category filters use public slugs, flavor is exact, and price bounds are inclusive integer millimes applied to the server-derived effective display price. An inverted, fractional, negative, or out-of-range price filter is rejected.
-- `GET /api/v1/catalog/facets` returns at most 50 public brands and 50 public flavor groups, available product types, flavor product counts, truncation flags, and the minimum/maximum effective display price in integer millimes. Facets follow the same publication/restriction policy as public product reads and require the age-gate credential.
+- Public product lists can combine `q`/`search`, `category`, `brand`, `productType`, `flavor`, `puffCount`, `nicotineStrengthMg`, `minPriceMillimes`, `maxPriceMillimes`, `featured`, and allowlisted `sort` values. Brand/category filters use public slugs, flavor is exact, puff/nicotine filters are bounded nonnegative values, and price bounds are inclusive integer millimes applied to the server-derived effective display price. An inverted, fractional, negative, or out-of-range price filter is rejected.
+- `GET /api/v1/catalog/facets` returns at most 50 public brands and 50 public flavor groups, available product types, puff counts, nicotine strengths, flavor product counts, truncation flags, and the minimum/maximum effective display price in integer millimes. Facets follow the same publication/restriction policy as public product reads and require the age-gate credential.
+- Public product and cart DTOs include deterministic, localized URLs for approved product/variant images only. `GET /api/v1/media/:objectKeyHash` is age-gated and serves an approved image only while its product/variant remains public; the API verifies the stored byte count and SHA-256 checksum before returning a no-sniff raster response.
 - `GET /api/v1/admin/products` and `GET /api/v1/admin/products/:id` require a full administrator session and `products.read`. The list is localized, bounded, and reports advisory remaining stock and effective selling price.
-- `POST /api/v1/admin/products`, `PATCH /api/v1/admin/products/:id`, and the explicit `archive`/`restore` actions require a full administrator session, administrator CSRF token, and the matching product permission. Updates use a required optimistic version; restore always returns a product to `DRAFT`.
-- `GET /api/v1/checkout/policy` evaluates the fail-closed operational/legal policy. `POST /api/v1/checkout/quote` rejects a closed policy and recalculates product, discount, tax, stock advisory, delivery-rate precedence, surcharge, and COD totals from authoritative data in integer TND millimes.
-- The quote is non-reserving, expires after five minutes, and does not create an order. `POST /api/v1/checkout/orders` remains unavailable until the idempotency claim, locked final-stock reservation, immutable snapshots, order/history/outbox writes, and audit evidence are implemented in one tested transaction.
+- `POST /api/v1/admin/products`, `PATCH /api/v1/admin/products/:id`, the explicit `archive`/`restore` actions, and `POST /api/v1/admin/products/:id/media-review/confirm` require a full administrator session, administrator CSRF token, recent authentication, and the matching product permission. Updates use a required optimistic version; restore always returns a product to `DRAFT`. Media-review confirmation is a separate draft-only transition and never publishes the product.
+- `GET /api/v1/checkout/policy` evaluates the fail-closed operational policy. `POST /api/v1/checkout/quote` rejects a closed policy and recalculates product, discount, tax, stock advisory, delivery-rate precedence, surcharge, and COD totals from authoritative data in integer TND millimes.
+- The quote is non-reserving, expires after five minutes, and does not create an order. `POST /api/v1/checkout/orders` is implemented for an authenticated customer, requires customer CSRF, age confirmation and `Idempotency-Key`, and creates only cash-on-delivery orders.
+
+### Customer cart, checkout and order routes
+
+There is no guest-cart/order implementation. Cart and order reads are no-store and enforce the customer realm and age gate; mutations also require customer CSRF. Customer order queries are ownership-scoped in the database and return immutable customer-safe snapshots.
+
+| Method | Route                                | Contract                                                             |
+| ------ | ------------------------------------ | -------------------------------------------------------------------- |
+| GET    | `/api/v1/cart`                       | Current cart; stale unavailable lines are removed server-side        |
+| GET    | `/api/v1/cart/summary`               | Owned cart item count                                                |
+| POST   | `/api/v1/cart/items`                 | Add a validated published variant                                    |
+| PATCH  | `/api/v1/cart/items/:id`             | Set quantity on an owned item                                        |
+| DELETE | `/api/v1/cart/items/:id`             | Remove an owned item                                                 |
+| GET    | `/api/v1/checkout/policy`            | Effective operational checkout blockers                              |
+| POST   | `/api/v1/checkout/quote`             | Age-gated, non-reserving authoritative TND quote                     |
+| POST   | `/api/v1/checkout/orders`            | Atomic customer COD order; CSRF plus required scoped idempotency key |
+| GET    | `/api/v1/orders`                     | Bounded list of the authenticated customer's orders                  |
+| GET    | `/api/v1/orders/:orderNumber`        | One owned order from immutable customer-safe snapshots               |
+| POST   | `/api/v1/orders/:orderNumber/cancel` | Cancel an owned pending order and release active reservations once   |
+
+Order creation runs one bounded `READ COMMITTED` transaction. It claims a customer/operation-scoped hashed key and request fingerprint, replays a completed identical request, conflicts on key reuse with a different request, validates effective launch/store/delivery policy, active customer/blocklist, public catalog and integer prices, locks eligible inventory in deterministic order, derives available stock, resolves exactly one courier locality or pickup, and creates immutable snapshots, 30-minute active reservations, zero-delta reservation movements, pending order/delivery history, expected COD collection, queued notification, audit, and the completed idempotency result. Physical on-hand is decremented only by administrator confirmation after locked, complete, unexpired reservation coverage is revalidated.
+
+The policy defaults are `CHECKOUT_ENABLED=true`, `PRELAUNCH_MODE=false`, and fresh-database settings `checkout.enabled=true`, `maintenance.mode=false`, and `prelaunch.mode=false`; seed reruns preserve existing setting values. The possible policy blockers are `CHECKOUT_DISABLED`, `MAINTENANCE_MODE`, `PRELAUNCH_MODE`, `MINIMUM_AGE_NOT_CONFIGURED`, `STORE_INFORMATION_MISSING`, and `DELIVERY_METHOD_MISSING`. Legal approval and publication of `LegalDocumentVersion` rows are not policy inputs. Optional terms/privacy version references are validated only when supplied for an enabled confirmation. Request-specific customer, catalog, address, stock, pricing, configured-confirmation, delivery, idempotency, and COD failures remain enforced independently.
+
+The policy response includes a `requirements` object derived from `age_gate.entry.enabled`, `age_gate.checkout.enabled`, `consent.terms.required`, `consent.privacy.required`, `consent.recording.enabled`, and `delivery.age_verification_required`. All default to `true` on a fresh seed; a missing row also resolves fail-safe to `true`. Disabling a requirement does not bypass authentication, CSRF, price recalculation, stock locking, delivery pricing, order validation, or any unrelated control.
+
+### Catalog, inventory, taxonomy and settings administration
+
+All routes require a full TOTP-verified administrator session, no-store responses, and the listed permission. Every mutation below requires administrator CSRF and recent authentication.
+
+| Method | Route                                                             | Permission                          | Contract                                                                 |
+| ------ | ----------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------ |
+| GET    | `/api/v1/admin/products/:productId/variants`                      | `products.read`                     | List operational variants and attributes                                 |
+| POST   | `/api/v1/admin/products/:productId/variants`                      | `products.create`                   | Create a non-public variant                                              |
+| PATCH  | `/api/v1/admin/products/:productId/variants/:variantId`           | `products.update`                   | Versioned variant update                                                 |
+| POST   | `/api/v1/admin/products/:productId/variants/:variantId/archive`   | `products.archive`                  | Archive while preserving order history                                   |
+| POST   | `/api/v1/admin/products/:productId/variants/:variantId/restore`   | `products.archive`                  | Restore as non-public                                                    |
+| GET    | `/api/v1/admin/brands`                                            | `brands.manage`                     | Bounded brand list                                                       |
+| GET    | `/api/v1/admin/brands/:id`                                        | `brands.manage`                     | Brand detail                                                             |
+| POST   | `/api/v1/admin/brands`                                            | `brands.manage`                     | Draft create                                                             |
+| PATCH  | `/api/v1/admin/brands/:id`                                        | `brands.manage`                     | Timestamp-checked update                                                 |
+| POST   | `/api/v1/admin/brands/:id/archive`                                | `brands.manage`                     | Archive with referenced-product checks                                   |
+| POST   | `/api/v1/admin/brands/:id/restore`                                | `brands.manage`                     | Restore as non-public                                                    |
+| GET    | `/api/v1/admin/categories`                                        | `categories.manage`                 | Bounded category list                                                    |
+| GET    | `/api/v1/admin/categories/:id`                                    | `categories.manage`                 | Category detail                                                          |
+| POST   | `/api/v1/admin/categories`                                        | `categories.manage`                 | Draft create                                                             |
+| PATCH  | `/api/v1/admin/categories/:id`                                    | `categories.manage`                 | Timestamp-checked hierarchy update                                       |
+| POST   | `/api/v1/admin/categories/:id/archive`                            | `categories.manage`                 | Archive with child/product and cycle checks                              |
+| POST   | `/api/v1/admin/categories/:id/restore`                            | `categories.manage`                 | Restore as non-public                                                    |
+| GET    | `/api/v1/admin/inventory/export.csv`                              | `inventory.read` + `reports.export` | Recent-authenticated, audited filtered inventory CSV, capped at 500 rows |
+| GET    | `/api/v1/admin/inventory/variants/:variantId`                     | `inventory.read`                    | Physical/reserved/available buckets                                      |
+| GET    | `/api/v1/admin/inventory/locations`                               | `inventory.read`                    | Active locations available for stock intake                              |
+| POST   | `/api/v1/admin/inventory/locations`                               | `inventory.adjust`                  | Recent-authenticated, CSRF-protected audited location creation           |
+| POST   | `/api/v1/admin/inventory/items`                                   | `inventory.adjust`                  | Create an audited empty bucket; positive opening stock denied            |
+| POST   | `/api/v1/admin/inventory/batches/receipts`                        | `inventory.adjust`                  | Idempotent, locked batch receipt with explicit expiry metadata           |
+| GET    | `/api/v1/admin/inventory/items/:id/movements`                     | `inventory.read`                    | Bounded immutable movement history                                       |
+| POST   | `/api/v1/admin/inventory/items/:id/adjustments`                   | `inventory.adjust`                  | Request a locked, reservation-safe dual-control adjustment               |
+| GET    | `/api/v1/admin/inventory/adjustments`                             | `inventory.read`                    | Bounded adjustment approval queue with optional status filter            |
+| POST   | `/api/v1/admin/inventory/adjustments/:id/decision`                | `inventory.approve`                 | Approve/apply or reject; requester is forbidden from deciding            |
+| POST   | `/api/v1/admin/inventory/items/:id/transfers`                     | `inventory.transfer`                | Idempotent paired transfer under deterministic row locks                 |
+| GET    | `/api/v1/admin/inventory/transfers`                               | `inventory.read`                    | Bounded immutable cross-location transfer history                        |
+| PATCH  | `/api/v1/admin/inventory/variants/:variantId/low-stock-threshold` | `inventory.adjust`                  | Versioned threshold update                                               |
+| POST   | `/api/v1/admin/settings/export`                                   | `settings.manage`                   | Audited deterministic JSON transfer without secret settings              |
+| PATCH  | `/api/v1/admin/settings/store/:key`                               | `settings.manage`                   | Allowlisted typed store setting with reason/version/audit                |
+| PATCH  | `/api/v1/admin/settings/compliance/:key`                          | `compliance.manage`                 | Allowlisted typed compliance setting with reason/version/audit           |
+
+Batch receipts and transfers require an `Idempotency-Key` header containing 16-128 safe ASCII characters. Keys are scoped to the administrator and operation, stored only as SHA-256 hashes, and bound to a canonical request fingerprint. An exact replay returns the original result; a changed payload returns `IDEMPOTENCY_KEY_REUSED`. Batch receipt requires an expiry date after the receipt day and preserves one stable metadata record per variant/batch number.
+
+Every manual adjustment is high-risk: submission creates a 24-hour `PENDING_APPROVAL` request and does not change stock. `PURCHASE_RECEIPT` is rejected on this route with `BATCH_RECEIPT_REQUIRED`, so receipts cannot omit batch/expiry metadata. A different administrator with `inventory.approve` must decide the remaining manual corrections. Approval re-locks the item, rejects stale snapshots, and applies the quantity, version, movement, and audit atomically without undercutting active reservations. Transfers require `inventory.transfer`, lock both locations/items in deterministic order, preserve variant/batch/lot identity, and write exactly one paired outbound/inbound movement in the same transaction.
+
+#### Catalog import
+
+Every catalog-import route requires a full TOTP-verified administrator session, `catalog.import`, a no-store response, and bounded request handling. Mutations require administrator CSRF and recent authentication. The official Wotofo preview/media routes have stricter per-minute throttles.
+
+| Method | Route                                           | Contract                                                                             |
+| ------ | ----------------------------------------------- | ------------------------------------------------------------------------------------ |
+| GET    | `/api/v1/admin/catalog/imports`                 | Bounded batch history; accepts `page` and `pageSize` up to 50                        |
+| GET    | `/api/v1/admin/catalog/imports/:id`             | Batch receipt with bounded row results and source/apply metadata                     |
+| GET    | `/api/v1/admin/catalog/imports/template.csv`    | UTF-8 BOM, formula-safe version 1.0 CSV template with exact headers                  |
+| POST   | `/api/v1/admin/catalog/imports/preview`         | Multipart CSV/JSON validation and persisted dry-run receipt                          |
+| POST   | `/api/v1/admin/catalog/imports/wotofo/preview`  | Verify reviewed official endpoints/options and persist a fixed-safety Wotofo preview |
+| POST   | `/api/v1/admin/catalog/imports/:id/apply`       | Fingerprint-check and atomically apply a valid unchanged preview                     |
+| POST   | `/api/v1/admin/catalog/imports/:id/media/apply` | Download allowlisted batch assets through the product-media validation boundary      |
+| POST   | `/api/v1/admin/catalog/imports/:id/rollback`    | Archive an unchanged create-only batch without destroying receipt/history            |
+
+Preview accepts at most one 2 MiB file and 2,000 rows. CSV requires the exact 28 versioned columns; JSON requires schema version `1.0` and the corresponding row fields. Formula prefixes, invalid/partial flavor metadata, combined flavor/color identity, invalid types/URLs, duplicate identity, and conflicting SKU ownership are reported or rejected. Default apply preserves existing price, publication status, stock, and images. Imports cannot publish a variant or create supplier/inventory data.
+
+Apply requires `{ "confirmation": "APPLY_CATALOG_IMPORT" }`; rollback requires `ROLLBACK_CATALOG_IMPORT`; media import requires `IMPORT_CATALOG_MEDIA`. Concurrent identical apply calls return the one committed receipt after its payload fingerprint is revalidated; a different fingerprint returns `CATALOG_IMPORT_KEY_REUSED`, and unrelated uniqueness failures remain `CATALOG_IMPORT_APPLY_FAILED`. The Wotofo preview always disables partial mode and every override. The media route accepts completed official or administrator-upload batches, preserves active images unless that preview explicitly recorded `overrideImages=true`, records source/checksum provenance, and is idempotent for an unchanged imported source. A changed-source override retains the prior image source row under a reserved historical key and creates a new canonical row; audit summaries use source URL hashes and content checksums rather than raw URLs. Generic URL downloads require an exact `CATALOG_IMPORT_MEDIA_HOSTS` HTTPS hostname, pinned public DNS answers, bounded/revalidated redirects and the normal raster validator. They remain unverified, `PENDING`, non-primary and non-public until explicit administrator review. Renewable token-owned Redis batch and global-capacity leases reject concurrent execution; synchronous work is capped at 30 candidates per product and 150 per batch. Rollback is all-or-nothing, limited to create-only rows, and conflicts when a recorded post-import version changed.
+
+The reviewed manifest expects 19 products and 321 variants. The recorded local media run stored 145 approved images because shared variant assets use product fallback. These records remain drafts until real positive prices, available stock, approved media, active delivery pricing, and the normal guarded publication actions are complete. See [Catalog import and media operations](CATALOG_IMPORT_AND_MEDIA.md).
+
+#### Product media
+
+| Method | Route                                                       | Permission        | Contract                                                                                                            |
+| ------ | ----------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/admin/products/:productId/images`                  | `products.read`   | Bounded deterministic list; supports exact `variantId`, `productOnly`, `reviewRequired`, page and page size filters |
+| GET    | `/api/v1/admin/products/:productId/images/:imageId/content` | `products.read`   | Authenticated, ownership-checked bytes for inspecting approved or pending media                                     |
+| POST   | `/api/v1/admin/products/:productId/images`                  | `products.update` | Multipart upload with bilingual alt text and required owner version                                                 |
+| PATCH  | `/api/v1/admin/products/:productId/images/:imageId`         | `products.update` | Versioned French/Arabic alt-text metadata update                                                                    |
+| POST   | `/api/v1/admin/products/:productId/images/reorder`          | `products.update` | Exact complete ordering for one product or variant owner                                                            |
+| POST   | `/api/v1/admin/products/:productId/images/:imageId/replace` | `products.update` | Multipart byte replacement preserving ordered metadata and soft-deleted history                                     |
+| POST   | `/api/v1/admin/products/:productId/images/:imageId/primary` | `products.update` | Select the single approved primary image for one owner                                                              |
+| POST   | `/api/v1/admin/products/:productId/images/:imageId/review`  | `products.update` | Versioned approve/reject decision for one pending imported image                                                    |
+| POST   | `/api/v1/admin/products/:productId/media-review/confirm`    | `products.update` | Complete product-wide imported-media review while the product remains a draft                                       |
+| DELETE | `/api/v1/admin/products/:productId/images/:imageId`         | `products.update` | Soft-delete using required `expectedOwnerVersion` query value and promote a replacement                             |
+| GET    | `/api/v1/media/:objectKeyHash`                              | Age-gate cookie   | Read approved media for a currently public product/variant                                                          |
+
+Every administrator media mutation requires the administrator realm, CSRF, recent authentication, `products.update`, an optimistic product/variant version, audit evidence, and product-scoped image lookup. Review additionally requires `{ "decision": "APPROVE" | "REJECT", "confirmation": "REVIEW_IMPORTED_PRODUCT_IMAGE" }` and only accepts a `PENDING` row. Product-wide completion requires `{ "version": number, "reason": string, "confirmation": "CONFIRM_PRODUCT_MEDIA_REVIEW" }`; inside a serializable transaction it locks the flagged `DRAFT` product, rejects any remaining product/variant `PENDING` or `QUARANTINED` row, and requires at least one approved product image or approved image on an active draft/published variant. Success clears only `needsMediaReview`, increments the product version, and appends audit evidence. It does not alter product/variant publication, pricing review, stock review, inventory, or delivery checks. A cross-product or cross-variant identifier returns the same safe not-found result. The database record has exactly one product or variant owner. Replacement and deletion soft-delete the old metadata and write a deterministic `media.object.delete.requested` outbox event in the same database transaction. The API attempts immediate cleanup after commit; the worker safely retries a missed local/S3 deletion without allowing bucket changes or local path traversal. Failed staged uploads still trigger best-effort cleanup because their object was never committed as catalog state.
+
+Uploads use multipart field `file`. New uploads also require `altTextFr`, `altTextAr`, and `expectedOwnerVersion`, with optional `variantId` and `isPrimary`; replacement requires `expectedOwnerVersion` and can replace either alt value. The transport ceiling is 25 MiB and the lower effective byte/pixel ceilings come from validated environment configuration. Validation accepts only single-page JPEG, PNG, WebP, or AVIF when the installed Sharp build supports AVIF, and requires declared MIME type, signature, exact container boundary, full decoder result, dimensions, byte length, and pixel count to agree. Accepted bytes are auto-oriented and safely re-encoded while retaining only the color profile needed for fidelity; EXIF, XMP, comments, and other untrusted metadata are stripped. SVG, executable/PDF/ZIP signatures, corrupt images, animation, and appended/polyglot content are rejected. Client filenames are sanitized only for audit display; storage keys are random server-generated values and storage credentials never enter a DTO.
+
+Local development uses the filesystem adapter. `MEDIA_STORAGE_DRIVER=s3` selects the S3-compatible/MinIO adapter using server-side `S3_*` variables. Public catalog URLs contain only a SHA-256-derived lookup token, never a bucket credential or object key. Administrator lists use an authenticated product/image content route so pending candidates can be inspected without weakening the public `APPROVED` gate.
+
+### Geography and delivery configuration
+
+Age-gated public reads expose active geography and available fulfillment choices:
+
+| Method | Route                                            | Contract                                      |
+| ------ | ------------------------------------------------ | --------------------------------------------- |
+| GET    | `/api/v1/geography/governorates`                 | Active Tunisian governorates                  |
+| GET    | `/api/v1/geography/governorates/:id/delegations` | Active children of an active governorate      |
+| GET    | `/api/v1/geography/delegations/:id/localities`   | Active children of an active delegation       |
+| GET    | `/api/v1/delivery/windows?localityId=...`        | Active windows for a supported locality       |
+| GET    | `/api/v1/delivery/methods?localityId=...`        | Active pickups and valid courier availability |
+
+Administrator delivery configuration is under `/api/v1/admin/delivery-config`. `GET` list/detail routes require `deliveries.read`; writes require `deliveries.update`, CSRF, recent authentication, no-store and audit. Activation/deactivation and geography-link lifecycle bodies additionally require explicit confirmation.
+
+| Resource | Relative routes                                                                                                                                               | Concurrency and activation rule                                                                     |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| zones    | `GET /zones`, `GET /zones/:id`, `POST /zones`, `PATCH /zones/:id`, `POST /zones/:id/activate`, `POST /zones/:id/deactivate`, `PUT /zones/:id/geography-links` | `expectedUpdatedAt`; activation requires active locality links and a current active zone base rate  |
+| rates    | `GET /rates`, `GET /rates/:id`, `POST /rates`, `PATCH /rates/:id`, `POST /rates/:id/activate`, `POST /rates/:id/deactivate`                                   | `expectedVersion`; nonnegative millimes, valid dates/scope, no overlapping equal-priority ambiguity |
+| pickups  | `GET /pickups`, `GET /pickups/:id`, `POST /pickups`, `PATCH /pickups/:id`, `POST /pickups/:id/activate`, `POST /pickups/:id/deactivate`                       | SHA-256 state token plus row lock; referenced inventory location must be active                     |
+| windows  | `GET /windows`, `GET /windows/:id`, `POST /windows`, `PATCH /windows/:id`, `POST /windows/:id/activate`, `POST /windows/:id/deactivate`                       | SHA-256 state token plus row lock; exactly one active zone or pickup owner                          |
+
+Only locality zone joins exist in the schema, so governorate/delegation links expand to at most 1,000 active localities. There is no `DeliveryMethod` model or provider adapter; active supported zones/current rates and active pickups constitute methods. Equal-priority overlap validation is conservative across order/weight bounds. Checkout currently does not persist a selected time window.
+
+### Manual fulfillment and COD custody
+
+All reads require the corresponding read permission. Writes require administrator CSRF; confirmation/cancellation, delivery completion/return, remittance actions and reconciliation also require recent authentication where declared by their controllers.
+
+| Method | Route                                                | Permission                           | Contract                                                                  |
+| ------ | ---------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------- |
+| GET    | `/api/v1/admin/orders`                               | `orders.read`                        | Bounded minimized intake list                                             |
+| GET    | `/api/v1/admin/orders/:id`                           | `orders.read`                        | Operational detail from immutable snapshots                               |
+| GET    | `/api/v1/admin/orders/:id/slip`                      | `orders.read`                        | Audited allowlisted printable representation                              |
+| POST   | `/api/v1/admin/orders/:id/confirm`                   | `orders.update`                      | Consume locked reservations and physical stock exactly once               |
+| POST   | `/api/v1/admin/orders/:id/cancel`                    | `orders.cancel`                      | Release eligible early-state reservations                                 |
+| POST   | `/api/v1/admin/orders/:id/reject`                    | `orders.cancel`                      | Reject pending intake with reason                                         |
+| POST   | `/api/v1/admin/orders/:id/prepare`                   | `orders.update`                      | Move confirmed order into preparation                                     |
+| POST   | `/api/v1/admin/orders/:id/ready-for-pickup`          | `orders.update`                      | Mark prepared store pickup ready                                          |
+| POST   | `/api/v1/admin/orders/:id/contact-attempts`          | `orders.update`                      | Append controlled manual contact evidence                                 |
+| POST   | `/api/v1/admin/orders/:id/notes`                     | `orders.update`                      | Append a visibility-scoped note                                           |
+| GET    | `/api/v1/admin/deliveries/couriers`                  | `deliveries.read`                    | Up to 100 active manual-assignment choices                                |
+| GET    | `/api/v1/admin/deliveries/courier-records`           | `deliveries.read`                    | Bounded manual courier/driver-contact records                             |
+| POST   | `/api/v1/admin/deliveries/courier-records`           | `deliveries.update`                  | Create a confirmed manual-only courier record                             |
+| PATCH  | `/api/v1/admin/deliveries/courier-records/:id`       | `deliveries.update`                  | Optimistic update; active custody blocks disablement                      |
+| GET    | `/api/v1/admin/deliveries/manifests`                 | `deliveries.read`                    | Bounded dispatch-manifest list                                            |
+| GET    | `/api/v1/admin/deliveries/manifests/:id`             | `deliveries.read`                    | Audited data-minimized dispatch manifest                                  |
+| GET    | `/api/v1/admin/deliveries/manifests/:id/export.csv`  | `deliveries.read` + `reports.export` | Recent-authenticated, audited, formula-neutralized manifest CSV           |
+| POST   | `/api/v1/admin/deliveries/manifests`                 | `deliveries.assign`                  | Atomic draft for 1-100 already-assigned deliveries                        |
+| POST   | `/api/v1/admin/deliveries/manifests/:id/transitions` | `deliveries.update`                  | Seal, custody handoff, terminal close or cancellation                     |
+| GET    | `/api/v1/admin/deliveries/exports/status.csv`        | `deliveries.read` + `reports.export` | Recent-authenticated `DELIVERY_STATUS_V1` export, capped at 500 rows      |
+| POST   | `/api/v1/admin/deliveries/imports/status`            | `deliveries.update`                  | Idempotent dry-run/apply status CSV in a JSON envelope                    |
+| GET    | `/api/v1/admin/deliveries/:id`                       | `deliveries.read`                    | Workflow detail and immutable events                                      |
+| POST   | `/api/v1/admin/deliveries/:id/assign`                | `deliveries.assign`                  | Assign an active courier                                                  |
+| POST   | `/api/v1/admin/deliveries/:id/reassign`              | `deliveries.assign`                  | Reasoned eligible reassignment                                            |
+| POST   | `/api/v1/admin/deliveries/:id/transitions`           | `deliveries.update`                  | Apply allowed reversible transition                                       |
+| POST   | `/api/v1/admin/deliveries/:id/attempts`              | `deliveries.update`                  | Record a controlled non-success attempt                                   |
+| POST   | `/api/v1/admin/deliveries/:id/complete`              | `deliveries.update`                  | Complete after durable age and exact-COD evidence                         |
+| POST   | `/api/v1/admin/deliveries/:id/return-complete`       | `deliveries.update`                  | Complete return without automatic stock restoration                       |
+| GET    | `/api/v1/admin/cash/collections`                     | `cash.read`                          | Bounded collection list                                                   |
+| GET    | `/api/v1/admin/cash/collections/export.csv`          | `cash.read` + `reports.export`       | Recent-authenticated audited `COD_COLLECTIONS_V1` CSV, capped at 500 rows |
+| GET    | `/api/v1/admin/cash/collections/:id`                 | `cash.read`                          | Collection detail and bounded allocations                                 |
+| POST   | `/api/v1/admin/cash/collections/:id/record`          | `cash.collect` + recent auth         | Record physical cash with a required operation idempotency key            |
+| GET    | `/api/v1/admin/cash/remittances`                     | `cash.read`                          | Bounded remittance list                                                   |
+| GET    | `/api/v1/admin/cash/remittances/export.csv`          | `cash.read` + `reports.export`       | Recent-authenticated audited `COD_REMITTANCES_V1` CSV, capped at 500 rows |
+| GET    | `/api/v1/admin/cash/remittances/:id`                 | `cash.read`                          | Remittance allocations, discrepancies and bounded history                 |
+| POST   | `/api/v1/admin/cash/remittances`                     | `cash.remit`                         | Create locked draft allocations                                           |
+| POST   | `/api/v1/admin/cash/remittances/:id/submit`          | `cash.remit`                         | Submit draft into custody review                                          |
+| POST   | `/api/v1/admin/cash/remittances/:id/reconcile`       | `cash.reconcile`                     | Verify or open a reasoned discrepancy                                     |
+| POST   | `/api/v1/admin/cash/discrepancies/:id/resolve`       | `cash.reconcile`                     | Resolve or write off an open discrepancy                                  |
+
+Manual workflows do not invoke courier or notification providers. Creating a manual courier writes only a credential-free `MANUAL` marker; it does not claim a provider API. Manifest handoff advances all contained deliveries from `ASSIGNED_TO_COURIER` to `HANDED_TO_COURIER` in the same transaction as immutable order, delivery and audit history. COD expectation, collection, remittance, discrepancy and reconciliation remain separate records; delivery success alone is not cash reconciliation.
+
+The status-import body contains `importKey`, `dryRun`, `csv`, and, for apply, the exact confirmation `APPLY_DELIVERY_STATUS_IMPORT`. The CSV uses the exact header emitted by `DELIVERY_STATUS_V1` export and is limited to 250 KB and 500 unique delivery rows. Dry-run and apply have separate durable idempotency receipts for the same key. Identical retries replay the stored result; changed bytes with the same key and mode return `DELIVERY_IMPORT_KEY_REUSED`. Validation is all-or-nothing and checks identifier, optimistic version, current/mirrored order status, transition, courier assignment and required explanation. A rejected apply reports `applied=false` and changes no order or delivery. CSV cannot request delivery completion, failed/refused outcomes, return completion, age evidence or cash evidence; those stay on their dedicated guarded endpoints.
+
+Physical cash collection requires CSRF, recent authentication, `cash.collect`, and a 16-128 character `Idempotency-Key`. The API stores only administrator/resource-scoped SHA-256 key and request fingerprints. An identical retry returns the committed collection without repeating cash, order, delivery, discrepancy, event, or audit writes; reuse with different input returns `IDEMPOTENCY_KEY_REUSED`.
 
 ### Currently implemented administrator read slice
 
 Every route below requires a full TOTP-verified administrator session, the listed seeded permission, a no-store response, and bounded server-side handling. Generic lists accept `page`, `limit` (maximum 50), and optional normalized `q` unless stated otherwise.
 
-| Method | Route                                | Permission        | Implemented read contract                                                                                 |
-| ------ | ------------------------------------ | ----------------- | --------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/admin/dashboard`            | `reports.read`    | Definition-backed rolling 1-90 day order, delivery, COD, and low-stock metrics with TND/timezone metadata |
-| GET    | `/api/v1/admin/inventory`            | `inventory.read`  | Variant stock rows plus filtered totals; also accepts exact `brand`, `productType`, and `flavor`          |
-| GET    | `/api/v1/admin/orders`               | `orders.read`     | Minimized order number, customer snapshot name, status, total millimes, and creation time                 |
-| GET    | `/api/v1/admin/customers`            | `customers.read`  | Minimized customer name, normalized phone, account status, and creation time                              |
-| GET    | `/api/v1/admin/deliveries`           | `deliveries.read` | Tracking/order identifier, localized zone, courier, and delivery status                                   |
-| GET    | `/api/v1/admin/cash/reconciliations` | `cash.read`       | Courier remittance status with allocated expected and verified/remitted integer-millime amounts           |
-| GET    | `/api/v1/admin/settings`             | `settings.manage` | Store/compliance settings with defensive secret-key redaction                                             |
-| GET    | `/api/v1/admin/audit`                | `audit.read`      | Privacy-minimized audit allowlist; supports `outcome` and `actorType` filters                             |
+| Method | Route                                         | Permission         | Implemented read contract                                                                                 |
+| ------ | --------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/admin/dashboard`                     | `reports.read`     | Definition-backed rolling 1-90 day order, delivery, COD, and low-stock metrics with TND/timezone metadata |
+| GET    | `/api/v1/admin/operations/metrics`            | `reports.read`     | Durable outbox counts, dead letters, expired leases, oldest backlog, and worker-heartbeat freshness       |
+| GET    | `/api/v1/admin/inventory`                     | `inventory.read`   | Variant stock rows plus filtered totals; also accepts exact `brand`, `productType`, and `flavor`          |
+| GET    | `/api/v1/admin/orders`                        | `orders.read`      | Minimized order number, customer snapshot name, status, total millimes, and creation time                 |
+| GET    | `/api/v1/admin/customers`                     | `customers.read`   | Minimized customer name, normalized phone, account status, and creation time                              |
+| GET    | `/api/v1/admin/customers/:id`                 | `customers.read`   | Bounded operations detail: addresses, recent orders, active session metadata, internal notes, and audit   |
+| POST   | `/api/v1/admin/customers/:id/notes`           | `customers.update` | Append an audited internal note; administrator CSRF is required                                           |
+| POST   | `/api/v1/admin/customers/:id/password-reset`  | `customers.update` | Queue the standard encrypted, expiring password-reset communication; CSRF and recent auth required        |
+| POST   | `/api/v1/admin/customers/:id/sessions/revoke` | `customers.update` | Revoke only active `CUSTOMER` sessions; CSRF and recent auth required                                     |
+| GET    | `/api/v1/admin/customers/:id/export`          | `customers.export` | Generate an audited, bounded JSON export without credentials, tokens, internal notes, or session data     |
+| GET    | `/api/v1/admin/deliveries`                    | `deliveries.read`  | Tracking/order identifier, localized zone, courier, and delivery status                                   |
+| GET    | `/api/v1/admin/cash/reconciliations`          | `cash.read`        | Courier remittance status with allocated expected and verified/remitted integer-millime amounts           |
+| GET    | `/api/v1/admin/settings`                      | `settings.manage`  | Store/compliance settings with defensive secret-key redaction                                             |
+| GET    | `/api/v1/admin/audit`                         | `audit.read`       | Privacy-minimized audit allowlist; supports `outcome` and `actorType` filters                             |
 
 The inventory response records an `asOf` timestamp and uses this definition:
 
@@ -116,6 +285,39 @@ remainingQuantity = eligible onHandQuantity
 Eligible inventory has no batch or belongs to a non-archived, non-expired batch. Item status distinguishes in-stock, low-stock, out-of-stock, and negative-result invariant breaches. `availableQuantity` is a compatibility alias of `remainingQuantity`.
 
 `grouping.scope` is `FILTERED_RESULT`: `byBrand`, `byProductType`, `byFlavor`, and `byBrandAndFlavor` aggregate the entire filter match, not only the paginated rows. The grouped query is parameterized and fails closed if it would exceed 5,000 groups. These values are operational/advisory; they do not reserve stock or replace checkout-time row locking.
+
+The settings transfer endpoint is deliberately `POST` so administrator CSRF is checked in addition to a full administrator session, `settings.manage`, recent authentication, throttling and no-store. It returns at most 500 rows per setting scope and at most 1 MiB of deterministic JSON. Records marked `secret` and keys matching defensive credential/secret patterns are omitted, not replaced with reversible placeholders. The response contains the omitted count and a SHA-256 checksum of the canonical document before the checksum field is appended. The audit record stores only format, counts and checksum; it never copies setting values. The export does not include infrastructure environment variables and is not an import or publication bypass.
+
+### Exact Super Administrator account lifecycle slice
+
+Administrator-account management and customer-account lifecycle actions are intentionally separate. Every route in this section requires a full TOTP-verified administrator session, the exact active `super-administrator` role from the server-side session, the listed seeded permissions, and a no-store response. An `administrator` role or matching permissions alone is insufficient. Every mutation also requires the administrator CSRF token, a recent-authentication assertion, explicit confirmation, a reason, and optimistic user/profile versions.
+
+| Method | Route                                        | Permission(s)                        | Contract                                                                                                    |
+| ------ | -------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/admin/access/admins`                | `users.manage`, `system.manage`      | Bounded administrator list; accepts `page`, `limit`, `q`, and optional account `status`                     |
+| POST   | `/api/v1/admin/access/admins`                | `users.manage`, `system.manage`      | Create a named non-super administrator; TOTP enrollment is mandatory before the account becomes operational |
+| POST   | `/api/v1/admin/access/admins/:id/suspend`    | `users.manage`, `system.manage`      | Suspend an administrator and revoke that user's active administrator-realm sessions                         |
+| POST   | `/api/v1/admin/access/admins/:id/reactivate` | `users.manage`, `system.manage`      | Reactivate a suspended administrator without creating a session                                             |
+| POST   | `/api/v1/admin/access/admins/:id/anonymize`  | `users.manage`, `system.manage`      | Irreversibly anonymize an already suspended administrator while preserving referential and audit history    |
+| POST   | `/api/v1/admin/customers/:id/suspend`        | `customers.suspend`, `system.manage` | Suspend a customer profile and revoke only that user's active customer-realm sessions                       |
+| POST   | `/api/v1/admin/customers/:id/reactivate`     | `customers.suspend`, `system.manage` | Reactivate a suspended customer without creating a session                                                  |
+| POST   | `/api/v1/admin/customers/:id/disable`        | `customers.suspend`, `system.manage` | Disable an already suspended customer without destroying historical commercial records                      |
+| POST   | `/api/v1/admin/customers/:id/anonymize`      | `customers.suspend`, `system.manage` | Anonymize direct account/address data after active order workflows end; immutable commerce history remains  |
+
+The administrator routes address a `User` ID; the customer lifecycle routes address the customer-profile ID returned by `GET /api/v1/admin/customers`. Lifecycle bodies contain `expectedUserVersion`, `expectedProfileVersion`, `reason`, and `confirmed: true`. Administrator anonymization additionally requires `confirmation: "ANONYMIZE_ADMIN"`; customer disabling requires `confirmation: "DISABLE_CUSTOMER"`; customer anonymization requires `confirmation: "ANONYMIZE_CUSTOMER"`. Creation requires a unique administrator email, display name, a policy-compliant initial password, `confirmed: true`, and optional employee/job metadata and system role keys. The protected API rejects `super-administrator` in the creation role list because promotion to that role requires a separate approval workflow.
+
+Self-suspension, self-reactivation, and self-anonymization are rejected. Suspending or anonymizing an operational Super Administrator is also rejected unless another operational, TOTP-enrolled Super Administrator remains. Successful lifecycle actions write audit and security events; denied lifecycle actions write safe audit events. `Disable customer` is an access-control action, not privacy erasure. The separate customer anonymization command requires suspended/disabled state and refuses while a non-terminal order exists; it replaces direct account/address identifiers and credential material while leaving immutable order, delivery, cash, consent, internal-note, security, and audit history intact.
+
+### Health, worker and backup boundaries
+
+| Method | Route                  | Contract                                                                                                   |
+| ------ | ---------------------- | ---------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/health/live`  | No-store process liveness only                                                                             |
+| GET    | `/api/v1/health/ready` | No-store safe dependency summary; 503 unless MySQL, Redis, expected migrations and worker heartbeat are up |
+
+The durable worker has no public mutation API. MySQL `OutboxEvent` is authoritative and BullMQ carries deterministic event references only. The implemented worker supports reservation-expiry, notification-dispatch, and media-object-deletion version-1 events with bounded leases, retries and dead-letter states. Local email uses SMTP/Mailpit; production configuration requires authenticated TLS SMTP plus the authenticated HTTPS SMS webhook adapter. Provider selection, credentials, and staging evidence remain deployment responsibilities; no courier provider is claimed.
+
+Backup/restore are operator commands, not HTTP routes. `pnpm backup:mysql` produces a timestamped gzip logical dump, AES-256-GCM encrypted by default, plus a checksum/migration manifest and bounded retention. `pnpm restore:mysql` accepts only an explicitly confirmed empty disposable database, authenticates and expands the dump before mutation, and performs migration/structural verification. `pnpm restore:drill` provisions only a generated-name isolated database, records a drill report and drops it by default. Script coverage is not evidence of a successful production-shaped restore; logical-backup row counts are advisory.
 
 ## Safe errors
 
@@ -131,7 +333,7 @@ Errors have one stable envelope:
       }
     }
 
-Production responses omit stack traces, SQL/Prisma details, paths, secrets, and object existence that would enable enumeration. Authentication and reset endpoints use generic messages. Conflict errors distinguish safe business cases such as OUT_OF_STOCK, IDEMPOTENCY_CONFLICT, DELIVERY_AREA_UNSUPPORTED, CHECKOUT_DISABLED, LEGAL_GATE_CLOSED, and INVALID_STATE_TRANSITION.
+Production responses omit stack traces, SQL/Prisma details, paths, secrets, and object existence that would enable enumeration. Authentication and reset endpoints use generic messages. Conflict errors distinguish safe business cases such as `OUT_OF_STOCK`, `IDEMPOTENCY_CONFLICT`, `DELIVERY_AREA_UNSUPPORTED`, `CHECKOUT_DISABLED`, and `INVALID_STATE_TRANSITION`.
 
 ## Pagination, filtering, and exports
 
@@ -141,13 +343,13 @@ Large reports/exports return 202 Accepted with a job resource. Downloads are sho
 
 ## Checkout idempotency
 
-POST /api/v1/checkout/orders requires Idempotency-Key. The server scopes it to the customer or guest-cart identity and operation, stores a request fingerprint and final response in the order transaction, and returns the same result for a matching retry. Reusing a key with a different fingerprint yields 409 IDEMPOTENCY_CONFLICT. Keys are never accepted as order numbers.
+`POST /api/v1/checkout/orders` requires `Idempotency-Key`. The server scopes its hash to the authenticated customer and checkout-order operation, stores a request fingerprint and completed order reference in the same transaction, and returns the same result for a matching retry. Reusing a key with a different fingerprint yields `409 IDEMPOTENCY_CONFLICT`; an equivalent in-flight request also fails closed. Keys are never accepted as order numbers.
 
 The client submits requested item quantities, address/delivery choices, and consent version references; it does not submit trusted unit prices, discounts, fee, tax, stock, roles, or totals.
 
 ## Optimistic concurrency and state changes
 
-Admin edits that could overwrite concurrent work include a version/If-Match value. A mismatch returns 409 VERSION_CONFLICT. Inventory, checkout, delivery, and COD still use transactional locking/state conditions rather than relying only on optimistic checks.
+Admin edits that could overwrite concurrent work include an expected version or update timestamp. A mismatch returns a stable 409 conflict. Delivery rates, variants, inventory, orders, deliveries and settings use integer versions; brands/categories/zones use an expected modification timestamp. Pickup locations and delivery windows lack schema concurrency columns and therefore use a returned SHA-256 state token plus a row lock. Inventory, checkout, delivery, and COD still use transactional locking/state conditions rather than relying only on optimistic checks.
 
 State-transition endpoints accept an intended target, reason, expected version, and domain-specific evidence. The server derives actor, current state, permissions, allowed transition, timestamps, and audit metadata.
 

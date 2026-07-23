@@ -1,6 +1,6 @@
 # Implementation plan
 
-Last updated: 2026-07-11
+Last updated: 2026-07-21
 
 ## Delivery policy
 
@@ -21,28 +21,34 @@ The direct dependency baseline selected in the manifests on 2026-07-11 is:
 | Accessible UI          | Radix Dialog 1.1.19, Radix Slot 1.3.0, Lucide React 1.24.0                                                                                                                   |
 | Tests                  | Vitest 4.1.10, Testing Library React 16.3.2/User Event 14.6.1/jest-dom 6.9.1, Playwright 1.61.1, Supertest 7.2.2, jsdom 29.1.1                                               |
 | Worker                 | BullMQ 5.80.2, ioredis 5.11.1, Pino 10.3.1, Zod 4.4.3                                                                                                                        |
-| Local containers       | MySQL 8.4, Redis 7.4 Alpine, MinIO RELEASE.2025-04-22T22-12-26Z, MinIO client RELEASE.2025-04-16T18-13-26Z, Mailpit v1.27, Nginx unprivileged 1.28 Alpine                    |
+| Local containers       | MySQL 8.4, Redis 7.4 Alpine, MinIO RELEASE.2025-04-22T22-12-26Z, MinIO client RELEASE.2025-04-16T18-13-26Z, Mailpit v1.27, Nginx unprivileged 1.30.2 Alpine slim             |
 
 The lockfile, not this summary, resolves transitive versions. Before controlled staging, review runtime compatibility and security advisories, pin container digests and CI action commit SHAs, generate an SBOM, and record any approved exception.
 
 ## Current status
 
-| Phase                             | Scope                                                                         | Status      | Exit evidence                                                            |
-| --------------------------------- | ----------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------ |
-| 1. Foundation                     | pnpm workspace, React, NestJS, worker, configuration, Docker, CI              | In progress | Fresh install, all services healthy, configuration rejection tests       |
-| 2. Database                       | Complete Prisma model, migration, structural Tunisia/RBAC seed, indexes       | In progress | Empty and existing database migration tests; no default admin            |
-| 3. Authentication and RBAC        | Separate customer/admin authentication, sessions, 2FA, permissions, admin CLI | In progress | Realm-separation, session, CSRF, throttling, 2FA, RBAC matrix tests      |
-| 4. Catalog                        | Products, variants, taxonomy, suppliers, images, admin CRUD, storefront       | Planned     | CRUD, archival/history, uniqueness, upload-security, accessibility tests |
-| 5. Inventory                      | Locations, movements, reservations, batch/expiry, concurrency                 | Planned     | Final-unit race and reservation-expiry tests; stock never negative       |
-| 6. Geography and delivery pricing | Tunisia hierarchy, zones, rates, pickup, deterministic resolver               | Planned     | 24 governorates seeded; unsupported/rate-priority tests                  |
-| 7. Cart and checkout              | Guest/customer carts, promotions, authoritative totals, COD, idempotency      | Planned     | Mandatory checkout scenarios and money/property tests                    |
-| 8. Orders and delivery            | State machines, attempts, manifests, courier adapters, notifications          | Planned     | Transition matrix, failed-age-check, return workflow tests               |
-| 9. COD reconciliation             | Collection, remittance, discrepancies, reports                                | Planned     | Segregation-of-duty and end-to-end reconciliation tests                  |
-| 10. Compliance                    | Age gates, legal versions, consent, delivery verification, launch gate        | Planned     | Checkout remains closed for every missing prerequisite                   |
-| 11. Reporting/admin               | Dashboards, customer operations, exports, audit/security/job views            | Planned     | Permission, pagination, privacy, CSV-injection, audit tests              |
-| 12. Hardening                     | Security, accessibility, load, backup/restore, staging deployment             | Planned     | All definition-of-done evidence recorded and independently reviewed      |
+| Phase                             | Scope                                                                         | Status                   | Recorded exit evidence                                                      |
+| --------------------------------- | ----------------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------- |
+| 1. Foundation                     | pnpm workspace, React, NestJS, worker, configuration, Docker, CI              | Implemented/local pass   | Frozen gate, production builds, healthy full Compose stack                  |
+| 2. Database                       | Complete Prisma model, migration, structural Tunisia/RBAC seed, indexes       | Implemented/local pass   | MySQL 8.4 migration/seed checks; safe seed; isolated restore                |
+| 3. Authentication and RBAC        | Separate customer/admin authentication, sessions, 2FA, permissions, admin CLI | Implemented/local pass   | Realm/CSRF/TOTP/RBAC positive and negative tests                            |
+| 4. Catalog                        | Products, variants, taxonomy, suppliers, images, admin CRUD, storefront       | Implemented/local pass   | CRUD/media/import/archive/filter/UI tests; Wotofo 19/321/145 verification   |
+| 5. Inventory                      | Locations, movements, reservations, batch/expiry, concurrency                 | Implemented/local pass   | Receipt/adjustment/transfer plus full-target final-unit race                |
+| 6. Geography and delivery pricing | Tunisia hierarchy, zones, rates, pickup, deterministic resolver               | Implemented/local pass   | 24 governorates and deterministic method/rate validation                    |
+| 7. Cart and checkout              | Customer carts, authoritative totals, COD, reservations and idempotency       | Implemented/local pass   | Real browser checkout/replay and 50-checkout/20-replay load                 |
+| 8. Orders and delivery            | State machines, attempts, manual fulfillment and notifications                | Implemented/local pass   | Real order-to-delivery flow, guarded transitions, manual operations         |
+| 9. COD reconciliation             | Collection, remittance, discrepancies, reports                                | Implemented/local pass   | Collection/remittance and independent dual-control reconciliation           |
+| 10. Compliance                    | Age gates, consent, delivery verification and operational launch gate         | Implemented/local pass   | Configurable controls; only store/delivery blockers on fresh seed           |
+| 11. Reporting/admin               | Dashboards, customer operations, settings, exports and audit views            | Implemented/local pass   | Permission/pagination/privacy/formula-safe export and admin UI tests        |
+| 12. Hardening                     | Security, health, outbox, backup/restore, load and staging deployment         | Implemented; target open | Security gate, 500/50 load, encrypted restore drill, non-root Compose smoke |
 
 Do not change a status to complete based on unrecorded local results. Link CI runs, test reports, migration checks, restore evidence, and human sign-offs in this file or the readiness report.
+
+The shared worktree contains the complete operational slices for separated authentication and account lifecycle, writable catalog/media/taxonomy, transactional inventory and reservations, Tunisia geography and manual delivery, customer carts/accounts, authoritative atomic COD checkout, guarded order/delivery transitions, COD custody/reconciliation, settings, notifications, durable outbox processing, dependency readiness, and encrypted backup/restore. The recorded local evidence now includes MySQL 8.4/Redis integration, real-browser order-to-cash coverage, the full 500-browser/50-checkout load target, an isolated encrypted restore drill, production builds, non-root container builds, and a healthy full Compose smoke. Purchaser provider credentials and target-environment acceptance remain deployment work, not missing application behavior.
+
+Fresh-database operational defaults are `checkout.enabled=true` and `prelaunch.mode=false`, with corresponding environment defaults `CHECKOUT_ENABLED=true` and `PRELAUNCH_MODE=false`. Re-running the structural seed preserves an existing setting value rather than overriding an operator change. Legal review and legal-document publication are not runtime checkout prerequisites or technical-readiness inputs. Checkout still fails closed for a stricter checkout or prelaunch environment override, maintenance mode, an invalid configured minimum age, missing store name/phone/email/address, no active pickup or supported zone/current rate, unavailable required services, and request-specific catalog, customer, address, stock, pricing, configured consent, or COD validation failures. The structural seed creates no administrator, customer, product, stock, rate, pickup, or provider configuration.
+
+> Legal and regulatory suitability is the responsibility of the purchaser/operator and is outside the software production-readiness assessment.
 
 ## Phase details
 
@@ -68,50 +74,61 @@ Do not change a status to complete based on unrecorded local results. Link CI ru
 
 - Implement customer endpoints only under /api/v1/auth/customer/* and admin endpoints only under /api/v1/auth/admin/*.
 - Use distinct cookie names, Redis session prefixes, CSRF tokens, throttles, guards, login audit events, revocation, and timeouts.
-- A successful admin password check creates only a short-lived pending challenge. Mandatory TOTP or a one-time recovery code promotes it to a full admin session.
+- A successful admin password check creates only a short-lived pending challenge. Mandatory TOTP promotes it to a full admin session; a recovery endpoint is not currently exposed.
+- During first-login enrollment, return an `otpauth://` URI and render its QR code locally in the admin UI with a manual-key fallback. Reuse the same encrypted, unverified TOTP seed across password retries until enrollment succeeds or an authorized reset explicitly replaces it.
 - Keep the admin UI entry at /admin/login and customer entry at /login.
 - Implement Argon2id hashing, generic errors, progressive delay, reset/verification token hashing, rotation, idle and absolute expiry, and full revocation.
 - Create the first Super Administrator through a secure interactive CLI; never seed one.
+- Restrict that interactive CLI to the first administrator only. Subsequent named non-super administrators are created through the exact-super protected API and must enroll TOTP before becoming operational.
+- Separate administrator and customer lifecycle commands. Require exact Super Administrator role plus permissions, CSRF, recent authentication, confirmation, reason, optimistic versions, realm-scoped revocation, and audit; forbid self-lifecycle changes and loss of the last operational Super Administrator.
 - Enforce permissions on the NestJS API and add a deny-by-default RBAC matrix.
 
 ### Phases 4–7 — commerce core
 
-- Complete catalog, upload quarantine, inventory, Tunisia geography/rates, cart, promotion, and checkout slices.
-- The current commerce API slice exposes bounded published catalog reads, guarded/audited product create-update-archive-restore operations, authoritative checkout-policy evaluation, and a non-reserving integer-millime quote. Atomic idempotent order creation remains planned and must not be represented by the quote endpoint.
+- Catalog/media, promotion validation, supplier/batch operations, product/variant/taxonomy writes, archival, ordering, secure image upload, durable deletion, and production-scale verification are implemented and covered by the release, browser, and load gates. Imported-media review closes through a distinct audited, recent-authenticated draft transition only after every pending/quarantined image is resolved and an approved eligible image remains; it never publishes or clears pricing/stock controls.
+- Catalog import now uses persisted CSV/JSON previews, canonical payload fingerprints, bounded validation, explicit replay-safe apply, row receipts, source provenance, audit, and a create-only version-guarded archival rollback. Concurrent identical apply calls converge on one fingerprint-validated receipt. Image-source overrides retain the prior source row and image link under a reserved historical key before creating the new canonical record. The reviewed official Wotofo path verifies 19 products and 321 deterministic variants against allowlisted source endpoints, then imports approved media through the normal validator/storage boundary. The recorded local media result is 145 stored images. All imported records remain drafts and real price, supplier cost, available stock, and publication remain operator work.
+- The current commerce API exposes bounded published catalog and facet reads; guarded/audited product, variant, brand, and category lifecycle operations; reservation-aware inventory reads and adjustments; bounded geography/delivery-option reads; authenticated customer cart operations; authoritative checkout-policy evaluation; and a non-reserving integer-millime quote.
+- `POST /api/v1/checkout/orders` is implemented for authenticated customers and COD only. One bounded `READ COMMITTED` transaction claims a customer-scoped hashed idempotency key, replays a completed identical request, validates authoritative policy/customer/catalog/pricing/delivery data, locks eligible inventory rows in stable order, subtracts active reservations, and creates immutable order/item/address/consent/fee snapshots, active reservations, initial order/delivery/COD records, a queued notification, audit evidence, and the completed idempotency result. Checkout reserves but does not decrement physical on-hand.
+- The public home surface uses a responsive French/Arabic dark-neon presentation with API-derived featured products, prices, availability, flavors, and categories. Decorative device artwork is code-native; empty catalogs remain explicit and no demonstration product claims, ratings, nicotine levels, stock, or delivery promises are fabricated.
+- A local-only landing-page preview may render that surface during prelaunch only in Vite development, only when explicitly enabled, and only after any enabled minimum-age confirmation. It does not change stored prelaunch, checkout, maintenance, API, or production-build gates.
 - Resolve delivery rate precedence deterministically: explicit locality rule, delegation rule, governorate rule, zone rule, then eligible store-wide base; apply documented surcharges in stable priority order. A missing or ambiguous result blocks checkout.
-- In one transaction, claim idempotency, lock inventory, validate publication/age/quantity, calculate promotions/delivery/totals, create snapshots/reservations/order/history, then commit.
-- Publish notification jobs through an outbox or equivalent commit-safe mechanism; workers are idempotent.
+- Administrator confirmation locks the order, active reservations, and inventory, requires complete unexpired coverage and expected versions, decrements physical on-hand exactly once, consumes reservations, and advances order/delivery history. Customer or administrator cancellation releases only active reservations, does not increase physical stock, and cancels the COD expectation atomically.
+- Delivery configuration supports inactive-by-default zones, locality-expanded governorate/delegation links, rates, pickups, and time windows with deterministic specificity, validity/ambiguity checks, activation readiness, audited lifecycle actions, and optimistic concurrency. There is no separate `DeliveryMethod` table or provider integration.
 
 ### Phases 8–11 — operations
 
-- Enforce order and delivery transition matrices on the backend and preserve immutable histories.
+- Implemented administrator order intake includes detail/slip, confirm, cancel/reject, prepare, ready-for-pickup, append-only contact attempts, and visibility-scoped notes. Manual delivery includes courier assignment/reassignment, controlled transitions and attempts, exact age/COD completion, and return completion without automatic restock.
+- Implemented COD custody separates expected collection, physical cash recording, draft allocation/remittance, submission, verification or discrepancy creation, and reasoned discrepancy resolution/write-off. Recent authentication protects remittance and reconciliation actions; collected cash is not treated as reconciled merely because delivery succeeded.
+- Continue enforcing and testing order and delivery transition matrices on the backend and preserve immutable histories.
 - Make a failed age-verification result terminal for delivery until a separately authorized return/override workflow.
 - Track COD expected, collected, held, remitted, discrepant, and reconciled as separate events and amounts.
 - Require recent authentication and elevated permission for reconciliation, inventory corrections, role changes, compliance publication, and other dangerous actions.
-- Bound every list/export; enqueue large exports; minimize personal data and neutralize CSV formulas.
+- Treat administrator anonymization and customer disabling as distinct suspended-first workflows. Preserve append-only audit and historical commerce references; customer disabling is not a substitute for legally reviewed privacy erasure.
+- Bound every list/export; enqueue large exports; minimize personal data and neutralize CSV formulas. The minimized customer export is bounded; a generic asynchronous large-export service is not claimed.
 
 ### Phase 12 — hardening and release
 
-- Run architecture, security, business-logic, accessibility, and operations reviews.
-- Run the documented 500-browser/50-checkout staging workload; record the environment and actual results without extrapolation.
-- Execute backup and isolated restore drills and record RPO/RTO measurements.
-- Scan dependencies, source, secrets, containers, and SBOMs; resolve or accept findings through time-limited risk records.
-- Obtain Tunisian legal/regulatory and human security approval before considering any limited production release.
+- The durable worker now leases MySQL `OutboxEvent` rows in bounded batches and uses BullMQ only as transport. Versioned handlers expire reservations or dispatch notifications idempotently; failures use bounded retry and dead-letter states. Development supports console and Mailpit SMTP; production supports authenticated TLS SMTP and an optional authenticated HTTPS SMS webhook. Explicitly disabled SMS rows close as cancelled without a provider call. Selected-provider acceptance evidence remains a deployment task.
+- `/api/v1/health/live` is process-only. `/api/v1/health/ready` fails with 503 unless MySQL, Redis, the expected migration, and a fresh durable-worker heartbeat are all available.
+- Backup tooling creates a timestamped gzip logical MySQL dump, AES-256-GCM encrypted by default, plus an authenticated checksum/migration/count manifest and safe age retention. Restore requires an explicitly confirmed empty disposable target, authenticates and expands before mutation, and runs migration/structural verification. The 2026-07-20 local drill restored and verified in 16.372 seconds, removed its generated database/identity, and recorded zero invariant violations. The purchaser must still measure accepted full-service RPO/RTO in target staging.
+- Architecture, security, business-logic, accessibility, and operations checks are included in the local release and operational-browser suites; an independent human review remains part of target acceptance.
+- The documented disposable workload passed the full 500-browser/50-checkout targets without oversell, duplicate orders, dead letters, or reconciliation drift.
+- Dependency/source/secret/container/SBOM workflows are configured; mandatory remote workflow results must be retained for the promoted commit.
+- Obtain human security, operations, and release approval before considering any limited production release. Legal suitability is tracked separately and is not an input to this technical plan.
 
 ## Mandatory scenario ledger
 
-The following require automated evidence: guest and customer COD checkout; invalid and unsupported addresses; exact server delivery fee; final-unit exclusion; idempotent retry; customer-order IDOR denial; RBAC denials; valid delivery transitions; admin-without-2FA denial; archived product behavior; reservation release; refused/failed-age return flows; cash collection/remittance/reconciliation; malicious upload rejection; login throttling; CSV injection protection; and maintenance, checkout-disabled, and legal-review gates.
+The following require automated evidence: customer COD checkout and any future guest checkout; invalid and unsupported addresses; exact server delivery fee; final-unit exclusion; idempotent retry; customer-order IDOR denial; RBAC denials; valid delivery transitions; admin-without-2FA denial; archived product behavior; reservation release; configured age/consent behavior; refused/failed-age return flows; cash collection/remittance/reconciliation; malicious upload rejection; login throttling; CSV injection protection; and maintenance, checkout-disabled, and prelaunch gates.
 
 ## Blocking external inputs
 
-Implementation can use closed-by-default placeholders, but controlled staging cannot open checkout without:
+Legal approval is recorded complete by owner instruction and no additional legal-document publication is required by the runtime checkout policy. Controlled staging still requires these external operating inputs:
 
-- Written qualified Tunisian legal and regulatory confirmation.
-- Minimum purchasing age and approved delivery identity/age process.
-- Published legal document content and product warnings.
-- Legal store identity, tax/invoice policy, and return/refund policy.
-- Real store contact details and delivery coverage/rates.
-- Approved courier operating process or credentials.
+- Verified legal store identity and real store contact information in operational settings.
+- Real delivery coverage/rates and an approved pickup/courier operating process.
+- Real commercial prices, supplier/stock intake, and publication review for any imported catalog drafts.
+- Interactive creation and TOTP enrollment of the first Super Administrator.
+- Approved manual courier process or optional provider credentials.
 - Production DNS/TLS, secrets, SMTP/SMS, object-storage, monitoring, and backup destinations.
 - Named owners for security, incidents, cash reconciliation, privacy requests, and releases.
 

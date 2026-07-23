@@ -39,7 +39,7 @@ Package manifests and pnpm-lock.yaml are the authoritative record of exact depen
 - Historical records are not destroyed by catalog archival or customer anonymization.
 - Audit and security records are append-only through normal application APIs.
 - No administrator, product, order, or credential is created as demonstration production data.
-- Production checkout remains closed unless legal review, legal publications, store configuration, minimum age, and a valid delivery method all pass.
+  .
 
 ## Authentication boundary
 
@@ -99,6 +99,6 @@ Run end-to-end, security, load, migration, Docker, backup, and restore checks wh
 
 ## Testing expectations
 
-Tests must include successful behavior and denied behavior. Do not mock away the database transaction or authorization rule under test. Mandatory suites cover RBAC, authentication realm separation, admin 2FA, IDOR, checkout idempotency, final-stock concurrency, delivery transitions, age-check failure, maintenance/legal gates, upload security, and COD reconciliation.
+Tests must include successful behavior and denied behavior. Do not mock away the database transaction or authorization rule under test. Mandatory suites cover RBAC, authentication realm separation, admin 2FA, IDOR, checkout idempotency, final-stock concurrency, delivery transitions, configured age/consent failure, maintenance/prelaunch gates, upload security, and COD reconciliation.
 
 The repository must not be described as production-ready merely because it builds. Only the verdict vocabulary in PRODUCTION_READINESS_REPORT.md is permitted.

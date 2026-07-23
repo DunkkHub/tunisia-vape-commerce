@@ -15,7 +15,7 @@ export class StorefrontCatalogController {
   constructor(private readonly catalog: CatalogService) {}
 
   @Get('storefront/status')
-  @ApiOperation({ summary: 'Get storefront launch, checkout, legal and age-gate status' })
+  @ApiOperation({ summary: 'Get storefront operational, checkout and age-gate status' })
   status(@Req() request: Request) {
     return this.catalog.status(request);
   }

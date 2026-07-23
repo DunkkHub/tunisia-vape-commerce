@@ -1,15 +1,18 @@
-import { useQuery } from '@tanstack/react-query';
-import { RefreshCw, Search, X } from 'lucide-react';
-import { useMemo, type FormEvent } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { Download, RefreshCw, Search, X } from 'lucide-react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 
 import { adminDataClient } from '../../api/admin-data-client';
 import type { AdminInventoryPage } from '../../api/types';
+import { useAdminAuth } from '../../auth/admin-auth-context';
 import { Button } from '../../components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
 import { FormField, SelectField } from '../../components/ui/form-field';
 import { LocalDate } from '../../components/ui/price';
+import { downloadText } from '../../utils/download-text';
 
 interface SummaryItem {
   key: string;
@@ -65,6 +68,11 @@ function summaries(data: AdminInventoryPage, t: (key: string) => string) {
 
 export function AdminInventoryPage() {
   const { t } = useTranslation();
+  const { user } = useAdminAuth();
+  const canExport = Boolean(
+    user?.permissions.includes('inventory.read') && user.permissions.includes('reports.export'),
+  );
+  const [exportMessage, setExportMessage] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
   const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
   const queryString = useMemo(() => {
@@ -79,6 +87,17 @@ export function AdminInventoryPage() {
     queryKey: ['admin', 'inventory', queryString],
     queryFn: () => adminDataClient.inventory(queryString),
     placeholderData: (previous) => previous,
+  });
+  const exportInventory = useMutation({
+    mutationFn: () => adminDataClient.downloadInventory(queryString),
+    onSuccess: (result) => {
+      downloadText(result.content, result.filename, 'text/csv;charset=utf-8');
+      setExportMessage(
+        result.rowCount === null
+          ? t('admin.inventoryOps.exportReady')
+          : t('admin.inventoryOps.exportReadyRows', { count: result.rowCount }),
+      );
+    },
   });
 
   const applyFilters = (event: FormEvent<HTMLFormElement>) => {
@@ -108,16 +127,35 @@ export function AdminInventoryPage() {
           <h1>{t('admin.inventory')}</h1>
           <p>{t('admin.inventorySubtitle')}</p>
         </div>
-        <Button
-          type="button"
-          variant="admin"
-          onClick={() => void inventory.refetch()}
-          disabled={inventory.isFetching}
-        >
-          <RefreshCw aria-hidden="true" size={17} />
-          {t('admin.refresh')}
-        </Button>
+        <div className="admin-toolbar-actions">
+          {canExport ? (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => exportInventory.mutate()}
+              loading={exportInventory.isPending}
+            >
+              <Download aria-hidden="true" size={17} />
+              {t('admin.inventoryOps.exportCsv')}
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="admin"
+            onClick={() => void inventory.refetch()}
+            disabled={inventory.isFetching}
+          >
+            <RefreshCw aria-hidden="true" size={17} />
+            {t('admin.refresh')}
+          </Button>
+        </div>
       </header>
+
+      {exportMessage ? (
+        <p className="form-success" role="status">
+          {exportMessage}
+        </p>
+      ) : null}
 
       <form className="admin-inventory-filters" onSubmit={applyFilters}>
         <FormField
@@ -178,6 +216,7 @@ export function AdminInventoryPage() {
 
       {inventory.isPending ? <LoadingState label={t('common.loading')} tone="admin" /> : null}
       {inventory.isError ? <ErrorState onRetry={() => void inventory.refetch()} /> : null}
+      {exportInventory.isError ? <ErrorState compact /> : null}
       {inventory.data ? (
         <>
           <div className="admin-inventory-asof">
@@ -206,6 +245,7 @@ export function AdminInventoryPage() {
                     <th scope="col">{t('admin.columns.reserved')}</th>
                     <th scope="col">{t('admin.columns.remaining')}</th>
                     <th scope="col">{t('admin.columns.status')}</th>
+                    <th scope="col">{t('common.actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -219,7 +259,14 @@ export function AdminInventoryPage() {
                       <td>{item.onHandQuantity}</td>
                       <td>{item.reservedQuantity}</td>
                       <td>{item.remainingQuantity}</td>
-                      <td>{item.status}</td>
+                      <td>
+                        {t(`admin.inventoryOps.stockStatuses.${item.status}`, {
+                          defaultValue: item.status,
+                        })}
+                      </td>
+                      <td>
+                        <Link to={`/admin/inventory/${item.id}`}>{t('common.details')}</Link>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

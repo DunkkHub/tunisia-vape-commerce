@@ -26,10 +26,14 @@ export function CatalogPage({
 }: {
   mode?: 'catalog' | 'search' | 'category' | 'brand';
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const params = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const [priceError, setPriceError] = useState<string>();
+  const numberFormatter = useMemo(
+    () => new Intl.NumberFormat(i18n.resolvedLanguage === 'ar' ? 'ar-TN' : 'fr-TN'),
+    [i18n.resolvedLanguage],
+  );
   const queryString = useMemo(() => {
     const query = new URLSearchParams(searchParams);
     query.set('page', query.get('page') ?? '1');
@@ -65,6 +69,8 @@ export function CatalogPage({
     const rawBrand = data.get('brand');
     const rawProductType = data.get('productType');
     const rawFlavor = data.get('flavor');
+    const rawPuffCount = data.get('puffCount');
+    const rawNicotineStrength = data.get('nicotineStrengthMg');
     const q = typeof rawQuery === 'string' ? rawQuery.trim() : '';
     const sort = typeof rawSort === 'string' ? rawSort : 'newest';
     const minimumMillimes = tndToMillimes(data.get('minimumPrice'));
@@ -80,6 +86,8 @@ export function CatalogPage({
       ['brand', rawBrand],
       ['productType', rawProductType],
       ['flavor', rawFlavor],
+      ['puffCount', rawPuffCount],
+      ['nicotineStrengthMg', rawNicotineStrength],
     ] as const) {
       const value = typeof rawValue === 'string' ? rawValue.trim() : '';
       if (value) next.set(key, value);
@@ -163,7 +171,36 @@ export function CatalogPage({
               <option value="">{t('catalog.allFlavors')}</option>
               {facetsQuery.data?.flavors.map((flavor) => (
                 <option key={flavor.value} value={flavor.value}>
-                  {flavor.value} ({flavor.productCount})
+                  {i18n.resolvedLanguage === 'ar' ? flavor.nameAr : flavor.nameFr} (
+                  {flavor.productCount})
+                </option>
+              ))}
+            </SelectField>
+            <SelectField
+              name="puffCount"
+              label={t('catalog.puffCount')}
+              defaultValue={searchParams.get('puffCount') ?? ''}
+            >
+              <option value="">{t('catalog.allPuffCounts')}</option>
+              {facetsQuery.data?.puffCounts?.map((puffCount) => (
+                <option key={puffCount.value} value={puffCount.value}>
+                  {t('catalog.puffCountValue', {
+                    count: numberFormatter.format(puffCount.value),
+                  })}{' '}
+                  ({puffCount.productCount})
+                </option>
+              ))}
+            </SelectField>
+            <SelectField
+              name="nicotineStrengthMg"
+              label={t('catalog.nicotineStrength')}
+              defaultValue={searchParams.get('nicotineStrengthMg') ?? ''}
+            >
+              <option value="">{t('catalog.allNicotineStrengths')}</option>
+              {facetsQuery.data?.nicotineStrengthsMg?.map((strength) => (
+                <option key={strength.value} value={strength.value}>
+                  {t('catalog.nicotineStrengthValue', { strength: strength.value })} (
+                  {strength.productCount})
                 </option>
               ))}
             </SelectField>

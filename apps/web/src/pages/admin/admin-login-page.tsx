@@ -1,17 +1,66 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Fingerprint, KeyRound, LockKeyhole, ShieldCheck } from 'lucide-react';
-import { useState } from 'react';
+import QRCode from 'qrcode';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { Link, Navigate, useLocation } from 'react-router-dom';
 import { z } from 'zod';
 
+import { ApiError } from '../../api/http';
 import type { AdminChallengeResponse } from '../../api/types';
 import { useAdminAuth } from '../../auth/admin-auth-context';
 import { BrandMark } from '../../components/brand/mark';
 import { Button } from '../../components/ui/button';
 import { FormField } from '../../components/ui/form-field';
 import { LanguageSwitch } from '../../components/ui/language-switch';
+
+type AdminLoginError = 'admin.genericError' | 'admin.invalidTotp' | 'admin.challengeExpired';
+
+function EnrollmentQrCode({ enrollmentUri }: { enrollmentUri: string }) {
+  const { t } = useTranslation();
+  const [source, setSource] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    void QRCode.toString(enrollmentUri, {
+      type: 'svg',
+      errorCorrectionLevel: 'M',
+      margin: 3,
+      width: 224,
+      color: { dark: '#07110e', light: '#ffffff' },
+    })
+      .then((svg) => {
+        if (active) {
+          setSource(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+        }
+      })
+      .catch(() => {
+        if (active) setFailed(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [enrollmentUri]);
+
+  return (
+    <figure className="admin-login__qr">
+      <div className="admin-login__qr-image" aria-live="polite">
+        {source ? (
+          <img src={source} width={224} height={224} alt={t('admin.qrAlt')} />
+        ) : (
+          <span role={failed ? 'alert' : 'status'}>
+            {t(failed ? 'admin.qrUnavailable' : 'admin.qrLoading')}
+          </span>
+        )}
+      </div>
+      <figcaption>{t('admin.qrCaption')}</figcaption>
+    </figure>
+  );
+}
 
 function adminDestination(state: unknown) {
   if (
@@ -31,7 +80,7 @@ export function AdminLoginPage() {
   const { user, beginLogin, verifyTotp } = useAdminAuth();
   const location = useLocation();
   const [challenge, setChallenge] = useState<AdminChallengeResponse | null>(null);
-  const [serverError, setServerError] = useState(false);
+  const [serverError, setServerError] = useState<AdminLoginError | null>(null);
   const passwordSchema = z.object({
     email: z.string().email(t('validation.email')),
     password: z.string().min(1, t('validation.required')),
@@ -45,20 +94,28 @@ export function AdminLoginPage() {
   if (user) return <Navigate to={adminDestination(location.state)} replace />;
 
   const submitPassword = passwordForm.handleSubmit(async ({ email, password }) => {
-    setServerError(false);
+    setServerError(null);
     try {
       setChallenge(await beginLogin(email, password));
     } catch {
-      setServerError(true);
+      setServerError('admin.genericError');
     }
   });
   const submitTotp = totpForm.handleSubmit(async ({ code }) => {
     if (!challenge) return;
-    setServerError(false);
+    setServerError(null);
     try {
       await verifyTotp(challenge.challengeId, code);
-    } catch {
-      setServerError(true);
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'INVALID_TOTP') {
+        setServerError('admin.invalidTotp');
+        totpForm.resetField('code');
+        totpForm.setFocus('code');
+      } else if (error instanceof ApiError && error.code === 'INVALID_AUTH_CHALLENGE') {
+        setServerError('admin.challengeExpired');
+      } else {
+        setServerError('admin.genericError');
+      }
     }
   });
 
@@ -97,7 +154,7 @@ export function AdminLoginPage() {
           </div>
           {serverError ? (
             <p className="form-banner form-banner--error" role="alert">
-              {t('admin.genericError')}
+              {t(serverError)}
             </p>
           ) : null}
           {!challenge ? (
@@ -149,12 +206,23 @@ export function AdminLoginPage() {
                   </p>
                 </div>
               </div>
-              {challenge.state === 'ENROLLMENT_REQUIRED' && challenge.manualEntryKey ? (
-                <code className="enrollment-key">{challenge.manualEntryKey}</code>
+              {challenge.state === 'ENROLLMENT_REQUIRED' ? (
+                <div className="admin-login__enrollment">
+                  <EnrollmentQrCode
+                    key={challenge.enrollmentUri}
+                    enrollmentUri={challenge.enrollmentUri}
+                  />
+                  <details className="admin-login__manual-key">
+                    <summary>{t('admin.manualKeyLabel')}</summary>
+                    <code className="enrollment-key">{challenge.manualEntryKey}</code>
+                  </details>
+                </div>
               ) : null}
               <FormField
                 label={t('admin.totpCode')}
                 inputMode="numeric"
+                enterKeyHint="done"
+                autoFocus
                 autoComplete="one-time-code"
                 pattern="[0-9]*"
                 maxLength={6}
@@ -170,7 +238,7 @@ export function AdminLoginPage() {
                 variant="ghost"
                 onClick={() => {
                   setChallenge(null);
-                  setServerError(false);
+                  setServerError(null);
                   totpForm.reset();
                 }}
               >

@@ -1,8 +1,8 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ShieldCheck } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Archive, ArrowLeft, Plus, RotateCcw, ShieldCheck } from 'lucide-react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useForm, useWatch } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { z } from 'zod';
@@ -13,14 +13,18 @@ import type {
   AdminProductType,
   AdminProductUpdatePayload,
 } from '../../api/types';
+import { useAdminAuth } from '../../auth/admin-auth-context';
 import { Button } from '../../components/ui/button';
 import { CheckboxField, FormField, SelectField } from '../../components/ui/form-field';
 import { ErrorState, LoadingState } from '../../components/ui/feedback';
+import { AdminProductMediaManager } from './admin-product-media-manager';
 
 const productTypes: AdminProductType[] = [
   'DEVICE',
   'E_LIQUID',
   'POD',
+  'PREFILLED_POD_KIT',
+  'PREFILLED_REPLACEMENT_POD',
   'COIL',
   'DISPOSABLE',
   'ACCESSORY',
@@ -36,12 +40,205 @@ function nullableInteger(value: string) {
   return value === '' ? null : Number(value);
 }
 
+const formText = (form: FormData, key: string): string => {
+  const value = form.get(key);
+  return typeof value === 'string' ? value.trim() : '';
+};
+
+function VariantManager({ productId }: { productId: string }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const variants = useQuery({
+    queryKey: ['admin', 'product', productId, 'variants'],
+    queryFn: () => adminDataClient.productVariants(productId),
+  });
+  const refresh = () =>
+    queryClient.invalidateQueries({ queryKey: ['admin', 'product', productId, 'variants'] });
+  const create = useMutation({
+    mutationFn: (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const promotional = formText(form, 'promotionalPriceMillimes');
+      return adminDataClient.createProductVariant(productId, {
+        nameFr: formText(form, 'nameFr'),
+        nameAr: formText(form, 'nameAr'),
+        sku: formText(form, 'sku'),
+        costMillimes: Number(formText(form, 'costMillimes')),
+        priceMillimes: Number(formText(form, 'priceMillimes')),
+        promotionalPriceMillimes: promotional ? Number(promotional) : null,
+        lowStockThreshold: Number(formText(form, 'lowStockThreshold') || '0'),
+      });
+    },
+    onSuccess: () => void refresh(),
+  });
+  const update = useMutation({
+    mutationFn: ({
+      variantId,
+      event,
+    }: {
+      variantId: string;
+      event: FormEvent<HTMLFormElement>;
+    }) => {
+      event.preventDefault();
+      const variant = variants.data!.items.find((item) => item.id === variantId)!;
+      const form = new FormData(event.currentTarget);
+      const promotional = formText(form, 'promotionalPriceMillimes');
+      const status = formText(form, 'publicationStatus') as 'DRAFT' | 'PUBLISHED' | 'SUSPENDED';
+      return adminDataClient.updateProductVariant(productId, variantId, {
+        version: variant.version,
+        priceMillimes: Number(formText(form, 'priceMillimes')),
+        promotionalPriceMillimes: promotional ? Number(promotional) : null,
+        lowStockThreshold: Number(formText(form, 'lowStockThreshold') || '0'),
+        publicationStatus: status,
+      });
+    },
+    onSuccess: () => void refresh(),
+  });
+  const archive = useMutation({
+    mutationFn: ({ variantId, action }: { variantId: string; action: 'archive' | 'restore' }) => {
+      const variant = variants.data!.items.find((item) => item.id === variantId)!;
+      return adminDataClient.productVariantArchiveAction(
+        productId,
+        variantId,
+        action,
+        variant.version,
+      );
+    },
+    onSuccess: () => void refresh(),
+  });
+
+  return (
+    <section className="admin-panel">
+      <h2>{t('admin.variantOps.title')}</h2>
+      {variants.isPending ? <LoadingState label={t('common.loading')} tone="admin" /> : null}
+      {variants.data?.items.map((variant) => (
+        <form
+          className="admin-panel"
+          key={variant.id}
+          onSubmit={(event) => update.mutate({ variantId: variant.id, event })}
+        >
+          <strong>
+            {variant.nameFr} · {variant.sku}
+          </strong>
+          <div className="admin-form-grid">
+            <FormField
+              name="priceMillimes"
+              label={t('admin.variantOps.priceMillimes')}
+              type="number"
+              min={0}
+              defaultValue={variant.priceMillimes}
+            />
+            <FormField
+              name="promotionalPriceMillimes"
+              label={t('admin.variantOps.promotionalPriceMillimes')}
+              type="number"
+              min={0}
+              defaultValue={variant.promotionalPriceMillimes ?? ''}
+            />
+            <FormField
+              name="lowStockThreshold"
+              label={t('admin.variantOps.lowStockThreshold')}
+              type="number"
+              min={0}
+              defaultValue={variant.lowStockThreshold}
+            />
+            <SelectField
+              name="publicationStatus"
+              label={t('common.status')}
+              defaultValue={
+                variant.publicationStatus === 'ARCHIVED' ? 'DRAFT' : variant.publicationStatus
+              }
+              disabled={Boolean(variant.archivedAt)}
+            >
+              <option value="DRAFT">{t('admin.draft')}</option>
+              <option value="PUBLISHED">{t('admin.publishedStatus')}</option>
+              <option value="SUSPENDED">{t('admin.suspended')}</option>
+            </SelectField>
+          </div>
+          <div className="admin-heading-actions">
+            <Button
+              type="submit"
+              variant="admin"
+              loading={update.isPending}
+              disabled={Boolean(variant.archivedAt)}
+            >
+              {t('admin.variantOps.update')}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              loading={archive.isPending}
+              onClick={() =>
+                archive.mutate({
+                  variantId: variant.id,
+                  action: variant.archivedAt ? 'restore' : 'archive',
+                })
+              }
+            >
+              {variant.archivedAt ? t('admin.variantOps.restore') : t('admin.variantOps.archive')}
+            </Button>
+          </div>
+        </form>
+      ))}
+      <form className="admin-panel" onSubmit={(event) => create.mutate(event)}>
+        <h3>{t('admin.variantOps.newDraft')}</h3>
+        <div className="admin-form-grid">
+          <FormField name="nameFr" label={t('admin.nameFr')} required />
+          <FormField name="nameAr" label={t('admin.nameAr')} dir="rtl" required />
+          <FormField name="sku" label={t('admin.columns.sku')} required />
+          <FormField
+            name="costMillimes"
+            label={t('admin.variantOps.costMillimes')}
+            type="number"
+            min={0}
+            required
+          />
+          <FormField
+            name="priceMillimes"
+            label={t('admin.variantOps.priceMillimes')}
+            type="number"
+            min={0}
+            required
+          />
+          <FormField
+            name="promotionalPriceMillimes"
+            label={t('admin.variantOps.promotionalPriceMillimes')}
+            type="number"
+            min={0}
+          />
+          <FormField
+            name="lowStockThreshold"
+            label={t('admin.variantOps.lowStockThreshold')}
+            type="number"
+            min={0}
+            defaultValue={0}
+          />
+        </div>
+        <Button type="submit" variant="admin" loading={create.isPending}>
+          {t('admin.variantOps.create')}
+        </Button>
+      </form>
+      {variants.isError || create.isError || update.isError || archive.isError ? (
+        <ErrorState compact />
+      ) : null}
+    </section>
+  );
+}
+
 export function AdminProductEditorPage() {
   const { id } = useParams();
   const editing = Boolean(id);
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { user } = useAdminAuth();
+  const canManageCategories = Boolean(user?.permissions.includes('categories.manage'));
+  const canManageBrands = Boolean(user?.permissions.includes('brands.manage'));
+  const canArchive = Boolean(user?.permissions.includes('products.archive'));
   const [saved, setSaved] = useState(false);
+  const [taxonomyMessage, setTaxonomyMessage] = useState<string | null>(null);
+  const pendingCategorySelection = useRef<string | null>(null);
+  const pendingBrandSelection = useRef<string | null>(null);
   const integerOrBlank = z
     .string()
     .refine((value) => value === '' || /^\d+$/.test(value), t('validation.integer'));
@@ -70,6 +267,7 @@ export function AdminProductEditorPage() {
     containsNicotine: z.boolean(),
     featured: z.boolean(),
     publicationStatus: z.enum(['DRAFT', 'PUBLISHED', 'SUSPENDED']),
+    mediaReviewConfirmed: z.boolean(),
   });
   type Values = z.infer<typeof schema>;
   const form = useForm<Values>({
@@ -92,13 +290,90 @@ export function AdminProductEditorPage() {
       containsNicotine: false,
       featured: false,
       publicationStatus: 'DRAFT',
+      mediaReviewConfirmed: false,
     },
+  });
+  const selectedPublicationStatus = useWatch({
+    control: form.control,
+    name: 'publicationStatus',
   });
   const product = useQuery({
     queryKey: ['admin', 'product', id],
     queryFn: () => adminDataClient.product(id ?? ''),
     enabled: editing,
   });
+  const categories = useQuery({
+    queryKey: ['admin', 'categories', 'editor'],
+    queryFn: adminDataClient.categories,
+  });
+  const brands = useQuery({
+    queryKey: ['admin', 'brands', 'editor'],
+    queryFn: adminDataClient.brands,
+  });
+  const createCategory = useMutation({
+    mutationFn: async (payload: { nameFr: string; nameAr: string; slug: string }) => {
+      const created = await adminDataClient.createCategory(payload);
+      return adminDataClient.publishCategory(created);
+    },
+    onSuccess: (category) => {
+      pendingCategorySelection.current = category.id;
+      queryClient.setQueryData<Awaited<ReturnType<typeof adminDataClient.categories>>>(
+        ['admin', 'categories', 'editor'],
+        (current) => {
+          const items = [
+            category,
+            ...(current?.items.filter((item) => item.id !== category.id) ?? []),
+          ];
+          return {
+            items,
+            page: current?.page ?? 1,
+            pageSize: current?.pageSize ?? 50,
+            total: Math.max(current?.total ?? 0, items.length),
+            totalPages: Math.max(current?.totalPages ?? 0, 1),
+          };
+        },
+      );
+      setTaxonomyMessage(t('admin.taxonomy.categoryCreated'));
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'categories'] });
+    },
+  });
+  const createBrand = useMutation({
+    mutationFn: async (payload: { name: string; slug: string }) => {
+      const created = await adminDataClient.createBrand(payload);
+      return adminDataClient.publishBrand(created);
+    },
+    onSuccess: (brand) => {
+      pendingBrandSelection.current = brand.id;
+      queryClient.setQueryData<Awaited<ReturnType<typeof adminDataClient.brands>>>(
+        ['admin', 'brands', 'editor'],
+        (current) => {
+          const items = [brand, ...(current?.items.filter((item) => item.id !== brand.id) ?? [])];
+          return {
+            items,
+            page: current?.page ?? 1,
+            pageSize: current?.pageSize ?? 50,
+            total: Math.max(current?.total ?? 0, items.length),
+            totalPages: Math.max(current?.totalPages ?? 0, 1),
+          };
+        },
+      );
+      setTaxonomyMessage(t('admin.taxonomy.brandCreated'));
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'brands'] });
+    },
+  });
+
+  useEffect(() => {
+    const categoryId = pendingCategorySelection.current;
+    if (categoryId && categories.data?.items.some((category) => category.id === categoryId)) {
+      form.setValue('categoryId', categoryId, { shouldValidate: true });
+      pendingCategorySelection.current = null;
+    }
+    const brandId = pendingBrandSelection.current;
+    if (brandId && brands.data?.items.some((brand) => brand.id === brandId)) {
+      form.setValue('brandId', brandId, { shouldValidate: true });
+      pendingBrandSelection.current = null;
+    }
+  }, [brands.data?.items, categories.data?.items, form]);
 
   useEffect(() => {
     if (!product.data) return;
@@ -120,7 +395,9 @@ export function AdminProductEditorPage() {
       warningAr: product.data.warningAr ?? '',
       containsNicotine: product.data.containsNicotine,
       featured: product.data.featured,
-      publicationStatus: product.data.publicationStatus,
+      publicationStatus:
+        product.data.publicationStatus === 'ARCHIVED' ? 'DRAFT' : product.data.publicationStatus,
+      mediaReviewConfirmed: false,
     });
   }, [form, product.data]);
 
@@ -150,6 +427,9 @@ export function AdminProductEditorPage() {
         ...common,
         version: product.data.version,
         publicationStatus: values.publicationStatus,
+        ...(product.data.needsMediaReview
+          ? { mediaReviewConfirmed: values.mediaReviewConfirmed }
+          : {}),
       };
       return adminDataClient.updateProduct(id, update);
     },
@@ -159,6 +439,15 @@ export function AdminProductEditorPage() {
         void navigate('/admin/catalog');
       }, 600);
     },
+  });
+  const lifecycle = useMutation({
+    mutationFn: () => {
+      if (!id || !product.data) throw new Error('Product version is unavailable.');
+      return product.data.publicationStatus === 'ARCHIVED'
+        ? adminDataClient.restoreProduct(id, product.data.version)
+        : adminDataClient.archiveProduct(id, product.data.version);
+    },
+    onSuccess: () => void navigate('/admin/catalog', { replace: true }),
   });
   const submit = form.handleSubmit((values) => save.mutate(values));
 
@@ -178,7 +467,104 @@ export function AdminProductEditorPage() {
           <h1>{t('admin.productEditor')}</h1>
           <p>{t('admin.productEditorSubtitle')}</p>
         </div>
+        {editing && product.data && canArchive ? (
+          <Button
+            type="button"
+            variant={product.data.publicationStatus === 'ARCHIVED' ? 'admin' : 'danger'}
+            loading={lifecycle.isPending}
+            onClick={() => lifecycle.mutate()}
+          >
+            {product.data.publicationStatus === 'ARCHIVED' ? (
+              <RotateCcw aria-hidden="true" size={17} />
+            ) : (
+              <Archive aria-hidden="true" size={17} />
+            )}
+            {t(
+              product.data.publicationStatus === 'ARCHIVED'
+                ? 'admin.taxonomy.restoreProduct'
+                : 'admin.taxonomy.archiveProduct',
+            )}
+          </Button>
+        ) : null}
       </header>
+      {product.data?.publicationStatus === 'ARCHIVED' ? (
+        <p className="form-banner">{t('admin.taxonomy.archivedProductHint')}</p>
+      ) : null}
+      {!editing && (canManageCategories || canManageBrands) ? (
+        <section className="admin-panel" aria-labelledby="catalog-foundation-title">
+          <h2 id="catalog-foundation-title">{t('admin.taxonomy.title')}</h2>
+          <p>{t('admin.taxonomy.hint')}</p>
+          {taxonomyMessage ? (
+            <p className="form-banner form-banner--success" role="status">
+              {taxonomyMessage}
+            </p>
+          ) : null}
+          {canManageCategories ? (
+            <form
+              className="admin-form-grid"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const data = new FormData(event.currentTarget);
+                createCategory.mutate({
+                  nameFr: formText(data, 'nameFr'),
+                  nameAr: formText(data, 'nameAr'),
+                  slug: formText(data, 'slug'),
+                });
+              }}
+            >
+              <FormField name="nameFr" label={t('admin.nameFr')} required maxLength={160} />
+              <FormField
+                name="nameAr"
+                label={t('admin.nameAr')}
+                required
+                maxLength={160}
+                dir="rtl"
+              />
+              <FormField
+                name="slug"
+                label={t('admin.slug')}
+                required
+                maxLength={180}
+                pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+              />
+              <Button type="submit" variant="admin" loading={createCategory.isPending}>
+                <Plus aria-hidden="true" size={17} /> {t('admin.taxonomy.createCategory')}
+              </Button>
+            </form>
+          ) : null}
+          {canManageBrands ? (
+            <form
+              className="admin-form-grid"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const data = new FormData(event.currentTarget);
+                createBrand.mutate({
+                  name: formText(data, 'name'),
+                  slug: formText(data, 'slug'),
+                });
+              }}
+            >
+              <FormField
+                name="name"
+                label={t('admin.taxonomy.brandName')}
+                required
+                maxLength={160}
+              />
+              <FormField
+                name="slug"
+                label={t('admin.slug')}
+                required
+                maxLength={180}
+                pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+              />
+              <Button type="submit" variant="admin" loading={createBrand.isPending}>
+                <Plus aria-hidden="true" size={17} /> {t('admin.taxonomy.createBrand')}
+              </Button>
+            </form>
+          ) : null}
+          {createCategory.isError || createBrand.isError ? <ErrorState compact /> : null}
+        </section>
+      ) : null}
       <form onSubmit={(event) => void submit(event)} noValidate>
         {!editing ? <p className="form-banner">{t('admin.createDraftNote')}</p> : null}
         <div className="admin-form-grid">
@@ -216,16 +602,30 @@ export function AdminProductEditorPage() {
             error={form.formState.errors.flavor?.message}
             {...form.register('flavor')}
           />
-          <FormField
+          <SelectField
             label={t('admin.categoryId')}
             error={form.formState.errors.categoryId?.message}
             {...form.register('categoryId')}
-          />
-          <FormField
+          >
+            <option value="">—</option>
+            {categories.data?.items.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.nameFr}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField
             label={t('admin.brandOptional')}
             error={form.formState.errors.brandId?.message}
             {...form.register('brandId')}
-          />
+          >
+            <option value="">—</option>
+            {brands.data?.items.map((brand) => (
+              <option key={brand.id} value={brand.id}>
+                {brand.name}
+              </option>
+            ))}
+          </SelectField>
           <FormField
             label={t('admin.skuOptional')}
             error={form.formState.errors.sku?.message}
@@ -284,6 +684,12 @@ export function AdminProductEditorPage() {
         </div>
         <CheckboxField label={t('admin.containsNicotine')} {...form.register('containsNicotine')} />
         <CheckboxField label={t('admin.featured')} {...form.register('featured')} />
+        {editing && product.data?.needsMediaReview && selectedPublicationStatus === 'PUBLISHED' ? (
+          <CheckboxField
+            label={t('admin.mediaReviewConfirm')}
+            {...form.register('mediaReviewConfirmed')}
+          />
+        ) : null}
         {save.isError ? <ErrorState compact /> : null}
         {saved ? (
           <p className="form-banner form-banner--success" role="status">
@@ -291,10 +697,26 @@ export function AdminProductEditorPage() {
             {t('admin.productSaved')}
           </p>
         ) : null}
-        <Button type="submit" variant="admin" loading={save.isPending}>
+        <Button
+          type="submit"
+          variant="admin"
+          loading={save.isPending}
+          disabled={product.data?.publicationStatus === 'ARCHIVED'}
+        >
           {t('admin.saveProduct')}
         </Button>
       </form>
+      {editing && id && product.data?.publicationStatus !== 'ARCHIVED' ? (
+        <VariantManager productId={id} />
+      ) : null}
+      {editing && id && product.data && product.data.publicationStatus !== 'ARCHIVED' ? (
+        <AdminProductMediaManager
+          productId={id}
+          productVersion={product.data.version}
+          productPublicationStatus={product.data.publicationStatus}
+          needsMediaReview={product.data.needsMediaReview}
+        />
+      ) : null}
     </div>
   );
 }

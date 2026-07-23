@@ -12,12 +12,16 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --frozen-lo
 RUN pnpm prisma:generate
 RUN pnpm --filter @vape/api... build
 RUN pnpm --filter @vape/api deploy --prod --legacy /opt/api
+RUN cp prisma/schema.prisma /opt/api/prisma.schema \
+  && cd /opt/api \
+  && node /workspace/node_modules/prisma/build/index.js generate --schema=prisma.schema \
+  && rm prisma.schema
 
 FROM build AS migration
 ENV NODE_ENV=production
 USER node
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["pnpm", "prisma:migrate:deploy"]
+CMD ["node", "node_modules/prisma/build/index.js", "migrate", "deploy"]
 
 FROM ${NODE_IMAGE} AS runtime
 RUN npm install --global npm@11.18.0 --no-audit --no-fund && npm cache clean --force

@@ -1,5 +1,5 @@
 import { ApiError, httpRequest, jsonBody } from './http';
-import type { CustomerSessionResponse } from './types';
+import type { CustomerSessionListResponse, CustomerSessionResponse } from './types';
 
 interface CustomerLoginInput {
   emailOrPhone: string;
@@ -13,6 +13,7 @@ interface CustomerRegisterInput {
   password: string;
   adultConfirmed: boolean;
   termsAccepted: boolean;
+  locale: 'fr' | 'ar';
 }
 
 function customerRequest<T>(path: string, init?: RequestInit) {
@@ -50,5 +51,22 @@ export const customerAuthClient = {
       method: 'POST',
       body: jsonBody({ email }),
     });
+  },
+  confirmPasswordReset(token: string, newPassword: string) {
+    return customerRequest<void>('/auth/customer/password-reset/confirm', {
+      method: 'POST',
+      body: jsonBody({ token, newPassword }),
+    });
+  },
+  sessions() {
+    return customerRequest<CustomerSessionListResponse>('/auth/customer/sessions');
+  },
+  revokeSession(sessionId: string) {
+    return customerRequest<void>(`/auth/customer/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    });
+  },
+  revokeAllSessions() {
+    return customerRequest<void>('/auth/customer/sessions/revoke-all', { method: 'POST' });
   },
 };

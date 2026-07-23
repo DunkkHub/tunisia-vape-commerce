@@ -16,6 +16,7 @@ export interface CustomerRegisterValues {
   password: string;
   adultConfirmed: boolean;
   termsAccepted: boolean;
+  locale: 'fr' | 'ar';
 }
 
 export interface CustomerAuthValue {

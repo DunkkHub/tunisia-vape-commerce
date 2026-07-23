@@ -74,13 +74,31 @@ export class AdminCustomerListItemDto {
   id!: string;
 
   @ApiProperty()
+  userId!: string;
+
+  @ApiProperty()
   fullName!: string;
 
   @ApiProperty({ description: 'Normalized Tunisian E.164 phone number.' })
   normalizedPhone!: string;
 
+  @ApiPropertyOptional({ nullable: true })
+  email!: string | null;
+
   @ApiProperty()
   status!: string;
+
+  @ApiPropertyOptional({ nullable: true, format: 'date-time' })
+  suspendedAt!: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  suspensionReason!: string | null;
+
+  @ApiProperty({ minimum: 1 })
+  userVersion!: number;
+
+  @ApiProperty({ minimum: 1 })
+  profileVersion!: number;
 
   @ApiProperty({ format: 'date-time' })
   createdAt!: string;

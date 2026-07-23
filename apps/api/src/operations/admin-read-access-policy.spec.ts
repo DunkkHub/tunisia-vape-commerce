@@ -5,6 +5,7 @@ import type { Reflector } from '@nestjs/core';
 import { describe, expect, it, vi } from 'vitest';
 import { AdminSessionGuard } from '../auth/guards/admin-session.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RecentAuthenticationGuard } from '../auth/guards/recent-authentication.guard';
 import { PERMISSIONS_METADATA } from '../auth/permissions.decorator';
 import { NoStoreInterceptor } from '../common/http/no-store.interceptor';
 import { AdminReadController } from './admin-read.controller';
@@ -33,14 +34,24 @@ describe('administrator operational read access policy', () => {
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const dashboard = AdminReadController.prototype.dashboard;
     // eslint-disable-next-line @typescript-eslint/unbound-method
+    const metrics = AdminReadController.prototype.metrics;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     const inventory = AdminReadController.prototype.inventory;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const inventoryCsv = AdminReadController.prototype.inventoryCsv;
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const settings = AdminReadController.prototype.settings;
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const audit = AdminReadController.prototype.audit;
 
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, dashboard)).toEqual(['reports.read']);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, metrics)).toEqual(['reports.read']);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, inventory)).toEqual(['inventory.read']);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, inventoryCsv)).toEqual([
+      'inventory.read',
+      'reports.export',
+    ]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, inventoryCsv)).toEqual([RecentAuthenticationGuard]);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, settings)).toEqual(['settings.manage']);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, audit)).toEqual(['audit.read']);
   });

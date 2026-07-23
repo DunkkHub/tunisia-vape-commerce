@@ -3,8 +3,8 @@
   "compilerOptions": {
     "module": "NodeNext",
     "outDir": "dist",
-    "rootDir": "src",
-    "types": ["node"]
+    "rootDir": ".",
+    "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }

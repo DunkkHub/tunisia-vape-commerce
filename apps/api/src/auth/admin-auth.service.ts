@@ -5,7 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import argon2, { argon2id } from 'argon2';
+import argon2 from 'argon2';
 import type { Request, Response } from 'express';
 import { OTP } from 'otplib';
 import { z } from 'zod';
@@ -15,19 +15,14 @@ import { CryptoService } from '../common/security/crypto.service';
 import { isIpAllowed, jsonIpRules } from '../common/security/ip-allowlist';
 import { PrismaService } from '../database/prisma.service';
 import type { Environment } from '../config/environment';
+import { ADMIN_ARGON2_OPTIONS } from './admin-password';
 import type { AdminUserResponse, SessionResponse } from './auth-response.types';
 import { AuthEventService } from './auth-event.service';
 import type { AdminLoginDto, AdminTotpDto } from './dto/admin-auth.dto';
 import { DistributedAuthThrottleService } from './distributed-auth-throttle.service';
 import { SessionService } from './session.service';
 
-const ARGON2_OPTIONS = {
-  type: argon2id,
-  memoryCost: 19_456,
-  timeCost: 3,
-  parallelism: 1,
-} as const;
-const DUMMY_PASSWORD_HASH = argon2.hash('not-a-real-administrator-password', ARGON2_OPTIONS);
+const DUMMY_PASSWORD_HASH = argon2.hash('not-a-real-administrator-password', ADMIN_ARGON2_OPTIONS);
 const otp = new OTP({ strategy: 'totp' });
 const challengeSchema = z.object({
   userId: z.string().min(1),
@@ -116,21 +111,30 @@ export class AdminAuthService {
       user.adminProfile.mustEnrollTwoFactor || !user.twoFactorSecret?.verifiedAt;
     let enrollmentSecret: string | undefined;
     if (enrollmentRequired) {
-      enrollmentSecret = otp.generateSecret();
-      await this.prisma.twoFactorSecret.upsert({
-        where: { userId: user.id },
-        create: {
-          userId: user.id,
-          encryptedSecret: this.crypto.encrypt(enrollmentSecret),
-          encryptionKeyId: 'env-v1',
-        },
-        update: {
-          encryptedSecret: this.crypto.encrypt(enrollmentSecret),
-          encryptionKeyId: 'env-v1',
-          verifiedAt: null,
-          lastUsedStep: null,
-        },
-      });
+      const pendingSecret =
+        user.twoFactorSecret &&
+        user.twoFactorSecret.verifiedAt === null &&
+        user.twoFactorSecret.lastUsedStep === null
+          ? this.crypto.decrypt(user.twoFactorSecret.encryptedSecret)
+          : null;
+      enrollmentSecret = pendingSecret ?? otp.generateSecret();
+
+      if (!pendingSecret) {
+        await this.prisma.twoFactorSecret.upsert({
+          where: { userId: user.id },
+          create: {
+            userId: user.id,
+            encryptedSecret: this.crypto.encrypt(enrollmentSecret),
+            encryptionKeyId: 'env-v1',
+          },
+          update: {
+            encryptedSecret: this.crypto.encrypt(enrollmentSecret),
+            encryptionKeyId: 'env-v1',
+            verifiedAt: null,
+            lastUsedStep: null,
+          },
+        });
+      }
     }
 
     const challengeId = this.crypto.randomToken();
