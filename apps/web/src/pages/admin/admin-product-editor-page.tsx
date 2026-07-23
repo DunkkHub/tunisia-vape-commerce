@@ -2,7 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, ArrowLeft, Plus, RotateCcw, ShieldCheck } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { z } from 'zod';
@@ -23,6 +23,8 @@ const productTypes: AdminProductType[] = [
   'DEVICE',
   'E_LIQUID',
   'POD',
+  'PREFILLED_POD_KIT',
+  'PREFILLED_REPLACEMENT_POD',
   'COIL',
   'DISPOSABLE',
   'ACCESSORY',
@@ -265,6 +267,7 @@ export function AdminProductEditorPage() {
     containsNicotine: z.boolean(),
     featured: z.boolean(),
     publicationStatus: z.enum(['DRAFT', 'PUBLISHED', 'SUSPENDED']),
+    mediaReviewConfirmed: z.boolean(),
   });
   type Values = z.infer<typeof schema>;
   const form = useForm<Values>({
@@ -287,7 +290,12 @@ export function AdminProductEditorPage() {
       containsNicotine: false,
       featured: false,
       publicationStatus: 'DRAFT',
+      mediaReviewConfirmed: false,
     },
+  });
+  const selectedPublicationStatus = useWatch({
+    control: form.control,
+    name: 'publicationStatus',
   });
   const product = useQuery({
     queryKey: ['admin', 'product', id],
@@ -389,6 +397,7 @@ export function AdminProductEditorPage() {
       featured: product.data.featured,
       publicationStatus:
         product.data.publicationStatus === 'ARCHIVED' ? 'DRAFT' : product.data.publicationStatus,
+      mediaReviewConfirmed: false,
     });
   }, [form, product.data]);
 
@@ -418,6 +427,9 @@ export function AdminProductEditorPage() {
         ...common,
         version: product.data.version,
         publicationStatus: values.publicationStatus,
+        ...(product.data.needsMediaReview
+          ? { mediaReviewConfirmed: values.mediaReviewConfirmed }
+          : {}),
       };
       return adminDataClient.updateProduct(id, update);
     },
@@ -672,6 +684,12 @@ export function AdminProductEditorPage() {
         </div>
         <CheckboxField label={t('admin.containsNicotine')} {...form.register('containsNicotine')} />
         <CheckboxField label={t('admin.featured')} {...form.register('featured')} />
+        {editing && product.data?.needsMediaReview && selectedPublicationStatus === 'PUBLISHED' ? (
+          <CheckboxField
+            label={t('admin.mediaReviewConfirm')}
+            {...form.register('mediaReviewConfirmed')}
+          />
+        ) : null}
         {save.isError ? <ErrorState compact /> : null}
         {saved ? (
           <p className="form-banner form-banner--success" role="status">
@@ -692,7 +710,12 @@ export function AdminProductEditorPage() {
         <VariantManager productId={id} />
       ) : null}
       {editing && id && product.data && product.data.publicationStatus !== 'ARCHIVED' ? (
-        <AdminProductMediaManager productId={id} productVersion={product.data.version} />
+        <AdminProductMediaManager
+          productId={id}
+          productVersion={product.data.version}
+          productPublicationStatus={product.data.publicationStatus}
+          needsMediaReview={product.data.needsMediaReview}
+        />
       ) : null}
     </div>
   );

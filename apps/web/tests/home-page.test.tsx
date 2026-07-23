@@ -12,6 +12,10 @@ const featuredProduct = {
   brandSlug: 'marque-test',
   productType: 'DISPOSABLE',
   flavor: 'Menthe fraîche',
+  puffCount: 15_000,
+  nicotineStrengthMg: 20,
+  nicotineStrengthsMg: [20],
+  selectableFlavorCount: 12,
   priceMillimes: 99_000,
   promotionalPriceMillimes: null,
   availableQuantity: 12,
@@ -55,9 +59,25 @@ function installHomeFetch({ empty = false }: { empty?: boolean } = {}) {
         json({
           brands: [],
           productTypes: ['DISPOSABLE'],
-          flavors: empty ? [] : [{ value: 'Menthe fraîche', productCount: 1 }],
+          flavors: empty
+            ? []
+            : [
+                {
+                  value: 'cool-mint',
+                  nameFr: 'Menthe fraîche',
+                  nameAr: 'نعناع بارد',
+                  productCount: 1,
+                },
+              ],
+          puffCounts: [],
+          nicotineStrengthsMg: [],
           priceRange: { minimumMillimes: 99_000, maximumMillimes: 99_000 },
-          truncated: { brands: false, flavors: false },
+          truncated: {
+            brands: false,
+            flavors: false,
+            puffCounts: false,
+            nicotineStrengths: false,
+          },
         }),
       );
     }
@@ -95,7 +115,7 @@ it('renders the neon landing structure with only API-derived commerce data', asy
   );
   expect(await screen.findByRole('link', { name: /Menthe fraîche/ })).toHaveAttribute(
     'href',
-    '/catalog?flavor=Menthe%20fra%C3%AEche',
+    '/catalog?flavor=cool-mint',
   );
   expect(await screen.findByRole('heading', { name: 'Jet Menthe' })).toBeVisible();
   expect(screen.getByAltText('Vue studio du Jet Menthe')).toHaveAttribute(
@@ -103,6 +123,10 @@ it('renders the neon landing structure with only API-derived commerce data', asy
     'https://images.test/jet-menthe.webp',
   );
   expect(container.querySelector('data[value="99000"]')).toBeInTheDocument();
+  expect(screen.getByText(/15.?000 bouffées/i)).toBeVisible();
+  expect(screen.getByText('20 mg de nicotine')).toBeVisible();
+  expect(screen.getByText('12 saveurs au choix')).toBeVisible();
+  expect(screen.queryByText('À partir de')).not.toBeInTheDocument();
   expect(screen.getAllByRole('link', { name: 'Voir Jet Menthe' })).toHaveLength(2);
   expect(screen.getByRole('link', { name: 'Panier' })).toHaveTextContent('0');
   expect(fetchMock.mock.calls.some(([input]) => requestUrl(input).includes('/cart/summary'))).toBe(

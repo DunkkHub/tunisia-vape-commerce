@@ -2,6 +2,7 @@ import {
   Banknote,
   Boxes,
   ClipboardList,
+  FileUp,
   Gauge,
   History,
   PackageSearch,
@@ -22,7 +23,19 @@ import { RouteFocus } from './route-focus';
 
 const adminNav = [
   { to: '/admin', key: 'admin.dashboard', icon: Gauge, permission: 'reports.read', end: true },
-  { to: '/admin/catalog', key: 'admin.catalog', icon: PackageSearch, permission: 'products.read' },
+  {
+    to: '/admin/catalog',
+    key: 'admin.catalog',
+    icon: PackageSearch,
+    permission: 'products.read',
+    end: true,
+  },
+  {
+    to: '/admin/catalog/imports',
+    key: 'admin.catalogImportNav',
+    icon: FileUp,
+    permission: 'catalog.import',
+  },
   { to: '/admin/orders', key: 'admin.orders', icon: ClipboardList, permission: 'orders.read' },
   { to: '/admin/inventory', key: 'admin.inventory', icon: Boxes, permission: 'inventory.read' },
   {

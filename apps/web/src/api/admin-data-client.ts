@@ -43,10 +43,115 @@ import type {
   AdminDeliveryManifestStatus,
   AdminDeliveryManifestSummary,
   AdminDeliveryStatusImportResult,
+  AdminCatalogImportBatch,
+  AdminCatalogMediaImportResult,
+  AdminCatalogImportPreviewPayload,
   Pagination,
 } from './types';
 
 const apiBase = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
+
+type UploadProgress = (percentage: number) => void;
+
+const adminCsrfToken = (): string | undefined => {
+  if (typeof document === 'undefined') return undefined;
+  for (const name of ['__Host-vape_admin_csrf', 'vape_admin_csrf']) {
+    const value = document.cookie
+      .split('; ')
+      .find((entry) => entry.startsWith(`${name}=`))
+      ?.slice(name.length + 1);
+    if (value) return decodeURIComponent(value);
+  }
+  return undefined;
+};
+
+const parseXhrPayload = (responseText: string): unknown => {
+  if (!responseText) return undefined;
+  try {
+    return JSON.parse(responseText) as unknown;
+  } catch {
+    return undefined;
+  }
+};
+
+const unwrapXhrPayload = <T>(payload: unknown): T => {
+  if (payload && typeof payload === 'object' && 'data' in payload) {
+    return (payload as { data: T }).data;
+  }
+  return payload as T;
+};
+
+/** XMLHttpRequest is intentionally limited to multipart uploads so the UI can report real bytes. */
+const adminMultipartRequest = <T>(
+  path: string,
+  body: FormData,
+  onProgress?: UploadProgress,
+): Promise<T> =>
+  new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', `${apiBase}/api/v1${path}`, true);
+    request.withCredentials = true;
+    request.timeout = 120_000;
+    request.setRequestHeader('Accept', 'application/json');
+    request.setRequestHeader(
+      'Accept-Language',
+      document.documentElement.lang === 'ar' ? 'ar' : 'fr',
+    );
+    request.setRequestHeader('X-Client-Context', 'admin');
+    const csrfToken = adminCsrfToken();
+    if (csrfToken) request.setRequestHeader('X-CSRF-Token', csrfToken);
+
+    request.upload.addEventListener('progress', (event) => {
+      if (!event.lengthComputable || event.total <= 0) return;
+      onProgress?.(Math.min(100, Math.max(0, Math.round((event.loaded / event.total) * 100))));
+    });
+    request.addEventListener('load', () => {
+      const payload = parseXhrPayload(request.responseText);
+      if (request.status >= 200 && request.status < 300) {
+        onProgress?.(100);
+        resolve(unwrapXhrPayload<T>(payload));
+        return;
+      }
+      reject(
+        new ApiError(
+          request.status,
+          payload as
+            | {
+                code?: string;
+                message?: string;
+                requestId?: string;
+                errors?: Record<string, string[]>;
+              }
+            | undefined,
+        ),
+      );
+    });
+    request.addEventListener('error', () => {
+      reject(
+        new ApiError(0, {
+          code: 'NETWORK_ERROR',
+          message: 'The product image upload could not reach the server.',
+        }),
+      );
+    });
+    request.addEventListener('abort', () => {
+      reject(
+        new ApiError(0, {
+          code: 'REQUEST_ABORTED',
+          message: 'The product image upload was cancelled.',
+        }),
+      );
+    });
+    request.addEventListener('timeout', () => {
+      reject(
+        new ApiError(0, {
+          code: 'REQUEST_TIMEOUT',
+          message: 'The product image upload timed out.',
+        }),
+      );
+    });
+    request.send(body);
+  });
 
 const csvFilename = (header: string | null, fallback: string): string => {
   const captured = /filename="?([^";]+)"?/i.exec(header ?? '')?.[1];
@@ -77,7 +182,8 @@ async function adminCsvRequest(path: string, fallbackFilename: string): Promise<
       : undefined;
     throw new ApiError(response.status, payload);
   }
-  const rowCount = Number(response.headers.get('X-Export-Row-Count'));
+  const rowCountHeader = response.headers.get('X-Export-Row-Count');
+  const rowCount = rowCountHeader === null ? Number.NaN : Number(rowCountHeader);
   return {
     content: await response.text(),
     filename: csvFilename(response.headers.get('Content-Disposition'), fallbackFilename),
@@ -556,6 +662,61 @@ export const adminDataClient = {
     ),
   product: (id: string) =>
     adminRequest<AdminProductRead>(`/admin/products/${encodeURIComponent(id)}`),
+  catalogImportHistory: (page = 1, pageSize = 20) =>
+    adminRequest<Pagination<AdminCatalogImportBatch>>(
+      `/admin/catalog/imports?page=${page}&pageSize=${pageSize}`,
+    ),
+  catalogImport: (id: string) =>
+    adminRequest<AdminCatalogImportBatch>(`/admin/catalog/imports/${encodeURIComponent(id)}`),
+  previewCatalogImport: (
+    payload: AdminCatalogImportPreviewPayload,
+    onProgress?: UploadProgress,
+  ) => {
+    const body = new FormData();
+    body.set('file', payload.file);
+    body.set('importKey', payload.importKey);
+    body.set('format', payload.format);
+    body.set('partialMode', String(payload.partialMode));
+    body.set('overridePrice', String(payload.overridePrice));
+    body.set('overrideStatus', String(payload.overrideStatus));
+    body.set('overrideImages', String(payload.overrideImages));
+    return adminMultipartRequest<AdminCatalogImportBatch>(
+      '/admin/catalog/imports/preview',
+      body,
+      onProgress,
+    );
+  },
+  previewOfficialWotofoCatalog: (importKey: string) =>
+    adminRequest<AdminCatalogImportBatch>('/admin/catalog/imports/wotofo/preview', {
+      method: 'POST',
+      body: jsonBody({ importKey }),
+    }),
+  applyCatalogImport: (id: string) =>
+    adminRequest<AdminCatalogImportBatch>(
+      `/admin/catalog/imports/${encodeURIComponent(id)}/apply`,
+      {
+        method: 'POST',
+        body: jsonBody({ confirmation: 'APPLY_CATALOG_IMPORT' }),
+      },
+    ),
+  rollbackCatalogImport: (id: string) =>
+    adminRequest<AdminCatalogImportBatch>(
+      `/admin/catalog/imports/${encodeURIComponent(id)}/rollback`,
+      {
+        method: 'POST',
+        body: jsonBody({ confirmation: 'ROLLBACK_CATALOG_IMPORT' }),
+      },
+    ),
+  importCatalogMedia: (id: string) =>
+    adminRequest<AdminCatalogMediaImportResult>(
+      `/admin/catalog/imports/${encodeURIComponent(id)}/media/apply`,
+      {
+        method: 'POST',
+        body: jsonBody({ confirmation: 'IMPORT_CATALOG_MEDIA' }),
+      },
+    ),
+  downloadCatalogImportTemplate: () =>
+    adminCsvRequest('/admin/catalog/imports/template.csv', 'catalog-import-v1.csv'),
   createProduct: (payload: AdminProductCreatePayload) =>
     adminRequest<AdminProductRead>('/admin/products', { method: 'POST', body: jsonBody(payload) }),
   updateProduct: (id: string, payload: AdminProductUpdatePayload) =>
@@ -563,6 +724,18 @@ export const adminDataClient = {
       method: 'PATCH',
       body: jsonBody(payload),
     }),
+  confirmProductMediaReview: (id: string, version: number, reason: string) =>
+    adminRequest<AdminProductRead>(
+      `/admin/products/${encodeURIComponent(id)}/media-review/confirm`,
+      {
+        method: 'POST',
+        body: jsonBody({
+          version,
+          reason,
+          confirmation: 'CONFIRM_PRODUCT_MEDIA_REVIEW',
+        }),
+      },
+    ),
   archiveProduct: (id: string, version: number) =>
     adminRequest<AdminProductRead>(`/admin/products/${encodeURIComponent(id)}/archive`, {
       method: 'POST',
@@ -618,9 +791,13 @@ export const adminDataClient = {
       `/admin/products/${encodeURIComponent(productId)}/variants/${encodeURIComponent(variantId)}/${action}`,
       { method: 'POST', body: jsonBody({ version }) },
     ),
-  productImages: (productId: string) =>
+  productImages: (productId: string, page = 1, pageSize = 50, reviewRequired = false) =>
     adminRequest<Pagination<AdminProductImage>>(
-      `/admin/products/${encodeURIComponent(productId)}/images?page=1&pageSize=50`,
+      `/admin/products/${encodeURIComponent(productId)}/images?page=${page}&pageSize=${pageSize}&reviewRequired=${reviewRequired}`,
+    ),
+  productImagesForOwner: (productId: string, variantId: string | null) =>
+    adminRequest<Pagination<AdminProductImage>>(
+      `/admin/products/${encodeURIComponent(productId)}/images?page=1&pageSize=20&${variantId ? `variantId=${encodeURIComponent(variantId)}` : 'productOnly=true'}`,
     ),
   uploadProductImage: (
     productId: string,
@@ -632,6 +809,7 @@ export const adminDataClient = {
       altTextAr: string;
       isPrimary: boolean;
     },
+    onProgress?: UploadProgress,
   ) => {
     const body = new FormData();
     body.set('file', payload.file);
@@ -640,9 +818,10 @@ export const adminDataClient = {
     body.set('altTextFr', payload.altTextFr);
     body.set('altTextAr', payload.altTextAr);
     body.set('isPrimary', String(payload.isPrimary));
-    return adminRequest<AdminProductImage>(
+    return adminMultipartRequest<AdminProductImage>(
       `/admin/products/${encodeURIComponent(productId)}/images`,
-      { method: 'POST', body },
+      body,
+      onProgress,
     );
   },
   updateProductImage: (
@@ -657,19 +836,41 @@ export const adminDataClient = {
         body: jsonBody({ expectedOwnerVersion: image.ownerVersion, ...payload }),
       },
     ),
-  replaceProductImage: (productId: string, image: AdminProductImage, file: File) => {
+  replaceProductImage: (
+    productId: string,
+    image: AdminProductImage,
+    file: File,
+    onProgress?: UploadProgress,
+  ) => {
     const body = new FormData();
     body.set('file', file);
     body.set('expectedOwnerVersion', String(image.ownerVersion));
-    return adminRequest<AdminProductImage>(
+    return adminMultipartRequest<AdminProductImage>(
       `/admin/products/${encodeURIComponent(productId)}/images/${encodeURIComponent(image.id)}/replace`,
-      { method: 'POST', body },
+      body,
+      onProgress,
     );
   },
   setPrimaryProductImage: (productId: string, image: AdminProductImage) =>
     adminRequest<AdminProductImage>(
       `/admin/products/${encodeURIComponent(productId)}/images/${encodeURIComponent(image.id)}/primary`,
       { method: 'POST', body: jsonBody({ expectedOwnerVersion: image.ownerVersion }) },
+    ),
+  reviewProductImage: (
+    productId: string,
+    image: AdminProductImage,
+    decision: 'APPROVE' | 'REJECT',
+  ) =>
+    adminRequest<AdminProductImage>(
+      `/admin/products/${encodeURIComponent(productId)}/images/${encodeURIComponent(image.id)}/review`,
+      {
+        method: 'POST',
+        body: jsonBody({
+          expectedOwnerVersion: image.ownerVersion,
+          decision,
+          confirmation: 'REVIEW_IMPORTED_PRODUCT_IMAGE',
+        }),
+      },
     ),
   reorderProductImages: (productId: string, image: AdminProductImage, imageIds: string[]) =>
     adminRequest<{ imageIds: string[]; ownerVersion: number }>(

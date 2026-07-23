@@ -25,6 +25,7 @@ export function ProductPage() {
     retry: false,
   });
   const [variantId, setVariantId] = useState('');
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const product = productQuery.data;
   const wishlistQuery = useQuery({
     queryKey: ['customer', 'wishlist'],
@@ -43,6 +44,25 @@ export function ProductPage() {
     () => product?.variants.find((variant) => variant.id === activeVariantId),
     [activeVariantId, product],
   );
+  const galleryImages = useMemo(() => {
+    if (!product) return [];
+
+    const images = [...product.images];
+    if (product.primaryImage) images.push(product.primaryImage);
+    if (selectedVariant?.image) images.unshift(selectedVariant.image);
+
+    return images.filter(
+      (image, index, candidates) =>
+        candidates.findIndex((candidate) => candidate.id === image.id) === index,
+    );
+  }, [product, selectedVariant]);
+  const selectedGalleryImage = galleryImages.find((image) => image.id === selectedImageId);
+  const activeImage =
+    selectedGalleryImage ??
+    selectedVariant?.image ??
+    product?.images[0] ??
+    product?.primaryImage ??
+    null;
   const available = selectedVariant?.availableQuantity ?? product?.availableQuantity ?? 0;
   const price =
     selectedVariant?.promotionalPriceMillimes ??
@@ -112,14 +132,14 @@ export function ProductPage() {
       </Link>
       <div className="product-detail">
         <div className="product-gallery">
-          {product.images[0] ? (
+          {activeImage ? (
             <img
-              src={product.images[0].url}
-              alt={
-                product.images[0].altText ?? t('product.imageAltFallback', { name: product.name })
-              }
-              width={900}
-              height={900}
+              className="product-gallery__main"
+              src={activeImage.url}
+              alt={activeImage.altText ?? t('product.imageAltFallback', { name: product.name })}
+              width={activeImage.width ?? 900}
+              height={activeImage.height ?? 900}
+              decoding="async"
             />
           ) : (
             <span className="product-gallery__placeholder" aria-hidden="true">
@@ -127,18 +147,35 @@ export function ProductPage() {
               <i />
             </span>
           )}
-          {product.images.length > 1 ? (
-            <div className="product-thumbs">
-              {product.images.slice(1, 5).map((image) => (
-                <img
-                  key={image.id}
-                  src={image.url}
-                  alt={image.altText ?? ''}
-                  width={120}
-                  height={120}
-                  loading="lazy"
-                />
-              ))}
+          {galleryImages.length > 1 ? (
+            <div
+              className="product-thumbs"
+              role="group"
+              aria-label={t('product.imageAltFallback', { name: product.name })}
+            >
+              {galleryImages.slice(0, 5).map((image, index) => {
+                const imageLabel =
+                  image.altText ?? t('product.imageAltFallback', { name: product.name });
+                return (
+                  <button
+                    key={image.id}
+                    className="product-thumb"
+                    type="button"
+                    aria-label={`${imageLabel} (${index + 1}/${Math.min(galleryImages.length, 5)})`}
+                    aria-pressed={image.id === activeImage?.id}
+                    onClick={() => setSelectedImageId(image.id)}
+                  >
+                    <img
+                      src={image.url}
+                      alt=""
+                      width={image.width ?? 120}
+                      height={image.height ?? 120}
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  </button>
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -174,7 +211,10 @@ export function ProductPage() {
                       value={variant.id}
                       checked={variant.id === activeVariantId}
                       disabled={variant.availableQuantity <= 0}
-                      onChange={() => setVariantId(variant.id)}
+                      onChange={() => {
+                        setVariantId(variant.id);
+                        setSelectedImageId(null);
+                      }}
                     />
                     <span>{variant.name}</span>
                   </label>

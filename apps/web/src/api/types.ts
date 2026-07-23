@@ -80,17 +80,43 @@ export interface BrandSummary {
 }
 
 export type ProductType =
-  'DEVICE' | 'E_LIQUID' | 'POD' | 'COIL' | 'DISPOSABLE' | 'ACCESSORY' | 'OTHER';
+  | 'DEVICE'
+  | 'E_LIQUID'
+  | 'POD'
+  | 'PREFILLED_POD_KIT'
+  | 'PREFILLED_REPLACEMENT_POD'
+  | 'COIL'
+  | 'DISPOSABLE'
+  | 'ACCESSORY'
+  | 'OTHER';
+
+export interface FlavorSummary {
+  id: string;
+  slug: string;
+  name: string;
+}
 
 export interface CatalogFacets {
   brands: BrandSummary[];
   productTypes: ProductType[];
-  flavors: Array<{ value: string; productCount: number }>;
+  flavors: Array<{
+    value: string;
+    nameFr: string;
+    nameAr: string;
+    productCount: number;
+  }>;
+  puffCounts: Array<{ value: number; productCount: number }>;
+  nicotineStrengthsMg: Array<{ value: number; productCount: number }>;
   priceRange: {
     minimumMillimes: number | null;
     maximumMillimes: number | null;
   };
-  truncated: { brands: boolean; flavors: boolean };
+  truncated: {
+    brands: boolean;
+    flavors: boolean;
+    puffCounts: boolean;
+    nicotineStrengths: boolean;
+  };
 }
 
 export interface ProductImage {
@@ -108,6 +134,8 @@ export interface ProductVariant {
   priceMillimes: number;
   promotionalPriceMillimes: number | null;
   availableQuantity: number;
+  nicotineStrengthMg?: number | null;
+  flavor?: FlavorSummary | null;
   image?: ProductImage | null;
 }
 
@@ -120,6 +148,10 @@ export interface ProductSummary {
   brandSlug: string | null;
   productType: ProductType;
   flavor: string | null;
+  puffCount?: number | null;
+  nicotineStrengthMg?: number | null;
+  nicotineStrengthsMg?: number[];
+  selectableFlavorCount?: number;
   priceMillimes: number;
   promotionalPriceMillimes: number | null;
   availableQuantity: number;
@@ -924,6 +956,89 @@ export interface AdminCsvDownload {
   rowCount: number | null;
 }
 
+export type AdminCatalogImportFormat = 'CSV' | 'JSON' | 'WOTOFO';
+export type AdminCatalogImportSource = 'ADMIN_UPLOAD' | 'WOTOFO_OFFICIAL';
+export type AdminCatalogImportStatus =
+  | 'PREVIEW_VALID'
+  | 'PREVIEW_INVALID'
+  | 'APPLYING'
+  | 'APPLIED'
+  | 'APPLIED_WITH_WARNINGS'
+  | 'FAILED'
+  | 'ROLLED_BACK';
+export type AdminCatalogImportRowStatus =
+  'VALID' | 'INVALID' | 'CREATED' | 'UPDATED' | 'SKIPPED' | 'FAILED' | 'ROLLED_BACK';
+
+export interface AdminCatalogImportIssue {
+  code: string;
+  message: string;
+  field?: string;
+}
+
+export interface AdminCatalogImportRow {
+  id: string;
+  rowNumber: number;
+  stableIdentity: string;
+  payloadHash: string;
+  status: AdminCatalogImportRowStatus;
+  action: string;
+  issues: AdminCatalogImportIssue[];
+  beforeSnapshot: unknown;
+  afterSnapshot: unknown;
+  productId: string | null;
+  variantId: string | null;
+  productPostVersion: number | null;
+  postVersion: number | null;
+  createdAt: string;
+}
+
+export interface AdminCatalogImportBatch {
+  id: string;
+  importKey: string;
+  dryRun: boolean;
+  payloadHash: string;
+  format: AdminCatalogImportFormat;
+  source: AdminCatalogImportSource;
+  schemaVersion: string;
+  status: AdminCatalogImportStatus;
+  partialMode: boolean;
+  overridePrice: boolean;
+  overrideStatus: boolean;
+  overrideImages: boolean;
+  rowCount: number;
+  appliedCount: number;
+  result: Record<string, unknown>;
+  previewBatchId: string | null;
+  createdByUserId: string;
+  createdAt: string;
+  completedAt: string | null;
+  rolledBackAt: string | null;
+  rows?: AdminCatalogImportRow[];
+}
+
+export interface AdminCatalogImportPreviewPayload {
+  file: File;
+  importKey: string;
+  format: Exclude<AdminCatalogImportFormat, 'WOTOFO'>;
+  partialMode: boolean;
+  overridePrice: boolean;
+  overrideStatus: boolean;
+  overrideImages: boolean;
+}
+
+export interface AdminCatalogMediaImportReport {
+  successful: Array<Record<string, unknown>>;
+  missing: Array<Record<string, unknown>>;
+  rejected: Array<Record<string, unknown>>;
+  duplicates: Array<Record<string, unknown>>;
+  productsRequiringManualReview: string[];
+}
+
+export interface AdminCatalogMediaImportResult {
+  batch: AdminCatalogImportBatch;
+  report: AdminCatalogMediaImportReport;
+}
+
 export interface AdminDeliveryDetail {
   id: string;
   orderId: string;
@@ -1080,6 +1195,9 @@ export interface AdminProductRead {
   minimumAge: number | null;
   publicationStatus: AdminProductPublicationStatus;
   featured: boolean;
+  requiresPricing: boolean;
+  requiresStock: boolean;
+  needsMediaReview: boolean;
   version: number;
 }
 
@@ -1089,6 +1207,7 @@ export interface AdminProductImage {
   variantId: string | null;
   url: string;
   contentType: string;
+  originalFilename: string | null;
   byteSize: number;
   checksumSha256: string;
   width: number | null;
@@ -1100,6 +1219,7 @@ export interface AdminProductImage {
   moderationStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | 'QUARANTINED';
   ownerVersion: number;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface AdminProductVariantRead {
@@ -1110,7 +1230,7 @@ export interface AdminProductVariantRead {
   sku: string;
   barcode: string | null;
   color: string | null;
-  costMillimes: number;
+  costMillimes: number | null;
   priceMillimes: number;
   promotionalPriceMillimes: number | null;
   taxRateBps: number;
@@ -1143,4 +1263,5 @@ export interface AdminProductCreatePayload {
 export interface AdminProductUpdatePayload extends AdminProductCreatePayload {
   version: number;
   publicationStatus: AdminProductMutablePublicationStatus;
+  mediaReviewConfirmed?: boolean;
 }

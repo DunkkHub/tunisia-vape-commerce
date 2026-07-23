@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Plus, RefreshCw, Search } from 'lucide-react';
+import { FileUp, Plus, RefreshCw, Search } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom';
 import { adminDataClient } from '../../api/admin-data-client';
 import { ApiError } from '../../api/http';
 import type { AdminRecord } from '../../api/types';
+import { useAdminAuth } from '../../auth/admin-auth-context';
 import { Button } from '../../components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
 import { LocalDate, Price } from '../../components/ui/price';
@@ -131,6 +132,7 @@ function Cell({ record, column }: { record: AdminRecord; column: Column }) {
 
 export function AdminResourcePage({ resource }: { resource: Resource }) {
   const { t } = useTranslation();
+  const { user } = useAdminAuth();
   const resourceConfig = config(t)[resource];
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
@@ -225,6 +227,14 @@ export function AdminResourcePage({ resource }: { resource: Resource }) {
           <p>{t('admin.resourceSubtitle')}</p>
         </div>
         <div className="admin-heading-actions">
+          {resource === 'catalog' && user?.permissions.includes('catalog.import') ? (
+            <Button asChild variant="ghost">
+              <Link to="/admin/catalog/imports">
+                <FileUp aria-hidden="true" size={17} />
+                {t('admin.catalogImportNav')}
+              </Link>
+            </Button>
+          ) : null}
           {resource === 'catalog' ? (
             <Button asChild variant="admin">
               <Link to="/admin/catalog/new">

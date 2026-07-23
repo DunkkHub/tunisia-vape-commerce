@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
-import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test';
 
 const required = (name: string): string => {
   const value = process.env[name]?.trim();
@@ -18,6 +18,22 @@ const limitedAdminPassword = required('OPERATIONAL_E2E_LIMITED_ADMIN_PASSWORD');
 const customerEmail = required('OPERATIONAL_E2E_CUSTOMER_EMAIL');
 const customerPassword = required('OPERATIONAL_E2E_CUSTOMER_PASSWORD');
 const customerPhone = required('OPERATIONAL_E2E_CUSTOMER_PHONE');
+const mediaFixturePaths = (() => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(required('OPERATIONAL_E2E_MEDIA_PATHS'));
+  } catch {
+    throw new Error('OPERATIONAL_E2E_MEDIA_PATHS must contain a JSON array');
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length !== 4 ||
+    parsed.some((value) => typeof value !== 'string' || value.trim().length === 0)
+  ) {
+    throw new Error('OPERATIONAL_E2E_MEDIA_PATHS must identify exactly four image fixtures');
+  }
+  return parsed as [string, string, string, string];
+})();
 
 interface PageResult<T> {
   items: T[];
@@ -68,6 +84,68 @@ interface CashCollection {
   collectedMillimes: number;
   delivery: { id: string; version: number; status: string };
 }
+
+interface AdminProductSummary {
+  id: string;
+  slug: string;
+  version: number;
+}
+
+interface AdminVariantSummary {
+  id: string;
+  sku: string;
+  version: number;
+}
+
+interface AdminProductImage {
+  id: string;
+  productId: string | null;
+  variantId: string | null;
+  url: string;
+  altTextFr: string;
+  altTextAr: string;
+  sortOrder: number;
+  isPrimary: boolean;
+  moderationStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | 'QUARANTINED';
+  ownerVersion: number;
+}
+
+interface PublicProductDetail {
+  id: string;
+  slug: string;
+  primaryImage: { url: string; altText: string } | null;
+  images: Array<{ url: string; altText: string }>;
+}
+
+interface CatalogImportBatch {
+  id: string;
+  importKey: string;
+  dryRun: boolean;
+  status: string;
+  appliedCount: number;
+  rows?: Array<{
+    stableIdentity: string;
+    status: string;
+    productId: string | null;
+    variantId: string | null;
+  }>;
+}
+
+const expectLoadedImage = async (image: Locator) => {
+  await image.scrollIntoViewIfNeeded();
+  await expect(image).toBeVisible();
+  await expect
+    .poll(
+      () =>
+        image.evaluate((element: HTMLImageElement) => ({
+          complete: element.complete,
+          width: element.naturalWidth,
+          height: element.naturalHeight,
+        })),
+      { timeout: 10_000 },
+    )
+    .toEqual({ complete: true, width: 320, height: 320 });
+};
 
 const confirmAge = async (page: Page) => {
   const confirm = page.getByRole('button', { name: /Je confirme avoir 18 ans ou plus/i });
@@ -420,6 +498,513 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     ]);
     expect(customerSession.status()).toBe(200);
     expect(adminSession.status()).toBe(200);
+  });
+
+  await test.step('administrator manages the complete product-media lifecycle', async () => {
+    const products = await adminApi<PageResult<AdminProductSummary>>(
+      context,
+      'GET',
+      '/admin/products?page=1&limit=20&q=puffjet-menthe-operationnelle',
+    );
+    const product = products.items.find(({ slug }) => slug === 'puffjet-menthe-operationnelle');
+    expect(product).toBeTruthy();
+    const variants = await adminApi<PageResult<AdminVariantSummary>>(
+      context,
+      'GET',
+      `/admin/products/${product!.id}/variants?page=1&pageSize=50`,
+    );
+    const variant = variants.items.find(({ sku }) => sku === 'E2E-PUFFJET-MINT-V1');
+    expect(variant).toBeTruthy();
+
+    await page.goto(`/admin/catalog/${product!.id}/edit`);
+    const uploadForm = page.locator('.admin-media-upload');
+    await expect(page.getByRole('heading', { name: 'Images du produit' })).toBeVisible();
+    await expect(uploadForm.locator('select[name="variantId"] option')).toHaveCount(2);
+
+    const mediaListPath = `/api/v1/admin/products/${product!.id}/images`;
+    const imageCard = (altText: string) =>
+      page.locator('.admin-media-card').filter({
+        has: page.getByRole('img', { name: altText, exact: true }),
+      });
+    const waitForMediaRefresh = () =>
+      page.waitForResponse(
+        (candidate) =>
+          new URL(candidate.url()).pathname === mediaListPath &&
+          candidate.request().method() === 'GET' &&
+          candidate.status() === 200,
+      );
+    const uploadImage = async ({
+      fixturePath,
+      altTextFr,
+      altTextAr,
+      variantId,
+      isPrimary,
+    }: {
+      fixturePath: string;
+      altTextFr: string;
+      altTextAr: string;
+      variantId?: string;
+      isPrimary: boolean;
+    }): Promise<AdminProductImage> => {
+      await uploadForm.locator('input[name="file"]').setInputFiles(fixturePath);
+      await uploadForm.locator('select[name="variantId"]').selectOption(variantId ?? '');
+      await uploadForm.locator('input[name="altTextFr"]').fill(altTextFr);
+      await uploadForm.locator('input[name="altTextAr"]').fill(altTextAr);
+      const primary = uploadForm.locator('input[name="isPrimary"]');
+      if (isPrimary) await primary.check();
+      else await primary.uncheck();
+      const mutation = page.waitForResponse(
+        (candidate) =>
+          new URL(candidate.url()).pathname === mediaListPath &&
+          candidate.request().method() === 'POST',
+      );
+      const refresh = waitForMediaRefresh();
+      const uploadButton = uploadForm.getByRole('button', { name: 'Téléverser l’image' });
+      await uploadButton.click();
+      const [response] = await Promise.all([mutation, refresh]);
+      expect(response.status()).toBe(201);
+      const image = ((await response.json()) as { data: AdminProductImage }).data;
+      await expect(imageCard(altTextFr)).toHaveCount(1);
+      await expectLoadedImage(imageCard(altTextFr).locator('img'));
+      await expect(uploadButton).toBeEnabled();
+      return image;
+    };
+
+    const primaryImage = await uploadImage({
+      fixturePath: mediaFixturePaths[0],
+      altTextFr: 'Image principale E2E',
+      altTextAr: 'صورة E2E الرئيسية',
+      isPrimary: true,
+    });
+    const galleryImage = await uploadImage({
+      fixturePath: mediaFixturePaths[1],
+      altTextFr: 'Galerie produit E2E',
+      altTextAr: 'معرض منتج E2E',
+      isPrimary: false,
+    });
+    await uploadImage({
+      fixturePath: mediaFixturePaths[2],
+      altTextFr: 'Variante menthe E2E',
+      altTextAr: 'نكهة النعناع E2E',
+      variantId: variant!.id,
+      isPrimary: true,
+    });
+
+    let galleryCard = imageCard('Galerie produit E2E');
+    const reorderResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === `${mediaListPath}/reorder` &&
+        candidate.request().method() === 'POST',
+    );
+    const reorderRefresh = waitForMediaRefresh();
+    await galleryCard.getByRole('button', { name: 'Déplacer l’image vers le haut' }).click();
+    expect((await reorderResponse).status()).toBe(201);
+    await reorderRefresh;
+
+    galleryCard = imageCard('Galerie produit E2E');
+    const primaryResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === `${mediaListPath}/${galleryImage.id}/primary` &&
+        candidate.request().method() === 'POST',
+    );
+    const primaryRefresh = waitForMediaRefresh();
+    await galleryCard.getByRole('button', { name: 'Définir comme principale' }).click();
+    const primaryMutation = await primaryResponse;
+    expect(primaryMutation.status(), await primaryMutation.text()).toBe(201);
+    await primaryRefresh;
+
+    let originalCard = imageCard('Image principale E2E');
+    await originalCard.locator('input[name="altTextFr"]').fill('Image secondaire modifiée E2E');
+    await originalCard.locator('input[name="altTextAr"]').fill('صورة E2E ثانوية معدلة');
+    const metadataResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === `${mediaListPath}/${primaryImage.id}` &&
+        candidate.request().method() === 'PATCH',
+    );
+    const metadataRefresh = waitForMediaRefresh();
+    await originalCard.getByRole('button', { name: 'Enregistrer' }).click();
+    expect((await metadataResponse).status()).toBe(200);
+    await metadataRefresh;
+    await expect(imageCard('Image secondaire modifiée E2E')).toHaveCount(1);
+
+    originalCard = imageCard('Image secondaire modifiée E2E');
+    const originalSource = await originalCard.locator('img').getAttribute('src');
+    expect(originalSource).toBeTruthy();
+    await originalCard.locator('input[type="file"]').setInputFiles(mediaFixturePaths[3]);
+    const replacementResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === `${mediaListPath}/${primaryImage.id}/replace` &&
+        candidate.request().method() === 'POST',
+    );
+    const replacementRefresh = waitForMediaRefresh();
+    await originalCard
+      .locator('.admin-media-replace button[type="submit"]')
+      .filter({ hasText: 'Remplacer le fichier' })
+      .click();
+    const replacementHttp = await replacementResponse;
+    expect(replacementHttp.status()).toBe(201);
+    const replacementImage = ((await replacementHttp.json()) as { data: AdminProductImage }).data;
+    await replacementRefresh;
+    originalCard = imageCard('Image secondaire modifiée E2E');
+    await expect
+      .poll(() => originalCard.locator('img').getAttribute('src'))
+      .not.toBe(originalSource);
+    await expectLoadedImage(originalCard.locator('img'));
+
+    page.once('dialog', (dialog) => void dialog.accept());
+    const deletionResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === `${mediaListPath}/${replacementImage.id}` &&
+        candidate.request().method() === 'DELETE',
+    );
+    const deletionRefresh = waitForMediaRefresh();
+    await originalCard.getByRole('button', { name: 'Supprimer' }).click();
+    expect((await deletionResponse).status()).toBe(200);
+    await deletionRefresh;
+    await expect(imageCard('Image secondaire modifiée E2E')).toHaveCount(0);
+
+    const persistedImages = await adminApi<PageResult<AdminProductImage>>(
+      context,
+      'GET',
+      `/admin/products/${product!.id}/images?page=1&pageSize=50`,
+    );
+    expect(persistedImages.items).toHaveLength(2);
+    expect(persistedImages.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          productId: product!.id,
+          variantId: null,
+          altTextFr: 'Galerie produit E2E',
+          isPrimary: true,
+        }),
+        expect.objectContaining({
+          productId: null,
+          variantId: variant!.id,
+          altTextFr: 'Variante menthe E2E',
+          isPrimary: true,
+        }),
+      ]),
+    );
+
+    await page.goto('/products/puffjet-menthe-operationnelle');
+    let storefrontImage = page.locator('.product-gallery__main');
+    await expect(storefrontImage).toHaveAttribute('alt', 'Variante menthe E2E');
+    await expectLoadedImage(storefrontImage);
+    await page.getByRole('button', { name: /Galerie produit E2E/ }).click();
+    storefrontImage = page.locator('.product-gallery__main');
+    await expect(storefrontImage).toHaveAttribute('alt', 'Galerie produit E2E');
+    await expectLoadedImage(storefrontImage);
+  });
+
+  await test.step('generic catalogue import previews, applies, and replays without duplicates', async () => {
+    const importKey = 'operational-generic-import-v1';
+    const genericMediaSourceUrl =
+      'https://catalog-media-fixture.invalid/generic-import.png?ignored=query#ignored-fragment';
+    const genericMediaAlt = 'PuffJet Media Operationnelle E2E';
+    const importRow = {
+      schemaVersion: '1.0',
+      productKey: 'operational-generic-product',
+      brand: 'PuffJet E2E',
+      categorySlug: 'jetables-e2e',
+      family: 'PuffJet',
+      model: 'Import E2E',
+      productType: 'DISPOSABLE',
+      nameFr: 'Produit générique importé E2E',
+      nameAr: 'منتج E2E عام مستورد',
+      slug: 'operational-imported-e2e-product',
+      puffCount: 7_000,
+      liquidCapacityMl: 14,
+      containsNicotine: true,
+      nicotineStrengthMg: 5,
+      variantKey: 'operational-citrus',
+      variantNameFr: 'Agrumes opérationnels E2E',
+      variantNameAr: 'حمضيات تشغيلية E2E',
+      flavorCanonical: 'Operational Citrus',
+      flavorNameFr: 'Agrumes opérationnels',
+      flavorNameAr: 'حمضيات تشغيلية',
+      flavorCategory: 'FRUIT',
+      color: null,
+      sku: 'E2E-GENERIC-IMPORT-CITRUS',
+      priceMillimes: null,
+      publicationStatus: null,
+      officialProductUrl: null,
+      productImageUrl: null,
+      variantImageUrl: null,
+    };
+    const publishedMediaRow = {
+      schemaVersion: '1.0',
+      productKey: 'operational-published-product-media',
+      brand: 'PuffJet E2E',
+      categorySlug: 'jetables-e2e',
+      family: 'PuffJet',
+      model: 'Media E2E',
+      productType: 'DISPOSABLE',
+      nameFr: genericMediaAlt,
+      nameAr: 'منتج صور تشغيلي E2E',
+      slug: 'puffjet-menthe-operationnelle',
+      puffCount: 6_000,
+      liquidCapacityMl: null,
+      containsNicotine: true,
+      nicotineStrengthMg: 5,
+      variantKey: 'operational-published-mint',
+      variantNameFr: 'Menthe Media E2E',
+      variantNameAr: 'نعناع صور E2E',
+      flavorCanonical: null,
+      flavorNameFr: null,
+      flavorNameAr: null,
+      flavorCategory: null,
+      color: null,
+      sku: 'E2E-PUFFJET-MINT-V1',
+      priceMillimes: null,
+      publicationStatus: null,
+      officialProductUrl: null,
+      productImageUrl: genericMediaSourceUrl,
+      variantImageUrl: null,
+    };
+
+    await page.goto('/admin/catalog/imports');
+    const importForm = page
+      .locator('.admin-import-card')
+      .filter({ has: page.locator('#file-import-title') })
+      .locator('form');
+    await importForm.locator('input[name="importKey"]').fill(importKey);
+    await importForm.locator('select[name="format"]').selectOption('JSON');
+    await importForm.locator('input[name="overrideImages"]').check();
+    await importForm.locator('input[name="file"]').setInputFiles({
+      name: 'operational-catalog.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(
+        JSON.stringify({ schemaVersion: '1.0', rows: [importRow, publishedMediaRow] }),
+      ),
+    });
+    const previewResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === '/api/v1/admin/catalog/imports/preview' &&
+        candidate.request().method() === 'POST',
+    );
+    await importForm.getByRole('button', { name: 'Valider et prévisualiser' }).click();
+    const previewHttp = await previewResponse;
+    expect(previewHttp.status()).toBe(201);
+    const preview = ((await previewHttp.json()) as { data: CatalogImportBatch }).data;
+    expect(preview).toMatchObject({ importKey, dryRun: true, status: 'PREVIEW_VALID' });
+    let currentImport = page.locator('.admin-import-detail');
+    await expect(currentImport.getByRole('heading', { name: importKey })).toBeVisible();
+    await expect(currentImport.getByText('Prévisualisation valide', { exact: true })).toBeVisible();
+    const validationReport = currentImport.locator('.admin-import-row-report');
+    await expect(
+      validationReport.getByText('operational-generic-product:operational-citrus'),
+    ).toBeVisible();
+    await expect(
+      validationReport.getByText('operational-published-product-media:operational-published-mint'),
+    ).toBeVisible();
+    await expect(validationReport.getByText('Valide', { exact: true })).toHaveCount(2);
+    await expect(validationReport.getByText('Aucun problème', { exact: true })).toHaveCount(2);
+
+    await page.getByRole('button', { name: 'Appliquer ce lot' }).click();
+    const confirmationDialog = page.getByRole('dialog');
+    await confirmationDialog.locator('input[name="confirmation"]').fill('APPLY_CATALOG_IMPORT');
+    const applyResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === `/api/v1/admin/catalog/imports/${preview.id}/apply` &&
+        candidate.request().method() === 'POST',
+    );
+    await confirmationDialog.getByRole('button', { name: 'Appliquer ce lot' }).click();
+    const applyHttp = await applyResponse;
+    expect(applyHttp.status()).toBe(201);
+    const applied = ((await applyHttp.json()) as { data: CatalogImportBatch }).data;
+    expect(applied).toMatchObject({
+      importKey,
+      dryRun: false,
+      status: 'APPLIED_WITH_WARNINGS',
+      appliedCount: 2,
+    });
+    currentImport = page.locator('.admin-import-detail');
+    await expect(
+      currentImport.getByText('Appliqué avec avertissements', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      currentImport.locator('.admin-import-row-report').getByText('Créée', { exact: true }),
+    ).toBeVisible();
+
+    const replay = await adminApi<CatalogImportBatch>(
+      context,
+      'POST',
+      `/admin/catalog/imports/${preview.id}/apply`,
+      { confirmation: 'APPLY_CATALOG_IMPORT' },
+    );
+    expect(replay).toMatchObject({ id: applied.id, appliedCount: 2 });
+    const imported = await adminApi<PageResult<AdminProductSummary>>(
+      context,
+      'GET',
+      '/admin/products?page=1&limit=50&q=operational-imported-e2e-product',
+    );
+    expect(imported.total).toBe(1);
+    expect(imported.items).toHaveLength(1);
+    expect(imported.items[0]?.slug).toBe('operational-imported-e2e-product');
+
+    const publishedProducts = await adminApi<PageResult<AdminProductSummary>>(
+      context,
+      'GET',
+      '/admin/products?page=1&limit=20&q=puffjet-menthe-operationnelle',
+    );
+    const publishedProduct = publishedProducts.items.find(
+      ({ slug }) => slug === 'puffjet-menthe-operationnelle',
+    );
+    expect(publishedProduct).toBeTruthy();
+
+    const mediaResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname ===
+          `/api/v1/admin/catalog/imports/${applied.id}/media/apply` &&
+        candidate.request().method() === 'POST',
+    );
+    await currentImport.getByRole('button', { name: 'Importer les médias du lot' }).click();
+    const mediaDialog = page.getByRole('dialog');
+    await mediaDialog.locator('input[name="confirmation"]').fill('IMPORT_CATALOG_MEDIA');
+    await mediaDialog.getByRole('button', { name: 'Importer les médias du lot' }).click();
+    const mediaHttp = await mediaResponse;
+    expect(mediaHttp.status()).toBe(201);
+    const firstMediaResult = (
+      (await mediaHttp.json()) as {
+        data: {
+          report: {
+            successful: Array<{ productKey: string; imageId?: string }>;
+            productsRequiringManualReview: string[];
+          };
+        };
+      }
+    ).data.report;
+    expect(firstMediaResult.successful).toContainEqual(
+      expect.objectContaining({ productKey: publishedMediaRow.productKey }),
+    );
+    expect(firstMediaResult.productsRequiringManualReview).toContain(publishedMediaRow.productKey);
+
+    let importedMedia = await adminApi<PageResult<AdminProductImage>>(
+      context,
+      'GET',
+      `/admin/products/${publishedProduct!.id}/images?page=1&pageSize=50`,
+    );
+    let candidate = importedMedia.items.find(({ altTextFr }) => altTextFr === genericMediaAlt);
+    expect(candidate).toMatchObject({
+      productId: publishedProduct!.id,
+      variantId: null,
+      isPrimary: false,
+      moderationStatus: 'PENDING',
+    });
+    expect(candidate?.url).toBe(
+      `/api/v1/admin/products/${publishedProduct!.id}/images/${candidate!.id}/content`,
+    );
+
+    const publicBeforeReviewResponse = await context.request.get(
+      `${apiUrl}/api/v1/catalog/products/puffjet-menthe-operationnelle`,
+      { headers: { Accept: 'application/json', 'Accept-Language': 'fr' } },
+    );
+    expect(publicBeforeReviewResponse.status()).toBe(200);
+    const publicBeforeReview = (
+      (await publicBeforeReviewResponse.json()) as { data: PublicProductDetail }
+    ).data;
+    expect(publicBeforeReview.images.some(({ altText }) => altText === genericMediaAlt)).toBe(
+      false,
+    );
+
+    const mediaReplay = await adminApi<{
+      report: {
+        successful: unknown[];
+        duplicates: Array<{ productKey: string; imageId?: string; code?: string }>;
+      };
+    }>(context, 'POST', `/admin/catalog/imports/${applied.id}/media/apply`, {
+      confirmation: 'IMPORT_CATALOG_MEDIA',
+    });
+    expect(mediaReplay.report.successful).toHaveLength(0);
+    expect(mediaReplay.report.duplicates).toContainEqual(
+      expect.objectContaining({ productKey: publishedMediaRow.productKey, imageId: candidate!.id }),
+    );
+    importedMedia = await adminApi<PageResult<AdminProductImage>>(
+      context,
+      'GET',
+      `/admin/products/${publishedProduct!.id}/images?page=1&pageSize=50`,
+    );
+    expect(
+      importedMedia.items.filter(({ altTextFr }) => altTextFr === genericMediaAlt),
+    ).toHaveLength(1);
+
+    await page.goto(`/admin/catalog/${publishedProduct!.id}/edit`);
+    await page.getByLabel('Afficher uniquement les images en attente de contrôle').check();
+    const pendingCard = page.locator('.admin-media-card').filter({
+      has: page.getByRole('img', { name: genericMediaAlt, exact: true }),
+    });
+    await expect(pendingCard).toHaveCount(1);
+    await expectLoadedImage(pendingCard.locator('img'));
+    const reviewResponse = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+          `/api/v1/admin/products/${publishedProduct!.id}/images/${candidate!.id}/review` &&
+        response.request().method() === 'POST',
+    );
+    await pendingCard.getByRole('button', { name: 'Approuver l’image' }).click();
+    expect([200, 201]).toContain((await reviewResponse).status());
+    await expect(pendingCard).toHaveCount(0);
+
+    await page.getByLabel('Afficher uniquement les images en attente de contrôle').uncheck();
+    let approvedCard = page.locator('.admin-media-card').filter({
+      has: page.getByRole('img', { name: genericMediaAlt, exact: true }),
+    });
+    await expect(approvedCard).toHaveCount(1);
+    importedMedia = await adminApi<PageResult<AdminProductImage>>(
+      context,
+      'GET',
+      `/admin/products/${publishedProduct!.id}/images?page=1&pageSize=50`,
+    );
+    candidate = importedMedia.items.find(({ id }) => id === candidate!.id);
+    expect(candidate).toMatchObject({ moderationStatus: 'APPROVED', isPrimary: false });
+
+    const publicAfterReviewResponse = await context.request.get(
+      `${apiUrl}/api/v1/catalog/products/puffjet-menthe-operationnelle`,
+      { headers: { Accept: 'application/json', 'Accept-Language': 'fr' } },
+    );
+    expect(publicAfterReviewResponse.status()).toBe(200);
+    const publicAfterReview = (
+      (await publicAfterReviewResponse.json()) as { data: PublicProductDetail }
+    ).data;
+    expect(publicAfterReview.images.some(({ altText }) => altText === genericMediaAlt)).toBe(true);
+    expect(publicAfterReview.primaryImage?.altText).not.toBe(genericMediaAlt);
+
+    const primaryResponse = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+          `/api/v1/admin/products/${publishedProduct!.id}/images/${candidate!.id}/primary` &&
+        response.request().method() === 'POST',
+    );
+    approvedCard = page.locator('.admin-media-card').filter({
+      has: page.getByRole('img', { name: genericMediaAlt, exact: true }),
+    });
+    await approvedCard.getByRole('button', { name: 'Définir comme principale' }).click();
+    expect([200, 201]).toContain((await primaryResponse).status());
+
+    const publicAfterPrimaryResponse = await context.request.get(
+      `${apiUrl}/api/v1/catalog/products/puffjet-menthe-operationnelle`,
+      { headers: { Accept: 'application/json', 'Accept-Language': 'fr' } },
+    );
+    expect(publicAfterPrimaryResponse.status()).toBe(200);
+    const publicAfterPrimary = (
+      (await publicAfterPrimaryResponse.json()) as { data: PublicProductDetail }
+    ).data;
+    expect(publicAfterPrimary.primaryImage).toMatchObject({ altText: genericMediaAlt });
+    expect(publicAfterPrimary.primaryImage?.url).toMatch(/^\/api\/v1\/media\/[a-f0-9]{64}$/);
+    const publicMediaResponse = await context.request.get(
+      `${apiUrl}${publicAfterPrimary.primaryImage!.url}`,
+    );
+    expect(publicMediaResponse.status()).toBe(200);
+    expect(publicMediaResponse.headers()['content-type']).toBe('image/png');
+    expect((await publicMediaResponse.body()).subarray(0, 8)).toEqual(
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    );
+
+    await page.goto('/products/puffjet-menthe-operationnelle');
+    await page.getByRole('button', { name: new RegExp(genericMediaAlt) }).click();
+    const importedStorefrontImage = page.locator('.product-gallery__main');
+    await expect(importedStorefrontImage).toHaveAttribute('alt', genericMediaAlt);
+    await expectLoadedImage(importedStorefrontImage);
   });
 
   await test.step('administrator creates and edits a product', async () => {

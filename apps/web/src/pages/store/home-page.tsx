@@ -34,7 +34,7 @@ interface SpotlightTile {
 const spotlightIcons = [Leaf, Cherry, Grape, Zap] as const;
 
 export function HomePage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const status = useStorefrontStatus();
   const displayBrand = status.storeName.trim() || t('brand.fallback');
   const homeQuery = useQuery({
@@ -76,7 +76,7 @@ export function HomePage() {
   ];
   const flavorSpotlights: SpotlightTile[] =
     facetsQuery.data?.flavors.slice(0, 4).map((flavor, index) => ({
-      label: flavor.value,
+      label: i18n.resolvedLanguage === 'ar' ? flavor.nameAr : flavor.nameFr,
       detail: t('catalog.results', { count: flavor.productCount }),
       to: `/catalog?flavor=${encodeURIComponent(flavor.value)}`,
       Icon: spotlightIcons[index] ?? Sparkles,

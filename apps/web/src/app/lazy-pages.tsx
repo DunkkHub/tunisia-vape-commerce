@@ -93,3 +93,6 @@ export const AdminCustomersPage = lazy(async () => ({
 export const AdminResourcePage = lazy(async () => ({
   default: (await import('../pages/admin/admin-resource-page')).AdminResourcePage,
 }));
+export const AdminCatalogImportsPage = lazy(async () => ({
+  default: (await import('../pages/admin/admin-catalog-imports-page')).AdminCatalogImportsPage,
+}));

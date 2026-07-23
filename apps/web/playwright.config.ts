@@ -6,7 +6,7 @@ const reportName = operational ? 'operational' : 'fast';
 export default defineConfig({
   testDir: operational ? './tests/operational-e2e' : './tests/e2e',
   fullyParallel: !operational,
-  ...(operational ? { workers: 1 } : {}),
+  workers: operational ? 1 : 2,
   retries: operational ? 0 : process.env.CI ? 2 : 0,
   reporter: process.env.CI
     ? [['html', { open: 'never', outputFolder: `playwright-report/${reportName}` }]]

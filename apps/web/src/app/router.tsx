@@ -19,6 +19,7 @@ import {
   AdminCashPage,
   AdminAdministratorsPage,
   AdminCustomersPage,
+  AdminCatalogImportsPage,
   AdminInventoryPage,
   AdminInventoryDetailPage,
   AdminLoginPage,
@@ -64,6 +65,10 @@ export const appRoutes: RouteObject[] = [
               { index: true, element: routeElement(<AdminDashboardPage />) },
               { path: 'dashboard', element: <Navigate to="/admin" replace /> },
               { path: 'catalog', element: routeElement(<AdminResourcePage resource="catalog" />) },
+              {
+                path: 'catalog/imports',
+                element: routeElement(<AdminCatalogImportsPage />),
+              },
               { path: 'catalog/new', element: routeElement(<AdminProductEditorPage />) },
               { path: 'catalog/:id/edit', element: routeElement(<AdminProductEditorPage />) },
               { path: 'orders', element: routeElement(<AdminResourcePage resource="orders" />) },
