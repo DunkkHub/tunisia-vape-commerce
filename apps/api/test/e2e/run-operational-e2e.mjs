@@ -147,6 +147,25 @@ const waitForUrl = async (label, url, child, timeoutMilliseconds = 60_000) => {
   throw new Error(`${label} did not become available at ${url}`, { cause: lastError });
 };
 
+const verifyAdminBrowserOrigin = async () => {
+  const response = await fetch(`${apiBaseUrl}/api/v1/auth/admin/login`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: webBaseUrl,
+      'Access-Control-Request-Headers': 'accept-language,content-type,x-client-context',
+      'Access-Control-Request-Method': 'POST',
+    },
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (
+    !response.ok ||
+    response.headers.get('access-control-allow-origin') !== webBaseUrl ||
+    response.headers.get('access-control-allow-credentials') !== 'true'
+  ) {
+    throw new Error('The disposable API did not authorize its administrator browser origin');
+  }
+};
+
 const stopServer = async ({ child }) => {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise((resolve) => child.once('exit', resolve));
@@ -262,6 +281,7 @@ try {
     DATABASE_MIGRATION_URL: migrationUrl,
     REDIS_URL: redisUrl.toString(),
     WEB_URL: webBaseUrl,
+    ADMIN_WEB_URL: webBaseUrl,
     COOKIE_SECRET: cookieSecret,
     FIELD_ENCRYPTION_KEY: fieldEncryptionKey,
     CHECKOUT_ENABLED: 'true',
@@ -364,6 +384,7 @@ try {
   );
   servers.push(apiServer);
   await waitForUrl('API', `${apiBaseUrl}/api/v1/health/live`, apiServer.child);
+  await verifyAdminBrowserOrigin();
 
   const webServer = startServer(
     'Web preview',
