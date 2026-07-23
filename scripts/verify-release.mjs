@@ -117,10 +117,8 @@ if (!['redis:', 'rediss:'].includes(testE2eRedis.protocol) || testE2eRedis.pathn
 const runPnpm = (stageArguments, stageEnvironment = {}) =>
   new Promise((resolve, reject) => {
     const windows = process.platform === 'win32';
-    const executable = windows ? (process.env.ComSpec ?? 'cmd.exe') : 'pnpm';
-    const arguments_ = windows
-      ? ['/d', '/s', '/c', path.join(repositoryRoot, 'pnpm.cmd'), ...stageArguments]
-      : stageArguments;
+    const executable = windows ? 'cmd.exe' : 'pnpm';
+    const arguments_ = windows ? ['/d', '/s', '/c', 'pnpm.cmd', ...stageArguments] : stageArguments;
     const child = spawn(executable, arguments_, {
       cwd: repositoryRoot,
       env: { ...process.env, ...stageEnvironment },
