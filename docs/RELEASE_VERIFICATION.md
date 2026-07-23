@@ -49,6 +49,11 @@ checkout/maintenance gates and a denied-permission role through Chromium. It ver
 order, reservation, inventory, COD, consent, notification and TOTP state before dropping the
 database and flushing Redis database 14.
 
+The harness pins both storefront and administrator browser origins to its disposable web origin and
+verifies the administrator CORS preflight before Playwright starts. This prevents an ignored local
+`.env` file used to run Compose from leaking a different administrator origin into the isolated
+browser test.
+
 The fixture command is deliberately unusable by accident: `NODE_ENV` must equal `test`,
 `DATABASE_URL` must name the generated disposable database, the database must contain no users or
 products, and `OPERATIONAL_E2E_FIXTURE_CONFIRM` must exactly equal
@@ -66,17 +71,17 @@ command fail.
 
 ## Latest recorded local result
 
-On 2026-07-20, the complete 14-stage command passed in 762 seconds on the final combined worktree
-using MySQL 8.4, dedicated
-migration/runtime identities, Redis database 15 for integration and database 14 for operational
-browser coverage. It recorded no known high-severity dependency vulnerability; 268 API, 36 web,
-and 29 worker unit tests; 10 integration tests; 6 security tests; 20 operational-tool tests; every
-production build; 8 fast Playwright passes with 2 intentional project-matrix skips; and the complete
-real-service operational browser scenario in 42.9 seconds (47.0-second suite). The structural seed
-created 9 roles, 42 permissions and 24 governorates, with no users, administrators or products.
+On 2026-07-23, the complete 14-stage command passed in 444.165 seconds on the final combined
+worktree using MySQL 8.4, dedicated migration/runtime identities, Redis database 15 for integration
+and database 14 for operational browser coverage. It recorded no known high-severity dependency
+vulnerability; 377 API, 58 web, and 30 worker unit tests; 15 integration tests; 6 security tests; 26
+operational-tool tests; every production build; 8 fast Playwright passes with 2 intentional
+project-matrix skips; and the complete real-service operational browser scenario in 43.5 seconds.
+The structural seed created 9 roles, 43 permissions and 24 governorates, with no users,
+administrators or products.
 
 The same revision family also passed all runtime container builds. A clean Compose database applied
-all six migrations, the API/worker/web/gateway and required services became healthy, and the live
+all nine migrations, the API/worker/web/gateway and required services became healthy, and the live
 deployment smoke passed through Nginx. See `PRODUCTION_READINESS_REPORT.md` for the exact load,
 backup/restore and container evidence. Rerun `pnpm verify:release` on the exact promoted commit and
 retain the CI-owned evidence below; an earlier local pass is not a substitute for commit-specific
