@@ -28,10 +28,13 @@ describe('LocalMediaStorage', () => {
       checksumSha256: '0'.repeat(64),
     });
 
-    await expect(storage.get(objectKey)).resolves.toEqual(bytes);
+    await expect(storage.get(objectKey, bytes.length)).resolves.toEqual(bytes);
+    await expect(storage.get(objectKey, bytes.length - 1)).rejects.toThrow(
+      'exceeded its recorded size',
+    );
     await expect(readFile(join(root, ...objectKey.split('/')))).resolves.toEqual(bytes);
     await storage.delete(objectKey);
-    await expect(storage.get(objectKey)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(storage.get(objectKey, bytes.length)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(storage.delete(objectKey)).resolves.toBeUndefined();
   });
 

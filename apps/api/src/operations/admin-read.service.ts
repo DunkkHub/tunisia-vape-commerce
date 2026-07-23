@@ -27,6 +27,11 @@ const inventoryVariantSelect = (asOf: Date) =>
     lowStockThreshold: true,
     publicationStatus: true,
     updatedAt: true,
+    flavor: {
+      select: {
+        canonicalName: true,
+      },
+    },
     product: {
       select: {
         id: true,
@@ -65,6 +70,11 @@ const inventoryVariantSelect = (asOf: Date) =>
 type InventoryVariantRecord = Prisma.ProductVariantGetPayload<{
   select: ReturnType<typeof inventoryVariantSelect>;
 }>;
+
+const inventoryFlavor = (variant: InventoryVariantRecord): string | null =>
+  variant.flavor
+    ? variant.flavor.canonicalName.trim() || null
+    : variant.product.flavor?.trim() || null;
 
 interface InventoryAggregateRow {
   brandId: string | null;
@@ -198,7 +208,7 @@ export class AdminReadService {
             brand: variant.product.brand,
             brandName: variant.product.brand?.name ?? null,
             productType: variant.product.productType,
-            flavor: variant.product.flavor,
+            flavor: inventoryFlavor(variant),
             ...stock,
             availableQuantity: stock.remainingQuantity,
             lowStockThreshold: variant.lowStockThreshold,
@@ -295,7 +305,7 @@ export class AdminReadService {
           variant.nameAr,
           variant.product.brand?.name,
           variant.product.productType,
-          variant.product.flavor,
+          inventoryFlavor(variant),
           stock.onHandQuantity,
           stock.reservedQuantity,
           stock.remainingQuantity,
@@ -575,7 +585,6 @@ export class AdminReadService {
     const product: Prisma.ProductWhereInput = {
       deletedAt: null,
       ...(query.productType ? { productType: query.productType } : {}),
-      ...(flavor ? { flavor: { equals: flavor } } : {}),
       ...(brand
         ? {
             brand: {
@@ -587,31 +596,75 @@ export class AdminReadService {
     return {
       deletedAt: null,
       product: { is: product },
-      ...(search
-        ? {
-            OR: [
-              { sku: { contains: search } },
-              { barcode: { contains: search } },
-              { nameFr: { contains: search } },
-              { nameAr: { contains: search } },
+      AND: [
+        ...(flavor
+          ? [
               {
-                product: {
-                  is: {
-                    OR: [
-                      { nameFr: { contains: search } },
-                      { nameAr: { contains: search } },
-                      { sku: { contains: search } },
-                      { barcode: { contains: search } },
-                      { slug: { contains: search } },
-                      { flavor: { contains: search } },
-                      { brand: { is: { name: { contains: search } } } },
+                OR: [
+                  {
+                    flavor: {
+                      is: {
+                        OR: [
+                          { canonicalName: { equals: flavor } },
+                          { slug: { equals: flavor } },
+                          { nameFr: { equals: flavor } },
+                          { nameAr: { equals: flavor } },
+                        ],
+                      },
+                    },
+                  },
+                  {
+                    AND: [{ flavorId: null }, { product: { is: { flavor: { equals: flavor } } } }],
+                  },
+                ],
+              },
+            ]
+          : []),
+        ...(search
+          ? [
+              {
+                OR: [
+                  { sku: { contains: search } },
+                  { barcode: { contains: search } },
+                  { nameFr: { contains: search } },
+                  { nameAr: { contains: search } },
+                  {
+                    flavor: {
+                      is: {
+                        OR: [
+                          { canonicalName: { contains: search } },
+                          { slug: { contains: search } },
+                          { nameFr: { contains: search } },
+                          { nameAr: { contains: search } },
+                        ],
+                      },
+                    },
+                  },
+                  {
+                    AND: [
+                      { flavorId: null },
+                      { product: { is: { flavor: { contains: search } } } },
                     ],
                   },
-                },
+                  {
+                    product: {
+                      is: {
+                        OR: [
+                          { nameFr: { contains: search } },
+                          { nameAr: { contains: search } },
+                          { sku: { contains: search } },
+                          { barcode: { contains: search } },
+                          { slug: { contains: search } },
+                          { brand: { is: { name: { contains: search } } } },
+                        ],
+                      },
+                    },
+                  },
+                ],
               },
-            ],
-          }
-        : {}),
+            ]
+          : []),
+      ],
     };
   }
 
@@ -621,20 +674,25 @@ export class AdminReadService {
    * entire filtered inventory in application memory. All caller values remain bound parameters.
    */
   private inventoryGroupSql(query: AdminInventoryQueryDto, asOf: Date): Prisma.Sql {
+    const effectiveFlavor = Prisma.sql`CASE
+      WHEN variant.flavorId IS NOT NULL THEN NULLIF(TRIM(flavorRecord.canonicalName), '')
+      ELSE NULLIF(TRIM(p.flavor), '')
+    END`;
     return Prisma.sql`
       SELECT
         p.brandId AS brandId,
         b.name AS brandName,
         p.productType AS productType,
-        NULLIF(TRIM(p.flavor), '') AS flavor,
+        ${effectiveFlavor} AS flavor,
         CAST(COALESCE(SUM(COALESCE(eligible.onHandQuantity, 0)), 0) AS SIGNED) AS onHandQuantity,
         CAST(COALESCE(SUM(COALESCE(eligible.reservedQuantity, 0)), 0) AS SIGNED) AS reservedQuantity
       FROM ProductVariant AS variant
       INNER JOIN Product AS p ON p.id = variant.productId
       LEFT JOIN Brand AS b ON b.id = p.brandId
+      LEFT JOIN Flavor AS flavorRecord ON flavorRecord.id = variant.flavorId
       LEFT JOIN ${this.eligibleInventorySql(asOf)} AS eligible ON eligible.variantId = variant.id
       WHERE ${this.inventoryFilterSql(query)}
-      GROUP BY p.brandId, b.name, p.productType, NULLIF(TRIM(p.flavor), '')
+      GROUP BY p.brandId, b.name, p.productType, ${effectiveFlavor}
       ORDER BY b.name ASC, p.productType ASC, flavor ASC
       LIMIT ${INVENTORY_GROUP_LIMIT + 1}
     `;
@@ -650,7 +708,20 @@ export class AdminReadService {
     const flavor = normalizeQuery(query.flavor);
     if (query.productType) predicates.push(Prisma.sql`p.productType = ${query.productType}`);
     if (brand) predicates.push(Prisma.sql`(p.brandId = ${brand} OR b.slug = ${brand})`);
-    if (flavor) predicates.push(Prisma.sql`p.flavor = ${flavor}`);
+    if (flavor) {
+      predicates.push(Prisma.sql`(
+        (
+          variant.flavorId IS NOT NULL
+          AND (
+            flavorRecord.canonicalName = ${flavor}
+            OR flavorRecord.slug = ${flavor}
+            OR flavorRecord.nameFr = ${flavor}
+            OR flavorRecord.nameAr = ${flavor}
+          )
+        )
+        OR (variant.flavorId IS NULL AND p.flavor = ${flavor})
+      )`);
+    }
     if (search) {
       predicates.push(Prisma.sql`(
         LOCATE(${search}, variant.sku) > 0 OR
@@ -662,7 +733,14 @@ export class AdminReadService {
         LOCATE(${search}, COALESCE(p.sku, '')) > 0 OR
         LOCATE(${search}, COALESCE(p.barcode, '')) > 0 OR
         LOCATE(${search}, p.slug) > 0 OR
-        LOCATE(${search}, COALESCE(p.flavor, '')) > 0 OR
+        LOCATE(${search}, COALESCE(flavorRecord.canonicalName, '')) > 0 OR
+        LOCATE(${search}, COALESCE(flavorRecord.slug, '')) > 0 OR
+        LOCATE(${search}, COALESCE(flavorRecord.nameFr, '')) > 0 OR
+        LOCATE(${search}, COALESCE(flavorRecord.nameAr, '')) > 0 OR
+        (
+          variant.flavorId IS NULL
+          AND LOCATE(${search}, COALESCE(p.flavor, '')) > 0
+        ) OR
         LOCATE(${search}, COALESCE(b.name, '')) > 0
       )`);
     }

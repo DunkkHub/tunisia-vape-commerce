@@ -1,4 +1,5 @@
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { S3MediaStorage } from './s3-media-storage';
 
@@ -13,7 +14,8 @@ describe('S3MediaStorage', () => {
     const send = vi.fn((command: unknown) => {
       if (command instanceof GetObjectCommand) {
         return Promise.resolve({
-          Body: { transformToByteArray: () => Promise.resolve(Uint8Array.from(bytes)) },
+          ContentLength: bytes.length,
+          Body: Readable.from([bytes]),
         });
       }
       return Promise.resolve({});
@@ -35,7 +37,9 @@ describe('S3MediaStorage', () => {
       contentType: 'image/png',
       checksumSha256: 'a'.repeat(64),
     });
-    await expect(storage.get('products/product-1/product/random.png')).resolves.toEqual(bytes);
+    await expect(
+      storage.get('products/product-1/product/random.png', bytes.length),
+    ).resolves.toEqual(bytes);
     await storage.delete('products/product-1/product/random.png');
     storage.onModuleDestroy();
 
@@ -50,6 +54,7 @@ describe('S3MediaStorage', () => {
       Metadata: { checksum_sha256: 'a'.repeat(64) },
     });
     expect(get).toBeInstanceOf(GetObjectCommand);
+    expect((get as GetObjectCommand).input.Range).toBe(`bytes=0-${bytes.length}`);
     expect(remove).toBeInstanceOf(DeleteObjectCommand);
     expect(destroy).toHaveBeenCalledOnce();
   });

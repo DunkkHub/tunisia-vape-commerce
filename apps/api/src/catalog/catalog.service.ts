@@ -46,6 +46,8 @@ const publicProductSelect = (now: Date) =>
     descriptionFr: true,
     descriptionAr: true,
     containsNicotine: true,
+    nicotineStrengthMg: true,
+    puffCount: true,
     productType: true,
     flavor: true,
     basePriceMillimes: true,
@@ -70,13 +72,32 @@ const publicProductSelect = (now: Date) =>
         sku: true,
         priceMillimes: true,
         promotionalPriceMillimes: true,
+        nicotineStrengthMg: true,
+        flavorId: true,
+        flavor: {
+          select: {
+            id: true,
+            slug: true,
+            canonicalName: true,
+            nameFr: true,
+            nameAr: true,
+          },
+        },
         lowStockThreshold: true,
         images: { ...publicImages, take: 10 },
         inventoryItems: {
           where: {
+            location: { is: { active: true, fulfillsOrders: true } },
             OR: [
               { batchId: null },
-              { batch: { is: { OR: [{ expiryDate: null }, { expiryDate: { gt: now } }] } } },
+              {
+                batch: {
+                  is: {
+                    archivedAt: null,
+                    OR: [{ expiryDate: null }, { expiryDate: { gt: now } }],
+                  },
+                },
+              },
             ],
           },
           select: {
@@ -164,6 +185,21 @@ const serializeImage = (
   height: image.height ?? undefined,
 });
 
+const decimalNumber = (value: Prisma.Decimal | null | undefined): number | null => {
+  if (value === null || value === undefined) return null;
+  const converted = value.toNumber();
+  return Number.isFinite(converted) && converted >= 0 ? converted : null;
+};
+
+const serializeFlavor = (
+  flavor: NonNullable<PublicVariantRecord['flavor']>,
+  locale: StorefrontLocale,
+) => ({
+  id: flavor.id,
+  slug: flavor.slug,
+  name: locale === 'ar' ? flavor.nameAr : flavor.nameFr,
+});
+
 const serializeSummary = (product: PublicProductRecord, locale: StorefrontLocale) => {
   const price = displayPrice(product);
   const variants = product.variants.map((variant) => ({
@@ -173,6 +209,21 @@ const serializeSummary = (product: PublicProductRecord, locale: StorefrontLocale
   const totalAvailable = variants.reduce((total, variant) => total + variant.available, 0);
   const primaryImage =
     product.images?.[0] ?? product.variants.find((variant) => variant.images?.[0])?.images?.[0];
+  const selectableFlavors = [
+    ...new Map(
+      product.variants
+        .filter((variant) => variant.flavor !== null)
+        .map((variant) => [variant.flavor!.id, variant.flavor!] as const),
+    ).values(),
+  ];
+  const nicotineStrengthsMg = [
+    ...new Set(
+      [
+        decimalNumber(product.nicotineStrengthMg),
+        ...product.variants.map((variant) => decimalNumber(variant.nicotineStrengthMg)),
+      ].filter((strength): strength is number => strength !== null),
+    ),
+  ].sort((left, right) => left - right);
   return {
     id: product.id,
     name: locale === 'ar' ? product.nameAr : product.nameFr,
@@ -181,7 +232,16 @@ const serializeSummary = (product: PublicProductRecord, locale: StorefrontLocale
     brandName: product.brand?.name ?? null,
     brandSlug: product.brand?.slug ?? null,
     productType: product.productType,
-    flavor: product.flavor?.trim() || null,
+    flavor:
+      selectableFlavors.length === 1
+        ? locale === 'ar'
+          ? selectableFlavors[0]!.nameAr
+          : selectableFlavors[0]!.nameFr
+        : product.flavor?.trim() || null,
+    puffCount: product.puffCount,
+    nicotineStrengthMg: nicotineStrengthsMg.length === 1 ? nicotineStrengthsMg[0]! : null,
+    nicotineStrengthsMg,
+    selectableFlavorCount: selectableFlavors.length,
     priceMillimes: price.list,
     promotionalPriceMillimes: price.promotional,
     availableQuantity: totalAvailable,
@@ -209,6 +269,8 @@ const serializeDetail = (product: PublicProductRecord, locale: StorefrontLocale)
         ? variant.promotionalPriceMillimes
         : null,
     availableQuantity: availableQuantity(variant),
+    nicotineStrengthMg: decimalNumber(variant.nicotineStrengthMg),
+    flavor: variant.flavor ? serializeFlavor(variant.flavor, locale) : null,
     image: variant.images?.[0] ? serializeImage(variant.images[0], locale) : null,
   })),
   warningText: locale === 'ar' ? product.warningAr : product.warningFr,
@@ -238,6 +300,21 @@ const safeDatabaseInteger = (value: bigint | number | null | undefined): number 
   }
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 };
+
+const additionalPublicProductWhere = (
+  publicProducts: Prisma.ProductWhereInput,
+  clause: Prisma.ProductWhereInput,
+): Prisma.ProductWhereInput => ({
+  ...publicProducts,
+  AND: [
+    ...(Array.isArray(publicProducts.AND)
+      ? publicProducts.AND
+      : publicProducts.AND
+        ? [publicProducts.AND]
+        : []),
+    clause,
+  ],
+});
 
 @Injectable()
 export class CatalogService {
@@ -480,7 +557,22 @@ export class CatalogService {
   async facets() {
     const now = new Date();
     const publicProducts = buildPublicProductWhere({}, now);
-    const [brands, productTypes, flavorGroups, priceRows] = await Promise.all([
+    const publicVariants: Prisma.ProductVariantWhereInput = {
+      publicationStatus: 'PUBLISHED',
+      archivedAt: null,
+      deletedAt: null,
+      product: { is: publicProducts },
+    };
+    const [
+      brands,
+      productTypes,
+      legacyFlavorGroups,
+      relationalFlavors,
+      puffGroups,
+      productNicotineGroups,
+      variantNicotineGroups,
+      priceRows,
+    ] = await Promise.all([
       this.prisma.brand.findMany({
         where: {
           ...this.publicBrandWhere(now),
@@ -497,29 +589,94 @@ export class CatalogService {
       }),
       this.prisma.product.groupBy({
         by: ['flavor'],
-        where: {
-          ...publicProducts,
-          AND: [
-            ...(Array.isArray(publicProducts.AND)
-              ? publicProducts.AND
-              : publicProducts.AND
-                ? [publicProducts.AND]
-                : []),
-            { flavor: { not: null } },
-            { flavor: { not: '' } },
-          ],
-        },
+        where: additionalPublicProductWhere(publicProducts, {
+          AND: [{ flavor: { not: null } }, { flavor: { not: '' } }],
+        }),
         _count: { _all: true },
         orderBy: { flavor: 'asc' },
+        take: PUBLIC_FACET_LIMIT + 1,
+      }),
+      this.prisma.flavor.findMany({
+        where: { variants: { some: publicVariants } },
+        orderBy: [{ nameFr: 'asc' }, { id: 'asc' }],
+        take: PUBLIC_FACET_LIMIT + 1,
+        select: {
+          id: true,
+          slug: true,
+          canonicalName: true,
+          nameFr: true,
+          nameAr: true,
+          _count: { select: { variants: { where: publicVariants } } },
+        },
+      }),
+      this.prisma.product.groupBy({
+        by: ['puffCount'],
+        where: additionalPublicProductWhere(publicProducts, { puffCount: { not: null } }),
+        _count: { _all: true },
+        orderBy: { puffCount: 'asc' },
+        take: PUBLIC_FACET_LIMIT + 1,
+      }),
+      this.prisma.product.groupBy({
+        by: ['nicotineStrengthMg'],
+        where: additionalPublicProductWhere(publicProducts, {
+          nicotineStrengthMg: { not: null },
+        }),
+        _count: { _all: true },
+        orderBy: { nicotineStrengthMg: 'asc' },
+        take: PUBLIC_FACET_LIMIT + 1,
+      }),
+      this.prisma.productVariant.groupBy({
+        by: ['nicotineStrengthMg'],
+        where: { ...publicVariants, nicotineStrengthMg: { not: null } },
+        _count: { _all: true },
+        orderBy: { nicotineStrengthMg: 'asc' },
         take: PUBLIC_FACET_LIMIT + 1,
       }),
       this.publicPriceRange(now),
     ]);
 
-    const flavors = new Map<string, number>();
-    for (const group of flavorGroups.slice(0, PUBLIC_FACET_LIMIT)) {
+    const flavors = relationalFlavors.slice(0, PUBLIC_FACET_LIMIT).map((flavor) => ({
+      value: flavor.slug,
+      nameFr: flavor.nameFr,
+      nameAr: flavor.nameAr,
+      productCount: flavor._count.variants,
+    }));
+    const relationalFlavorNames = new Set(
+      relationalFlavors.flatMap((flavor) =>
+        [flavor.canonicalName, flavor.nameFr, flavor.nameAr].map((name) =>
+          name.toLocaleLowerCase(),
+        ),
+      ),
+    );
+    for (const group of legacyFlavorGroups.slice(0, PUBLIC_FACET_LIMIT)) {
       const value = group.flavor?.trim();
-      if (value) flavors.set(value, (flavors.get(value) ?? 0) + group._count._all);
+      if (
+        !value ||
+        relationalFlavorNames.has(value.toLocaleLowerCase()) ||
+        flavors.length >= PUBLIC_FACET_LIMIT
+      ) {
+        continue;
+      }
+      flavors.push({
+        value,
+        nameFr: value,
+        nameAr: value,
+        productCount: group._count._all,
+      });
+    }
+    flavors.sort((left, right) => left.nameFr.localeCompare(right.nameFr, 'fr'));
+    const nicotineStrengths = new Map<number, number>();
+    for (const group of productNicotineGroups.slice(0, PUBLIC_FACET_LIMIT)) {
+      const value = group.nicotineStrengthMg === null ? null : Number(group.nicotineStrengthMg);
+      if (value !== null && Number.isFinite(value) && value >= 0) {
+        nicotineStrengths.set(value, group._count._all);
+      }
+    }
+    for (const group of variantNicotineGroups.slice(0, PUBLIC_FACET_LIMIT)) {
+      const value = group.nicotineStrengthMg === null ? null : Number(group.nicotineStrengthMg);
+      if (value !== null && Number.isFinite(value) && value >= 0 && !nicotineStrengths.has(value)) {
+        nicotineStrengths.set(value, group._count._all);
+      }
     }
     const priceRow = priceRows[0];
 
@@ -527,14 +684,30 @@ export class CatalogService {
       data: {
         brands: brands.slice(0, PUBLIC_FACET_LIMIT),
         productTypes: productTypes.map((group) => group.productType),
-        flavors: [...flavors.entries()].map(([value, productCount]) => ({ value, productCount })),
+        flavors,
+        puffCounts: puffGroups
+          .slice(0, PUBLIC_FACET_LIMIT)
+          .flatMap((group) =>
+            group.puffCount === null
+              ? []
+              : [{ value: group.puffCount, productCount: group._count._all }],
+          ),
+        nicotineStrengthsMg: [...nicotineStrengths.entries()]
+          .sort(([left], [right]) => left - right)
+          .map(([value, productCount]) => ({ value, productCount })),
         priceRange: {
           minimumMillimes: safeDatabaseInteger(priceRow?.minimumMillimes),
           maximumMillimes: safeDatabaseInteger(priceRow?.maximumMillimes),
         },
         truncated: {
           brands: brands.length > PUBLIC_FACET_LIMIT,
-          flavors: flavorGroups.length > PUBLIC_FACET_LIMIT,
+          flavors:
+            relationalFlavors.length > PUBLIC_FACET_LIMIT ||
+            legacyFlavorGroups.length > PUBLIC_FACET_LIMIT,
+          puffCounts: puffGroups.length > PUBLIC_FACET_LIMIT,
+          nicotineStrengths:
+            productNicotineGroups.length > PUBLIC_FACET_LIMIT ||
+            variantNicotineGroups.length > PUBLIC_FACET_LIMIT,
         },
       },
     };

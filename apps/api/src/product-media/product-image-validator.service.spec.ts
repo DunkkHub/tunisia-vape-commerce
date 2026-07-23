@@ -4,8 +4,11 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Environment } from '../config/environment';
 import {
   ProductImageValidatorService,
+  sanitizeOriginalFilename,
   type UploadedProductImage,
 } from './product-image-validator.service';
+
+const avifSupported = Boolean(sharp.format.heif?.input.buffer && sharp.format.heif.output.buffer);
 
 const configuration = (maximumBytes = 10 * 1_024 * 1_024, maximumPixels = 40_000_000) =>
   ({
@@ -25,15 +28,17 @@ describe('ProductImageValidatorService', () => {
   let png: Buffer;
   let jpeg: Buffer;
   let webp: Buffer;
+  let avif: Buffer | undefined;
 
   beforeAll(async () => {
     const pixels = {
       create: { width: 3, height: 2, channels: 3 as const, background: '#ba32d5' },
     };
-    [png, jpeg, webp] = await Promise.all([
+    [png, jpeg, webp, avif] = await Promise.all([
       sharp(pixels).png().toBuffer(),
       sharp(pixels).jpeg().toBuffer(),
       sharp(pixels).webp().toBuffer(),
+      avifSupported ? sharp(pixels).avif().toBuffer() : Promise.resolve(undefined),
     ]);
   });
 
@@ -49,12 +54,59 @@ describe('ProductImageValidatorService', () => {
     expect(result).toMatchObject({
       contentType: mimetype,
       extension,
-      byteSize: bytes().length,
+      byteSize: result.bytes.length,
       width: 3,
       height: 2,
+      originalFilename: `customer-controlled-name.${extension}`,
     });
-    expect(result.bytes).toBe(bytes());
+    expect(result.bytes).not.toBe(bytes());
     expect(result.checksumSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(await sharp(result.bytes).metadata()).toMatchObject({ width: 3, height: 2 });
+  });
+
+  it.runIf(avifSupported)('accepts and safely re-encodes AVIF when Sharp supports it', async () => {
+    const result = await new ProductImageValidatorService(configuration()).validate(
+      upload(avif!, 'image/avif'),
+    );
+
+    expect(result).toMatchObject({
+      contentType: 'image/avif',
+      extension: 'avif',
+      width: 3,
+      height: 2,
+      originalFilename: 'customer-controlled-name.avif',
+    });
+    expect((await sharp(result.bytes).metadata()).format).toBe('heif');
+  });
+
+  it('auto-orients pixels and strips EXIF while retaining a safe raster', async () => {
+    const source = await sharp({
+      create: { width: 2, height: 3, channels: 3, background: '#155e75' },
+    })
+      .jpeg()
+      .withIccProfile('p3')
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    const sourceMetadata = await sharp(source).metadata();
+    expect(sourceMetadata.orientation).toBe(6);
+    expect(sourceMetadata.icc).toBeDefined();
+
+    const result = await new ProductImageValidatorService(configuration()).validate(
+      upload(source, 'image/jpeg'),
+    );
+    const metadata = await sharp(result.bytes).metadata();
+
+    expect(result).toMatchObject({ width: 3, height: 2 });
+    expect(metadata.orientation).toBeUndefined();
+    expect(metadata.exif).toBeUndefined();
+    expect(metadata.xmp).toBeUndefined();
+    expect(metadata.icc).toEqual(sourceMetadata.icc);
+  });
+
+  it('sanitizes path components, bidi controls, misleading extensions, and length', () => {
+    expect(sanitizeOriginalFilename('../../folder\\\u202Eevil.exe', 'jpg')).toBe('evil.jpg');
+    expect(sanitizeOriginalFilename('   ...   ', 'webp')).toBe('image-upload.webp');
+    expect(sanitizeOriginalFilename(`${'a'.repeat(300)}.png`, 'png')).toHaveLength(255);
   });
 
   it('rejects a declared MIME type that disagrees with magic bytes', async () => {
@@ -103,6 +155,14 @@ describe('ProductImageValidatorService', () => {
       ).rejects.toMatchObject({ response: { code: 'IMAGE_CONTAINER_INVALID' } });
     },
   );
+
+  it.runIf(avifSupported)('rejects trailing content after the exact AVIF container', async () => {
+    await expect(
+      new ProductImageValidatorService(configuration()).validate(
+        upload(Buffer.concat([avif!, Buffer.from('payload')]), 'image/avif'),
+      ),
+    ).rejects.toMatchObject({ response: { code: 'IMAGE_CONTAINER_INVALID' } });
+  });
 
   it('enforces the configured byte limit before decoding', async () => {
     await expect(

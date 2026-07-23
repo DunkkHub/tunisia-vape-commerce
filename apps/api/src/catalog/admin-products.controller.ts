@@ -23,6 +23,7 @@ import { requestLocale } from '../compliance/age-gate.service';
 import { AdminProductsService, type AdminMutationContext } from './admin-products.service';
 import {
   AdminProductListQueryDto,
+  ConfirmProductMediaReviewDto,
   CreateProductDto,
   ProductVersionDto,
   UpdateProductDto,
@@ -75,6 +76,20 @@ export class AdminProductsController {
   @ApiOperation({ summary: 'Update a product with optimistic concurrency' })
   update(@Param('id') id: string, @Body() input: UpdateProductDto, @Req() request: Request) {
     return this.products.update(id, input, mutationContext(request));
+  }
+
+  @Post(':id/media-review/confirm')
+  @UseGuards(CsrfGuard, RecentAuthenticationGuard)
+  @RequirePermissions('products.update')
+  @ApiOperation({
+    summary: 'Confirm completed media review while the product remains a draft',
+  })
+  confirmMediaReview(
+    @Param('id') id: string,
+    @Body() input: ConfirmProductMediaReviewDto,
+    @Req() request: Request,
+  ) {
+    return this.products.confirmMediaReview(id, input, mutationContext(request));
   }
 
   @Post(':id/archive')

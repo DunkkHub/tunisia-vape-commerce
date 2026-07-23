@@ -29,10 +29,19 @@ describe('administrator catalog access policy', () => {
     const listHandler = AdminProductsController.prototype.list;
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const archiveHandler = AdminProductsController.prototype.archive;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const mediaReviewHandler = AdminProductsController.prototype.confirmMediaReview;
     const mutationGuards = Reflect.getMetadata(GUARDS_METADATA, createHandler) as unknown[];
     expect(mutationGuards).toEqual([CsrfGuard, RecentAuthenticationGuard]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, mediaReviewHandler)).toEqual([
+      CsrfGuard,
+      RecentAuthenticationGuard,
+    ]);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, listHandler)).toEqual(['products.read']);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, createHandler)).toEqual(['products.create']);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, mediaReviewHandler)).toEqual([
+      'products.update',
+    ]);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, archiveHandler)).toEqual(['products.archive']);
   });
 

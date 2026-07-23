@@ -8,14 +8,22 @@ describe('CatalogProductsQueryDto', () => {
   it('accepts a combined public catalog filter and converts prices to integers', async () => {
     const query = plainToInstance(CatalogProductsQueryDto, {
       brand: 'nexa',
-      productType: 'E_LIQUID',
-      flavor: 'Menthe',
+      productType: 'PREFILLED_REPLACEMENT_POD',
+      flavor: 'menthe',
+      puffCount: '15000',
+      nicotineStrengthMg: '20.125',
       minPriceMillimes: '10000',
       maxPriceMillimes: '25000',
     });
 
     await expect(validate(query)).resolves.toHaveLength(0);
-    expect(query).toMatchObject({ minPriceMillimes: 10_000, maxPriceMillimes: 25_000 });
+    expect(query).toMatchObject({
+      productType: 'PREFILLED_REPLACEMENT_POD',
+      puffCount: 15_000,
+      nicotineStrengthMg: 20.125,
+      minPriceMillimes: 10_000,
+      maxPriceMillimes: 25_000,
+    });
   });
 
   it('rejects a maximum price below the minimum price', async () => {
@@ -32,13 +40,22 @@ describe('CatalogProductsQueryDto', () => {
     const query = plainToInstance(CatalogProductsQueryDto, {
       productType: 'UNKNOWN',
       flavor: '   ',
+      puffCount: '0',
+      nicotineStrengthMg: '100000.001',
       minPriceMillimes: '-1',
       maxPriceMillimes: '1.5',
     });
     const errors = await validate(query);
 
     expect(errors.map((error) => error.property)).toEqual(
-      expect.arrayContaining(['productType', 'flavor', 'minPriceMillimes', 'maxPriceMillimes']),
+      expect.arrayContaining([
+        'productType',
+        'flavor',
+        'puffCount',
+        'nicotineStrengthMg',
+        'minPriceMillimes',
+        'maxPriceMillimes',
+      ]),
     );
   });
 });

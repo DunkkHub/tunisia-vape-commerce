@@ -47,6 +47,7 @@ import {
   ReorderProductImagesDto,
   ReorderProductImagesResponseDto,
   ReplaceProductImageDto,
+  ReviewProductImageDto,
   UpdateProductImageMetadataDto,
   UploadProductImageDto,
 } from './dto/product-media.dto';
@@ -99,6 +100,24 @@ export class AdminProductMediaController {
     return this.media.list(parameters.productId, query);
   }
 
+  @Get(':imageId/content')
+  @Throttle({ default: { limit: 240, ttl: 60_000 } })
+  @RequirePermissions('products.read')
+  @ApiOperation({ summary: 'Inspect one product image through the authenticated admin boundary' })
+  @ApiProduces('image/jpeg', 'image/png', 'image/webp', 'image/avif')
+  async getContent(
+    @Param() parameters: ProductMediaImageParamDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const image = await this.media.readAdmin(parameters.productId, parameters.imageId);
+    response.setHeader('Content-Type', image.contentType);
+    response.setHeader('Content-Length', String(image.byteSize));
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.setHeader('Content-Disposition', 'inline');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    return new StreamableFile(image.bytes);
+  }
+
   @Post()
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('products.update')
@@ -107,7 +126,7 @@ export class AdminProductMediaController {
   )
   @ApiConsumes('multipart/form-data')
   @ApiBody(multipartSchema(false))
-  @ApiOperation({ summary: 'Validate and upload an approved product or variant image' })
+  @ApiOperation({ summary: 'Validate, sanitize, and upload an approved product or variant image' })
   @ApiCreatedResponse({ type: AdminProductImageResponseDto })
   upload(
     @Param() parameters: ProductMediaProductParamDto,
@@ -129,6 +148,24 @@ export class AdminProductMediaController {
     @Req() request: Request,
   ) {
     return this.media.updateMetadata(
+      parameters.productId,
+      parameters.imageId,
+      input,
+      mutationContext(request),
+    );
+  }
+
+  @Post(':imageId/review')
+  @UseGuards(CsrfGuard, RecentAuthenticationGuard)
+  @RequirePermissions('products.update')
+  @ApiOperation({ summary: 'Approve or reject one pending imported product image' })
+  @ApiOkResponse({ type: AdminProductImageResponseDto })
+  review(
+    @Param() parameters: ProductMediaImageParamDto,
+    @Body() input: ReviewProductImageDto,
+    @Req() request: Request,
+  ) {
+    return this.media.review(
       parameters.productId,
       parameters.imageId,
       input,
@@ -220,7 +257,7 @@ export class PublicProductMediaController {
 
   @Get(':objectKeyHash')
   @ApiOperation({ summary: 'Read one approved image belonging to a currently public product' })
-  @ApiProduces('image/jpeg', 'image/png', 'image/webp')
+  @ApiProduces('image/jpeg', 'image/png', 'image/webp', 'image/avif')
   async get(
     @Param() parameters: PublicMediaHashParamDto,
     @Res({ passthrough: true }) response: Response,

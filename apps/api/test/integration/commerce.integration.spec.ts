@@ -1,15 +1,24 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CartService } from '../../src/cart/cart.service';
+import { CatalogImportService } from '../../src/catalog-import/catalog-import.service';
+import { buildWotofoImportRows } from '../../src/catalog-import/wotofo-import-data';
+import { officialProductJsonUrl, WOTOFO_PRODUCTS } from '../../src/catalog-import/wotofo-catalog';
 import { CheckoutOrderService } from '../../src/checkout/checkout-order.service';
 import { CheckoutPolicyService } from '../../src/checkout/checkout-policy.service';
 import { CryptoService } from '../../src/common/security/crypto.service';
 import { validateEnvironment, type Environment } from '../../src/config/environment';
 import { CustomerOrdersService } from '../../src/customer-orders/customer-orders.service';
 import { PrismaService } from '../../src/database/prisma.service';
+import { ProductImageValidatorService } from '../../src/product-media/product-image-validator.service';
+import { ProductMediaService } from '../../src/product-media/product-media.service';
+import { LocalMediaStorage } from '../../src/product-media/storage/local-media-storage';
 import { AdminOrdersService } from '../../src/orders/admin-orders.service';
 import {
   checkoutInput,
@@ -640,4 +649,206 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
       }),
     ).toBe(1);
   });
+
+  it('imports the reviewed Wotofo catalogue idempotently and preserves manual price and stock', async () => {
+    const imports = new CatalogImportService(prisma);
+    const sources = WOTOFO_PRODUCTS.map((definition) => ({
+      handle: definition.handle,
+      title: definition.name,
+      productJsonUrl: officialProductJsonUrl(definition.handle),
+      productImageUrl: `https://cdn.shopify.com/s/files/1/0038/8032/1113/files/${definition.handle}.jpg`,
+      variants: definition.options.map((option) => ({
+        option,
+        imageUrl: null,
+        imageAlt: null,
+      })),
+      verifiedPayloadHash: 'a'.repeat(64),
+    }));
+    const rows = buildWotofoImportRows(sources);
+    const actor = {
+      userId: foundation.adminUserId,
+      requestId: key('wotofo-import'),
+      ipAddress: '127.0.0.1',
+      userAgent: 'integration-test',
+    };
+    const previewInput = {
+      schemaVersion: '1.0' as const,
+      rows: rows.map((input, index) => ({ rowNumber: index + 1, input, issues: [] })),
+    };
+    const importOptions = (importKey: string) => ({
+      importKey,
+      format: 'WOTOFO' as const,
+      source: 'WOTOFO_OFFICIAL' as const,
+      partialMode: false,
+      overridePrice: false,
+      overrideStatus: false,
+      overrideImages: false,
+    });
+
+    const firstPreview = await imports.preview(
+      previewInput,
+      importOptions(key('wotofo-v1')),
+      actor,
+    );
+    expect(firstPreview.data.status).toBe('PREVIEW_VALID');
+    const firstApply = await imports.apply(firstPreview.data.id, actor);
+    expect(firstApply.data.appliedCount).toBe(321);
+
+    const firstVariant = await prisma.productVariant.findFirstOrThrow({
+      where: {
+        product: {
+          is: {
+            sourceRecords: {
+              some: { source: 'WOTOFO_OFFICIAL', entityType: 'PRODUCT' },
+            },
+          },
+        },
+      },
+      orderBy: { sku: 'asc' },
+    });
+    const importedProduct = await prisma.product.findUniqueOrThrow({
+      where: { id: firstVariant.productId },
+    });
+    const mediaRoot = await mkdtemp(path.join(tmpdir(), 'vape-media-integration-'));
+    try {
+      const validator = new ProductImageValidatorService(config);
+      const media = new ProductMediaService(prisma, validator, new LocalMediaStorage(mediaRoot));
+      const imageBytes = await sharp({
+        create: {
+          width: 16,
+          height: 16,
+          channels: 4,
+          background: { r: 60, g: 25, b: 120, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
+      const uploaded = await media.upload(
+        importedProduct.id,
+        {
+          expectedOwnerVersion: importedProduct.version,
+          altTextFr: 'Produit Wotofo vérifié',
+          altTextAr: 'منتج ووتوفو موثّق',
+          isPrimary: true,
+        },
+        {
+          buffer: imageBytes,
+          mimetype: 'image/png',
+          originalname: '../verified-product.png',
+          size: imageBytes.length,
+        },
+        actor,
+      );
+      await expect(
+        prisma.productImage.findUniqueOrThrow({ where: { id: uploaded.data.id } }),
+      ).resolves.toMatchObject({
+        productId: importedProduct.id,
+        variantId: null,
+        originalFilename: 'verified-product.png',
+        moderationStatus: 'APPROVED',
+        isPrimary: true,
+      });
+      await expect(
+        validator.validate({
+          buffer: Buffer.from('MZ executable'),
+          mimetype: 'image/png',
+          originalname: 'spoof.png',
+          size: 13,
+        }),
+      ).rejects.toMatchObject({ response: { code: 'IMAGE_TYPE_NOT_ALLOWED' } });
+    } finally {
+      await rm(mediaRoot, { recursive: true, force: true });
+    }
+    await prisma.productVariant.update({
+      where: { id: firstVariant.id },
+      data: { priceMillimes: 89_000, version: { increment: 1 } },
+    });
+    const inventory = await prisma.inventoryItem.create({
+      data: {
+        variantId: firstVariant.id,
+        locationId: foundation.locationId,
+        onHandQuantity: 7,
+      },
+    });
+
+    const replay = await imports.apply(firstPreview.data.id, actor);
+    expect(replay.data.id).toBe(firstApply.data.id);
+    const updatePreview = await imports.preview(
+      previewInput,
+      importOptions(key('wotofo-v2')),
+      actor,
+    );
+    const updateApply = await imports.apply(updatePreview.data.id, actor);
+    expect(updateApply.data.appliedCount).toBe(321);
+
+    const [productCount, variantCount, preservedVariant, preservedInventory, publicCount] =
+      await Promise.all([
+        prisma.catalogSourceRecord.count({
+          where: { source: 'WOTOFO_OFFICIAL', entityType: 'PRODUCT' },
+        }),
+        prisma.catalogSourceRecord.count({
+          where: { source: 'WOTOFO_OFFICIAL', entityType: 'VARIANT' },
+        }),
+        prisma.productVariant.findUniqueOrThrow({ where: { id: firstVariant.id } }),
+        prisma.inventoryItem.findUniqueOrThrow({ where: { id: inventory.id } }),
+        prisma.product.count({
+          where: {
+            publicationStatus: 'PUBLISHED',
+            sourceRecords: {
+              some: { source: 'WOTOFO_OFFICIAL', entityType: 'PRODUCT' },
+            },
+          },
+        }),
+      ]);
+    expect(productCount).toBe(19);
+    expect(variantCount).toBe(321);
+    expect(preservedVariant.priceMillimes).toBe(89_000);
+    expect(preservedInventory.onHandQuantity).toBe(7);
+    expect(publicCount).toBe(0);
+    expect(
+      await prisma.product.count({
+        where: {
+          publicationStatus: 'DRAFT',
+          requiresPricing: true,
+          requiresStock: true,
+          sourceRecords: {
+            some: { source: 'WOTOFO_OFFICIAL', entityType: 'PRODUCT' },
+          },
+        },
+      }),
+    ).toBe(19);
+
+    await expect(imports.rollback(updateApply.data.id, actor)).rejects.toMatchObject({
+      response: { code: 'CATALOG_IMPORT_ROLLBACK_REQUIRES_MANUAL_REVIEW' },
+    });
+
+    const rollbackSource = rows[0];
+    if (!rollbackSource) throw new Error('The Wotofo fixture requires a catalogue row.');
+    const rollbackRow = {
+      ...rollbackSource,
+      productKey: 'integration-create-only-rollback',
+      variantKey: 'integration-rollback-option',
+      slug: 'wotofo-integration-create-only-rollback',
+      sku: 'WOT-INTEGRATION-CREATE-ONLY-ROLLBACK',
+    };
+    const rollbackPreview = await imports.preview(
+      {
+        schemaVersion: '1.0',
+        rows: [{ rowNumber: 1, input: rollbackRow, issues: [] }],
+      },
+      importOptions(key('wotofo-rollback')),
+      actor,
+    );
+    const rollbackApply = await imports.apply(rollbackPreview.data.id, actor);
+    const rollbackProduct = await prisma.product.findUniqueOrThrow({
+      where: { slug: rollbackRow.slug },
+    });
+    const rollbackResult = await imports.rollback(rollbackApply.data.id, actor);
+    expect(rollbackResult.data.status).toBe('ROLLED_BACK');
+    const archivedProduct = await prisma.product.findUniqueOrThrow({
+      where: { id: rollbackProduct.id },
+    });
+    expect(archivedProduct.publicationStatus).toBe('ARCHIVED');
+    expect(archivedProduct.archivedAt).toBeInstanceOf(Date);
+  }, 60_000);
 });

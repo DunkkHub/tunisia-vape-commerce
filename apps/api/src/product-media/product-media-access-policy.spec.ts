@@ -39,11 +39,15 @@ describe('product media access policy', () => {
   it('requires read permission for listing and update permission for every mutation', () => {
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const list = AdminProductMediaController.prototype.list;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const getContent = AdminProductMediaController.prototype.getContent;
     const mutations = [
       // eslint-disable-next-line @typescript-eslint/unbound-method
       AdminProductMediaController.prototype.upload,
       // eslint-disable-next-line @typescript-eslint/unbound-method
       AdminProductMediaController.prototype.updateMetadata,
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      AdminProductMediaController.prototype.review,
       // eslint-disable-next-line @typescript-eslint/unbound-method
       AdminProductMediaController.prototype.reorder,
       // eslint-disable-next-line @typescript-eslint/unbound-method
@@ -56,6 +60,8 @@ describe('product media access policy', () => {
 
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, list)).toEqual(['products.read']);
     expect(Reflect.getMetadata(GUARDS_METADATA, list)).toBeUndefined();
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, getContent)).toEqual(['products.read']);
+    expect(Reflect.getMetadata(GUARDS_METADATA, getContent)).toBeUndefined();
     for (const mutation of mutations) {
       expect(Reflect.getMetadata(PERMISSIONS_METADATA, mutation)).toEqual(['products.update']);
       expect(Reflect.getMetadata(GUARDS_METADATA, mutation)).toEqual([

@@ -4,10 +4,18 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Prisma, Product } from '@prisma/client';
+import { Prisma, type Product } from '@prisma/client';
+import { CheckoutPolicyService } from '../checkout/checkout-policy.service';
 import { PrismaService } from '../database/prisma.service';
+import {
+  approvedPublicationImageWhere,
+  availablePublicationQuantity,
+  publicationInventoryWhere,
+  publicationNotReady,
+} from './catalog-publication-readiness';
 import type {
   AdminProductListQueryDto,
+  ConfirmProductMediaReviewDto,
   CreateProductDto,
   MutablePublicationStatus,
   UpdateProductDto,
@@ -19,6 +27,16 @@ export interface AdminMutationContext {
   ipAddress?: string;
   userAgent?: string;
 }
+
+type CatalogDatabase = PrismaService | Prisma.TransactionClient;
+
+const PUBLICATION_TRANSACTION_OPTIONS = {
+  isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+  timeout: 10_000,
+} as const;
+
+const isTransactionConflict = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2034';
 
 const mutableProductFields = [
   'categoryId',
@@ -79,6 +97,9 @@ const adminProductResponse = (product: Product) => ({
     minimumAge: product.minimumAge,
     publicationStatus: product.publicationStatus,
     featured: product.featured,
+    requiresPricing: product.requiresPricing,
+    requiresStock: product.requiresStock,
+    needsMediaReview: product.needsMediaReview,
     publishedAt: product.publishedAt?.toISOString() ?? null,
     suspendedAt: product.suspendedAt?.toISOString() ?? null,
     archivedAt: product.archivedAt?.toISOString() ?? null,
@@ -181,7 +202,10 @@ const auditMetadata = (context: AdminMutationContext) => ({
 
 @Injectable()
 export class AdminProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly policies: CheckoutPolicyService,
+  ) {}
 
   async list(query: AdminProductListQueryDto, locale: 'fr' | 'ar') {
     const page = query.page;
@@ -319,7 +343,8 @@ export class AdminProductsService {
     this.assertId(id);
     if (
       !mutableProductFields.some((field) => input[field] !== undefined) &&
-      !input.publicationStatus
+      !input.publicationStatus &&
+      input.mediaReviewConfirmed !== true
     ) {
       throw new BadRequestException({
         code: 'NO_PRODUCT_CHANGES',
@@ -338,6 +363,15 @@ export class AdminProductsService {
     const categoryId = input.categoryId ?? current.categoryId;
     const brandId = input.brandId === undefined ? current.brandId : input.brandId;
     const targetStatus = input.publicationStatus ?? current.publicationStatus;
+    if (
+      input.mediaReviewConfirmed === true &&
+      (targetStatus !== 'PUBLISHED' || !current.needsMediaReview)
+    ) {
+      throw new BadRequestException({
+        code: 'MEDIA_REVIEW_CONFIRMATION_NOT_APPLICABLE',
+        message: 'Media review confirmation is accepted only when a flagged product is published.',
+      });
+    }
     await this.ensureReferences(categoryId, brandId, targetStatus === 'PUBLISHED');
 
     const basePrice =
@@ -348,41 +382,209 @@ export class AdminProductsService {
         : input.promotionalPriceMillimes;
     this.validatePrices(basePrice, promotionalPrice);
     if (targetStatus === 'PUBLISHED') {
-      await this.validatePublication(current, basePrice);
+      if (current.publicationStatus === 'PUBLISHED') {
+        await this.validateMediaReview(current, input.mediaReviewConfirmed === true);
+        await this.validatePublishedUpdate(current, basePrice, promotionalPrice);
+      } else {
+        await this.validatePublication(
+          current,
+          basePrice,
+          promotionalPrice,
+          input.mediaReviewConfirmed === true,
+        );
+      }
     }
 
     const data = this.buildUpdateData(input, current);
-    const updated = await this.prisma.$transaction(async (transaction) => {
-      const result = await transaction.product.updateMany({
-        where: { id, version: input.version, deletedAt: null },
-        data,
-      });
-      if (result.count !== 1) throw this.versionConflict();
-      const product = await transaction.product.findUnique({ where: { id } });
-      if (!product) throw this.productNotFound();
-      await transaction.auditLog.create({
-        data: {
-          ...auditMetadata(context),
-          action: 'catalog.product.update',
-          resourceType: 'Product',
-          resourceId: id,
-          beforeSummary: {
-            publicationStatus: current.publicationStatus,
-            basePriceMillimes: current.basePriceMillimes,
-            promotionalPriceMillimes: current.promotionalPriceMillimes,
-            version: current.version,
-          },
-          afterSummary: {
-            publicationStatus: product.publicationStatus,
-            basePriceMillimes: product.basePriceMillimes,
-            promotionalPriceMillimes: product.promotionalPriceMillimes,
-            version: product.version,
-          },
+    let updated: Product;
+    try {
+      updated = await this.prisma.$transaction(
+        async (transaction) => {
+          if (targetStatus === 'PUBLISHED') {
+            await this.lockProductForUpdate(transaction, id, input.version);
+            await this.ensureReferences(categoryId, brandId, true, transaction);
+            if (current.publicationStatus === 'PUBLISHED') {
+              await this.validateMediaReview(
+                current,
+                input.mediaReviewConfirmed === true,
+                transaction,
+              );
+              await this.validatePublishedUpdate(current, basePrice, promotionalPrice, transaction);
+            } else {
+              await this.validatePublication(
+                current,
+                basePrice,
+                promotionalPrice,
+                input.mediaReviewConfirmed === true,
+                transaction,
+              );
+            }
+          }
+
+          const result = await transaction.product.updateMany({
+            where: { id, version: input.version, deletedAt: null },
+            data,
+          });
+          if (result.count !== 1) throw this.versionConflict();
+          const product = await transaction.product.findUnique({ where: { id } });
+          if (!product) throw this.productNotFound();
+          await transaction.auditLog.create({
+            data: {
+              ...auditMetadata(context),
+              action: 'catalog.product.update',
+              resourceType: 'Product',
+              resourceId: id,
+              beforeSummary: {
+                publicationStatus: current.publicationStatus,
+                basePriceMillimes: current.basePriceMillimes,
+                promotionalPriceMillimes: current.promotionalPriceMillimes,
+                needsMediaReview: current.needsMediaReview,
+                version: current.version,
+              },
+              afterSummary: {
+                publicationStatus: product.publicationStatus,
+                basePriceMillimes: product.basePriceMillimes,
+                promotionalPriceMillimes: product.promotionalPriceMillimes,
+                needsMediaReview: product.needsMediaReview,
+                mediaReviewConfirmed: input.mediaReviewConfirmed === true,
+                version: product.version,
+              },
+            },
+          });
+          return product;
         },
-      });
-      return product;
-    });
+        targetStatus === 'PUBLISHED' ? PUBLICATION_TRANSACTION_OPTIONS : undefined,
+      );
+    } catch (error) {
+      if (isTransactionConflict(error)) throw this.versionConflict();
+      throw error;
+    }
     return adminProductResponse(updated);
+  }
+
+  async confirmMediaReview(
+    id: string,
+    input: ConfirmProductMediaReviewDto,
+    context: AdminMutationContext,
+  ) {
+    this.assertId(id);
+    const preflight = await this.findCurrent(id);
+    this.assertVersion(preflight.version, input.version);
+    const reason = input.reason.trim();
+    if (reason.length < 4) {
+      throw new BadRequestException({
+        code: 'MEDIA_REVIEW_REASON_INVALID',
+        message: 'A meaningful media review reason is required.',
+      });
+    }
+
+    let confirmed: Product;
+    try {
+      confirmed = await this.prisma.$transaction(async (transaction) => {
+        await this.lockProductForUpdate(transaction, id, input.version);
+        const current = await transaction.product.findFirst({
+          where: { id, deletedAt: null },
+        });
+        if (!current) throw this.productNotFound();
+        if (current.publicationStatus !== 'DRAFT') {
+          throw new ConflictException({
+            code: 'PRODUCT_MEDIA_REVIEW_REQUIRES_DRAFT',
+            message: 'Media review must be confirmed while the product remains a draft.',
+          });
+        }
+        if (!current.needsMediaReview) {
+          throw new ConflictException({
+            code: 'PRODUCT_MEDIA_REVIEW_NOT_REQUIRED',
+            message: 'This product does not have an open media review.',
+          });
+        }
+
+        const ownerWhere: Prisma.ProductImageWhereInput['OR'] = [
+          { productId: id, variantId: null },
+          { productId: null, variant: { is: { productId: id, deletedAt: null } } },
+        ];
+        const eligibleOwnerWhere: Prisma.ProductImageWhereInput['OR'] = [
+          { productId: id, variantId: null },
+          {
+            productId: null,
+            variant: {
+              is: {
+                productId: id,
+                publicationStatus: { in: ['DRAFT', 'PUBLISHED'] },
+                archivedAt: null,
+                deletedAt: null,
+              },
+            },
+          },
+        ];
+        const [unresolvedImageCount, approvedImageCount] = await Promise.all([
+          transaction.productImage.count({
+            where: {
+              deletedAt: null,
+              moderationStatus: { in: ['PENDING', 'QUARANTINED'] },
+              OR: ownerWhere,
+            },
+          }),
+          transaction.productImage.count({
+            where: {
+              ...approvedPublicationImageWhere,
+              OR: eligibleOwnerWhere,
+            },
+          }),
+        ]);
+        const blockers: string[] = [];
+        if (unresolvedImageCount > 0) blockers.push('MEDIA_REVIEW_PENDING');
+        if (approvedImageCount === 0) blockers.push('APPROVED_IMAGE_MISSING');
+        if (blockers.length > 0) {
+          throw new ConflictException({
+            code: 'PRODUCT_MEDIA_REVIEW_NOT_READY',
+            message:
+              'Resolve every pending media item and retain an approved eligible image before confirming review.',
+            blockers,
+          });
+        }
+
+        const result = await transaction.product.updateMany({
+          where: {
+            id,
+            version: input.version,
+            publicationStatus: 'DRAFT',
+            needsMediaReview: true,
+            deletedAt: null,
+          },
+          data: { needsMediaReview: false, version: { increment: 1 } },
+        });
+        if (result.count !== 1) throw this.versionConflict();
+        const product = await transaction.product.findUnique({ where: { id } });
+        if (!product) throw this.productNotFound();
+        await transaction.auditLog.create({
+          data: {
+            ...auditMetadata(context),
+            action: 'catalog.product.media_review.confirm',
+            resourceType: 'Product',
+            resourceId: id,
+            beforeSummary: {
+              publicationStatus: current.publicationStatus,
+              needsMediaReview: current.needsMediaReview,
+              version: current.version,
+            },
+            afterSummary: {
+              publicationStatus: product.publicationStatus,
+              needsMediaReview: product.needsMediaReview,
+              approvedImageCount,
+              unresolvedImageCount,
+              reason,
+              version: product.version,
+            },
+          },
+        });
+        return product;
+      }, PUBLICATION_TRANSACTION_OPTIONS);
+    } catch (error) {
+      if (isTransactionConflict(error)) throw this.versionConflict();
+      throw error;
+    }
+    return adminProductResponse(confirmed);
   }
 
   async archive(id: string, version: number, context: AdminMutationContext) {
@@ -467,6 +669,18 @@ export class AdminProductsService {
     if (input.publicationStatus) {
       data.publicationStatus = input.publicationStatus;
       this.applyPublicationTimestamps(data, input.publicationStatus, current);
+      if (input.publicationStatus === 'PUBLISHED') {
+        data.requiresPricing = false;
+        data.requiresStock = false;
+        data.needsMediaReview = false;
+      }
+    }
+    if (
+      input.mediaReviewConfirmed === true &&
+      current.publicationStatus === 'PUBLISHED' &&
+      !input.publicationStatus
+    ) {
+      data.needsMediaReview = false;
     }
     return data;
   }
@@ -490,8 +704,185 @@ export class AdminProductsService {
     }
   }
 
-  private async validatePublication(current: Product, basePrice: number | null): Promise<void> {
-    const publishedVariantCount = await this.prisma.productVariant.count({
+  private async validatePublication(
+    current: Product,
+    basePrice: number | null,
+    promotionalPrice: number | null,
+    mediaReviewConfirmed: boolean,
+    database: CatalogDatabase = this.prisma,
+  ): Promise<void> {
+    const now = new Date();
+    const [variants, productImageCount, unresolvedImageCount, deliveryBlocker] = await Promise.all([
+      database.productVariant.findMany({
+        where: {
+          productId: current.id,
+          publicationStatus: 'PUBLISHED',
+          archivedAt: null,
+          deletedAt: null,
+        },
+        orderBy: { id: 'asc' },
+        select: {
+          id: true,
+          sku: true,
+          priceMillimes: true,
+          promotionalPriceMillimes: true,
+          images: {
+            where: approvedPublicationImageWhere,
+            take: 1,
+            select: { id: true },
+          },
+          inventoryItems: {
+            where: publicationInventoryWhere(now),
+            select: {
+              onHandQuantity: true,
+              reservations: {
+                where: { state: 'ACTIVE', expiresAt: { gt: now } },
+                select: { quantity: true },
+              },
+            },
+          },
+        },
+      }),
+      database.productImage.count({
+        where: {
+          productId: current.id,
+          variantId: null,
+          ...approvedPublicationImageWhere,
+        },
+      }),
+      database.productImage.count({
+        where: {
+          deletedAt: null,
+          moderationStatus: { in: ['PENDING', 'QUARANTINED'] },
+          OR: [
+            { productId: current.id, variantId: null },
+            { productId: null, variant: { is: { productId: current.id, deletedAt: null } } },
+          ],
+        },
+      }),
+      this.deliveryPublicationBlocker(database, now),
+    ]);
+
+    const hasApprovedImage =
+      productImageCount > 0 || variants.some((variant) => variant.images.length > 0);
+    const hasPositivePrice =
+      (basePrice !== null && basePrice > 0) ||
+      variants.some((variant) => variant.priceMillimes > 0);
+    const totalAvailableQuantity = variants.reduce(
+      (total, variant) => total + availablePublicationQuantity(variant.inventoryItems),
+      0,
+    );
+    const blockers: string[] = [];
+    if (current.requiresPricing && !hasPositivePrice) blockers.push('PRICING_REVIEW_REQUIRED');
+    if (current.requiresStock && totalAvailableQuantity <= 0) {
+      blockers.push('STOCK_REVIEW_REQUIRED');
+    }
+    if (current.needsMediaReview && !hasApprovedImage) blockers.push('MEDIA_REVIEW_REQUIRED');
+    if (unresolvedImageCount > 0) blockers.push('MEDIA_REVIEW_PENDING');
+    if (current.needsMediaReview && !mediaReviewConfirmed) {
+      blockers.push('MEDIA_REVIEW_CONFIRMATION_REQUIRED');
+    }
+    if (variants.length === 0) blockers.push('SELLABLE_VARIANT_MISSING');
+    if (
+      (basePrice !== null && basePrice <= 0) ||
+      (promotionalPrice !== null && promotionalPrice <= 0)
+    ) {
+      blockers.push('NON_POSITIVE_PRICE');
+    }
+
+    const skus = new Set<string>();
+    for (const variant of variants) {
+      const normalizedSku = variant.sku.trim().toLocaleLowerCase('en-US');
+      if (!normalizedSku) {
+        blockers.push('VARIANT_SKU_INVALID');
+      } else if (skus.has(normalizedSku)) {
+        blockers.push('VARIANT_SKU_DUPLICATE');
+      } else {
+        skus.add(normalizedSku);
+      }
+      if (
+        variant.priceMillimes <= 0 ||
+        (variant.promotionalPriceMillimes !== null && variant.promotionalPriceMillimes <= 0)
+      ) {
+        blockers.push('NON_POSITIVE_PRICE');
+      }
+      const variantAvailableQuantity = availablePublicationQuantity(variant.inventoryItems);
+      if (variantAvailableQuantity <= 0) {
+        blockers.push('AVAILABLE_STOCK_MISSING');
+      }
+    }
+
+    if (!hasApprovedImage) {
+      blockers.push('APPROVED_IMAGE_MISSING');
+    }
+    if (deliveryBlocker) blockers.push(deliveryBlocker);
+    if (blockers.length > 0) throw publicationNotReady('product', blockers);
+  }
+
+  private async validateMediaReview(
+    current: Product,
+    confirmed: boolean,
+    database: CatalogDatabase = this.prisma,
+  ): Promise<void> {
+    const unresolvedOwnerWhere: Prisma.ProductImageWhereInput['OR'] = [
+      { productId: current.id, variantId: null },
+      { productId: null, variant: { is: { productId: current.id, deletedAt: null } } },
+    ];
+    const approvedPublicOwnerWhere: Prisma.ProductImageWhereInput['OR'] = [
+      { productId: current.id, variantId: null },
+      {
+        productId: null,
+        variant: {
+          is: {
+            productId: current.id,
+            publicationStatus: 'PUBLISHED',
+            archivedAt: null,
+            deletedAt: null,
+          },
+        },
+      },
+    ];
+    const [unresolvedImages, approvedImages] = await Promise.all([
+      database.productImage.count({
+        where: {
+          deletedAt: null,
+          moderationStatus: { in: ['PENDING', 'QUARANTINED'] },
+          OR: unresolvedOwnerWhere,
+        },
+      }),
+      database.productImage.count({
+        where: {
+          deletedAt: null,
+          moderationStatus: 'APPROVED',
+          OR: approvedPublicOwnerWhere,
+        },
+      }),
+    ]);
+    const blockers: string[] = [];
+    if (unresolvedImages > 0) blockers.push('MEDIA_REVIEW_PENDING');
+    if (current.needsMediaReview && approvedImages === 0) {
+      blockers.push('APPROVED_IMAGE_MISSING');
+    }
+    if (current.needsMediaReview && !confirmed) {
+      blockers.push('MEDIA_REVIEW_CONFIRMATION_REQUIRED');
+    }
+    if (blockers.length > 0) throw publicationNotReady('product', blockers);
+  }
+
+  private async validatePublishedUpdate(
+    current: Product,
+    basePrice: number | null,
+    promotionalPrice: number | null,
+    database: CatalogDatabase = this.prisma,
+  ): Promise<void> {
+    if (
+      (basePrice !== null && basePrice <= 0) ||
+      (promotionalPrice !== null && promotionalPrice <= 0)
+    ) {
+      throw publicationNotReady('product', ['NON_POSITIVE_PRICE']);
+    }
+    if (basePrice !== null) return;
+    const publishedVariantCount = await database.productVariant.count({
       where: {
         productId: current.id,
         publicationStatus: 'PUBLISHED',
@@ -499,7 +890,7 @@ export class AdminProductsService {
         deletedAt: null,
       },
     });
-    if (basePrice === null && publishedVariantCount === 0) {
+    if (publishedVariantCount === 0) {
       throw new ConflictException({
         code: 'PRODUCT_PUBLICATION_REQUIREMENTS_MISSING',
         message: 'A product needs a price or a published priced variant before publication.',
@@ -511,9 +902,10 @@ export class AdminProductsService {
     categoryId: string,
     brandId: string | null,
     requirePublished: boolean,
+    database: CatalogDatabase = this.prisma,
   ): Promise<void> {
     const [category, brand] = await Promise.all([
-      this.prisma.category.findFirst({
+      database.category.findFirst({
         where: {
           id: categoryId,
           archivedAt: null,
@@ -525,7 +917,7 @@ export class AdminProductsService {
         select: { id: true },
       }),
       brandId
-        ? this.prisma.brand.findFirst({
+        ? database.brand.findFirst({
             where: {
               id: brandId,
               archivedAt: null,
@@ -544,6 +936,27 @@ export class AdminProductsService {
         message: 'The selected category or brand is not available for this product.',
       });
     }
+  }
+
+  private async lockProductForUpdate(
+    transaction: Prisma.TransactionClient,
+    id: string,
+    version: number,
+  ): Promise<void> {
+    const locked = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM Product
+      WHERE id = ${id} AND version = ${version} AND deletedAt IS NULL
+      FOR UPDATE
+    `);
+    if (locked.length !== 1) throw this.versionConflict();
+  }
+
+  private async deliveryPublicationBlocker(
+    database: CatalogDatabase,
+    now: Date,
+  ): Promise<'DELIVERY_METHOD_MISSING' | null> {
+    const policy = await this.policies.evaluate(now, database);
+    return policy.blockers.includes('DELIVERY_METHOD_MISSING') ? 'DELIVERY_METHOD_MISSING' : null;
   }
 
   private validatePrices(basePrice: number | null, promotionalPrice: number | null): void {

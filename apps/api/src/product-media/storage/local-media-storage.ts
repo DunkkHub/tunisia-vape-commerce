@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { MediaStorage, StoreMediaObjectInput } from './media-storage';
 
@@ -26,8 +27,23 @@ export class LocalMediaStorage implements MediaStorage {
     }
   }
 
-  get(objectKey: string): Promise<Buffer> {
-    return readFile(this.objectPath(objectKey));
+  async get(objectKey: string, maximumBytes: number): Promise<Buffer> {
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
+      throw new TypeError('A positive media read limit is required.');
+    }
+    const stream = createReadStream(this.objectPath(objectKey), { highWaterMark: 64 * 1_024 });
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of stream as AsyncIterable<Buffer>) {
+      const bytes: Buffer = chunk;
+      total += bytes.length;
+      if (total > maximumBytes) {
+        stream.destroy();
+        throw new Error('The stored media object exceeded its recorded size.');
+      }
+      chunks.push(bytes);
+    }
+    return Buffer.concat(chunks, total);
   }
 
   async delete(objectKey: string): Promise<void> {

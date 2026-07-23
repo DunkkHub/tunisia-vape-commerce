@@ -52,12 +52,39 @@ export class S3MediaStorage implements MediaStorage {
     );
   }
 
-  async get(objectKey: string): Promise<Buffer> {
+  async get(objectKey: string, maximumBytes: number): Promise<Buffer> {
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
+      throw new TypeError('A positive media read limit is required.');
+    }
     const response = await this.client.send(
-      new GetObjectCommand({ Bucket: this.bucket, Key: objectKey }),
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: objectKey,
+        Range: `bytes=0-${maximumBytes}`,
+      }),
     );
     if (!response.Body) throw new Error('The media object response had no body.');
-    return Buffer.from(await response.Body.transformToByteArray());
+    if (response.ContentLength !== undefined && response.ContentLength > maximumBytes) {
+      throw new Error('The stored media object exceeded its recorded size.');
+    }
+    const stream = response.Body as unknown as AsyncIterable<Uint8Array> & {
+      destroy?: () => void;
+    };
+    if (typeof stream[Symbol.asyncIterator] !== 'function') {
+      throw new Error('The media object response was not streamable.');
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of stream) {
+      const bytes = Buffer.from(chunk);
+      total += bytes.length;
+      if (total > maximumBytes) {
+        stream.destroy?.();
+        throw new Error('The stored media object exceeded its recorded size.');
+      }
+      chunks.push(bytes);
+    }
+    return Buffer.concat(chunks, total);
   }
 
   async delete(objectKey: string): Promise<void> {

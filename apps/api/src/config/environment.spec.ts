@@ -15,6 +15,7 @@ const productionEnvironment = {
   STOREFRONT_HOST: 'store.example.tn',
   ADMIN_HOST: 'admin.example.tn',
   DATABASE_URL: 'mysql://app_user:strong-password@mysql.internal:3306/vape_store',
+  REDIS_URL: 'redis://:strong-password@redis.internal:6379/0',
   COOKIE_SECRET: 'c'.repeat(48),
   FIELD_ENCRYPTION_KEY: 'f'.repeat(48),
 };
@@ -30,7 +31,7 @@ describe('launch environment defaults', () => {
       MINIMUM_PURCHASE_AGE: 18,
       HEALTHCHECK_TIMEOUT_MS: 2_000,
       WORKER_HEARTBEAT_MAX_AGE_SECONDS: 60,
-      EXPECTED_MIGRATION_NAME: '20260720160000_cash_collection_idempotency',
+      EXPECTED_MIGRATION_NAME: '20260721023000_unverified_operator_source_urls',
       MEDIA_STORAGE_DRIVER: 'local',
       MEDIA_LOCAL_ROOT: 'uploads/media',
       S3_REGION: 'us-east-1',
@@ -38,6 +39,7 @@ describe('launch environment defaults', () => {
       S3_FORCE_PATH_STYLE: true,
       UPLOAD_MAX_BYTES: 10 * 1_024 * 1_024,
       UPLOAD_MAX_PIXELS: 40_000_000,
+      CATALOG_IMPORT_MEDIA_HOSTS: [],
     });
     expect(environment).not.toHaveProperty('LEGAL_REVIEW_COMPLETED');
   });
@@ -78,6 +80,21 @@ describe('launch environment defaults', () => {
     expect(() => validateEnvironment({ UPLOAD_MAX_BYTES: '1023' })).toThrow();
     expect(() => validateEnvironment({ UPLOAD_MAX_PIXELS: '64000001' })).toThrow();
     expect(() => validateEnvironment({ MEDIA_STORAGE_DRIVER: 'filesystem' })).toThrow();
+  });
+
+  it('normalizes exact operator media hostnames and rejects URL-shaped entries', () => {
+    expect(
+      validateEnvironment({
+        CATALOG_IMPORT_MEDIA_HOSTS: 'media.example.tn, CDN.EXAMPLE.TN,media.example.tn',
+      }).CATALOG_IMPORT_MEDIA_HOSTS,
+    ).toEqual(['media.example.tn', 'cdn.example.tn']);
+    expect(() =>
+      validateEnvironment({ CATALOG_IMPORT_MEDIA_HOSTS: 'https://media.example.tn' }),
+    ).toThrow();
+    expect(() =>
+      validateEnvironment({ CATALOG_IMPORT_MEDIA_HOSTS: 'media.example.tn/path' }),
+    ).toThrow();
+    expect(() => validateEnvironment({ CATALOG_IMPORT_MEDIA_HOSTS: '8.8.8.8' })).toThrow();
   });
 
   it('uses one browser origin locally and separate exact origins when configured', () => {
@@ -138,6 +155,26 @@ describe('launch environment defaults', () => {
       validateEnvironment({
         ...productionEnvironment,
         WEB_URL: 'https://store.example.tn/untrusted-path',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects production credential placeholders and plaintext object-storage endpoints', () => {
+    for (const override of [
+      { DATABASE_URL: 'mysql://app_user:REPLACE_WITH_PASSWORD@mysql.internal:3306/vape_store' },
+      { REDIS_URL: 'redis://:REPLACE_WITH_PASSWORD@redis.internal:6379/0' },
+      { COOKIE_SECRET: 'REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS' },
+      { FIELD_ENCRYPTION_KEY: 'placeholder' },
+    ]) {
+      expect(() => validateEnvironment({ ...productionEnvironment, ...override })).toThrow();
+    }
+    expect(() =>
+      validateEnvironment({
+        ...productionEnvironment,
+        MEDIA_STORAGE_DRIVER: 's3',
+        S3_ENDPOINT: 'http://objects.internal',
+        S3_ACCESS_KEY: 'scoped-access-key',
+        S3_SECRET_KEY: 'scoped-secret-key',
       }),
     ).toThrow();
   });

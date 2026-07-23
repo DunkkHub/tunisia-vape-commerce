@@ -1,9 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
+import sharp from 'sharp';
 
 const repositoryRoot = path.resolve(fileURLToPath(new URL('../../../../', import.meta.url)));
 const apiRoot = path.join(repositoryRoot, 'apps', 'api');
@@ -171,49 +175,6 @@ const cleanRedis = async () => {
   }
 };
 
-const applicationEnvironment = {
-  ...process.env,
-  NODE_ENV: 'test',
-  DATABASE_URL: runtimeUrl,
-  DATABASE_MIGRATION_URL: migrationUrl,
-  REDIS_URL: redisUrl.toString(),
-  WEB_URL: webBaseUrl,
-  COOKIE_SECRET: cookieSecret,
-  FIELD_ENCRYPTION_KEY: fieldEncryptionKey,
-  CHECKOUT_ENABLED: 'true',
-  MAINTENANCE_MODE: 'false',
-  PRELAUNCH_MODE: 'false',
-  MINIMUM_PURCHASE_AGE: '18',
-  LOG_LEVEL: 'warn',
-};
-const fixtureEnvironment = {
-  ...applicationEnvironment,
-  OPERATIONAL_E2E_FIXTURE_CONFIRM: 'CREATE_DISPOSABLE_OPERATIONAL_E2E_FIXTURE',
-  OPERATIONAL_E2E_DATABASE_NAME: databaseName,
-  OPERATIONAL_E2E_ADMIN_EMAIL: adminEmail,
-  OPERATIONAL_E2E_ADMIN_PASSWORD: adminPassword,
-  OPERATIONAL_E2E_RECONCILER_EMAIL: reconcilerEmail,
-  OPERATIONAL_E2E_RECONCILER_PASSWORD: reconcilerPassword,
-  OPERATIONAL_E2E_LIMITED_ADMIN_EMAIL: limitedAdminEmail,
-  OPERATIONAL_E2E_LIMITED_ADMIN_PASSWORD: limitedAdminPassword,
-};
-const browserEnvironment = {
-  ...applicationEnvironment,
-  CI: process.env.CI,
-  PLAYWRIGHT_OPERATIONAL: 'true',
-  PLAYWRIGHT_BASE_URL: webBaseUrl,
-  OPERATIONAL_E2E_API_URL: apiBaseUrl,
-  OPERATIONAL_E2E_ADMIN_EMAIL: adminEmail,
-  OPERATIONAL_E2E_ADMIN_PASSWORD: adminPassword,
-  OPERATIONAL_E2E_RECONCILER_EMAIL: reconcilerEmail,
-  OPERATIONAL_E2E_RECONCILER_PASSWORD: reconcilerPassword,
-  OPERATIONAL_E2E_LIMITED_ADMIN_EMAIL: limitedAdminEmail,
-  OPERATIONAL_E2E_LIMITED_ADMIN_PASSWORD: limitedAdminPassword,
-  OPERATIONAL_E2E_CUSTOMER_EMAIL: customerEmail,
-  OPERATIONAL_E2E_CUSTOMER_PASSWORD: customerPassword,
-  OPERATIONAL_E2E_CUSTOMER_PHONE: customerPhone,
-};
-
 const [migrationAccount, runtimeAccount] = await Promise.all([
   accountIdentity(migrationSourceUrl),
   accountIdentity(runtimeSourceUrl),
@@ -231,8 +192,116 @@ let databaseCreated = false;
 let migrationGranted = false;
 let runtimeGranted = false;
 let cleanupError;
+let mediaFixtureDirectory;
+let mediaFixtureServer;
+let mediaFixtureRequestCount = 0;
 
 try {
+  mediaFixtureDirectory = await mkdtemp(path.join(tmpdir(), 'vape-operational-media-'));
+  await mkdir(path.join(mediaFixtureDirectory, 'input'), { recursive: true });
+  const mediaFixturePaths = await Promise.all(
+    [
+      ['primary.png', { r: 89, g: 45, b: 184, alpha: 1 }],
+      ['gallery.png', { r: 225, g: 45, b: 138, alpha: 1 }],
+      ['variant.png', { r: 32, g: 164, b: 118, alpha: 1 }],
+      ['replacement.png', { r: 245, g: 122, b: 41, alpha: 1 }],
+    ].map(async ([filename, background]) => {
+      const fixturePath = path.join(mediaFixtureDirectory, 'input', filename);
+      await sharp({
+        create: { width: 320, height: 320, channels: 4, background },
+      })
+        .png()
+        .toFile(fixturePath);
+      return fixturePath;
+    }),
+  );
+  const importedMediaFixture = await sharp({
+    create: {
+      width: 320,
+      height: 320,
+      channels: 4,
+      background: { r: 35, g: 205, b: 190, alpha: 1 },
+    },
+  })
+    .png()
+    .toBuffer();
+  mediaFixtureServer = createServer((request, response) => {
+    const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    if (request.method !== 'GET' || pathname !== '/generic-import.png') {
+      response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Not found');
+      return;
+    }
+    mediaFixtureRequestCount += 1;
+    response.writeHead(200, {
+      'Cache-Control': 'no-store',
+      'Content-Type': 'image/png',
+      'Content-Length': String(importedMediaFixture.length),
+    });
+    response.end(importedMediaFixture);
+  });
+  await new Promise((resolve, reject) => {
+    mediaFixtureServer.once('error', reject);
+    mediaFixtureServer.listen(0, '127.0.0.1', resolve);
+  });
+  const mediaFixtureAddress = mediaFixtureServer.address();
+  if (!mediaFixtureAddress || typeof mediaFixtureAddress === 'string') {
+    throw new Error('The operational media fixture did not expose a TCP address');
+  }
+  const mediaFixtureOrigin = `http://127.0.0.1:${mediaFixtureAddress.port}`;
+  const previewConfigPath = path.join(mediaFixtureDirectory, 'vite-operational.config.mjs');
+  await writeFile(
+    previewConfigPath,
+    `export default { preview: { proxy: { '/api': { target: ${JSON.stringify(apiBaseUrl)}, changeOrigin: true } } } };\n`,
+    'utf8',
+  );
+  const applicationEnvironment = {
+    ...process.env,
+    NODE_ENV: 'test',
+    DATABASE_URL: runtimeUrl,
+    DATABASE_MIGRATION_URL: migrationUrl,
+    REDIS_URL: redisUrl.toString(),
+    WEB_URL: webBaseUrl,
+    COOKIE_SECRET: cookieSecret,
+    FIELD_ENCRYPTION_KEY: fieldEncryptionKey,
+    CHECKOUT_ENABLED: 'true',
+    MAINTENANCE_MODE: 'false',
+    PRELAUNCH_MODE: 'false',
+    MINIMUM_PURCHASE_AGE: '18',
+    MEDIA_STORAGE_DRIVER: 'local',
+    MEDIA_LOCAL_ROOT: path.join(mediaFixtureDirectory, 'storage'),
+    CATALOG_IMPORT_MEDIA_HOSTS: 'catalog-media-fixture.invalid',
+    OPERATIONAL_E2E_MEDIA_FIXTURE_ORIGIN: mediaFixtureOrigin,
+    LOG_LEVEL: 'warn',
+  };
+  const fixtureEnvironment = {
+    ...applicationEnvironment,
+    OPERATIONAL_E2E_FIXTURE_CONFIRM: 'CREATE_DISPOSABLE_OPERATIONAL_E2E_FIXTURE',
+    OPERATIONAL_E2E_DATABASE_NAME: databaseName,
+    OPERATIONAL_E2E_ADMIN_EMAIL: adminEmail,
+    OPERATIONAL_E2E_ADMIN_PASSWORD: adminPassword,
+    OPERATIONAL_E2E_RECONCILER_EMAIL: reconcilerEmail,
+    OPERATIONAL_E2E_RECONCILER_PASSWORD: reconcilerPassword,
+    OPERATIONAL_E2E_LIMITED_ADMIN_EMAIL: limitedAdminEmail,
+    OPERATIONAL_E2E_LIMITED_ADMIN_PASSWORD: limitedAdminPassword,
+  };
+  const browserEnvironment = {
+    ...applicationEnvironment,
+    CI: process.env.CI,
+    PLAYWRIGHT_OPERATIONAL: 'true',
+    PLAYWRIGHT_BASE_URL: webBaseUrl,
+    OPERATIONAL_E2E_API_URL: apiBaseUrl,
+    OPERATIONAL_E2E_ADMIN_EMAIL: adminEmail,
+    OPERATIONAL_E2E_ADMIN_PASSWORD: adminPassword,
+    OPERATIONAL_E2E_RECONCILER_EMAIL: reconcilerEmail,
+    OPERATIONAL_E2E_RECONCILER_PASSWORD: reconcilerPassword,
+    OPERATIONAL_E2E_LIMITED_ADMIN_EMAIL: limitedAdminEmail,
+    OPERATIONAL_E2E_LIMITED_ADMIN_PASSWORD: limitedAdminPassword,
+    OPERATIONAL_E2E_CUSTOMER_EMAIL: customerEmail,
+    OPERATIONAL_E2E_CUSTOMER_PASSWORD: customerPassword,
+    OPERATIONAL_E2E_CUSTOMER_PHONE: customerPhone,
+    OPERATIONAL_E2E_MEDIA_PATHS: JSON.stringify(mediaFixturePaths),
+  };
   await cleanRedis();
   await admin.$executeRawUnsafe(
     `CREATE DATABASE \`${databaseName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`,
@@ -284,17 +353,32 @@ try {
     env: { ...applicationEnvironment, VITE_API_URL: apiBaseUrl },
   });
 
-  const apiServer = startServer('API', process.execPath, [path.join(apiRoot, 'dist', 'main.js')], {
-    cwd: apiRoot,
-    env: { ...applicationEnvironment, PORT: String(apiPort) },
-  });
+  const apiServer = startServer(
+    'API',
+    process.execPath,
+    [path.join(apiRoot, 'test', 'e2e', 'start-operational-api.mjs')],
+    {
+      cwd: apiRoot,
+      env: { ...applicationEnvironment, PORT: String(apiPort) },
+    },
+  );
   servers.push(apiServer);
   await waitForUrl('API', `${apiBaseUrl}/api/v1/health/live`, apiServer.child);
 
   const webServer = startServer(
     'Web preview',
     process.execPath,
-    [viteCli, 'preview', '--host', '127.0.0.1', '--port', String(webPort), '--strictPort'],
+    [
+      viteCli,
+      'preview',
+      '--config',
+      previewConfigPath,
+      '--host',
+      '127.0.0.1',
+      '--port',
+      String(webPort),
+      '--strictPort',
+    ],
     { cwd: webRoot, env: applicationEnvironment },
   );
   servers.push(webServer);
@@ -304,6 +388,9 @@ try {
     cwd: webRoot,
     env: browserEnvironment,
   });
+  if (mediaFixtureRequestCount < 1) {
+    throw new Error('Operational E2E did not fetch the local catalog media fixture');
+  }
 
   const verification = prismaFor(runtimeUrl);
   try {
@@ -401,6 +488,110 @@ try {
     if (!managedProduct || managedProduct.nameFr !== 'Produit E2E administré modifié') {
       throw new Error('Operational E2E product create/edit workflow was not persisted');
     }
+    const mediaProduct = await verification.product.findUnique({
+      where: { slug: 'puffjet-menthe-operationnelle' },
+      include: { variants: { where: { deletedAt: null }, select: { id: true } } },
+    });
+    if (!mediaProduct || mediaProduct.variants.length !== 1) {
+      throw new Error('Operational E2E media owner was not preserved');
+    }
+    const mediaImages = await verification.productImage.findMany({
+      where: {
+        OR: [
+          { productId: mediaProduct.id },
+          { variantId: { in: mediaProduct.variants.map(({ id }) => id) } },
+        ],
+      },
+    });
+    const activeMediaImages = mediaImages.filter(({ deletedAt }) => deletedAt === null);
+    const deletedMediaImages = mediaImages.filter(({ deletedAt }) => deletedAt !== null);
+    if (
+      activeMediaImages.length !== 3 ||
+      deletedMediaImages.length !== 2 ||
+      !activeMediaImages.some(
+        (image) =>
+          image.productId === mediaProduct.id &&
+          image.variantId === null &&
+          image.altTextFr === 'Galerie produit E2E' &&
+          !image.isPrimary &&
+          image.originalFilename === 'gallery.png',
+      ) ||
+      !activeMediaImages.some(
+        (image) =>
+          image.productId === mediaProduct.id &&
+          image.variantId === null &&
+          image.altTextFr === 'PuffJet Media Operationnelle E2E' &&
+          image.isPrimary &&
+          image.moderationStatus === 'APPROVED' &&
+          image.originalFilename === 'generic-import.png',
+      ) ||
+      !activeMediaImages.some(
+        (image) =>
+          image.productId === null &&
+          image.variantId === mediaProduct.variants[0].id &&
+          image.altTextFr === 'Variante menthe E2E' &&
+          image.isPrimary &&
+          image.originalFilename === 'variant.png',
+      ) ||
+      !deletedMediaImages.some(
+        (image) =>
+          image.altTextFr === 'Image secondaire modifiée E2E' &&
+          image.originalFilename === 'primary.png',
+      ) ||
+      !deletedMediaImages.some(
+        (image) =>
+          image.altTextFr === 'Image secondaire modifiée E2E' &&
+          image.originalFilename === 'replacement.png',
+      )
+    ) {
+      throw new Error('Operational E2E product-media lifecycle invariants were not persisted');
+    }
+    const importedProduct = await verification.product.findUnique({
+      where: { slug: 'operational-imported-e2e-product' },
+      include: { variants: { where: { deletedAt: null } } },
+    });
+    const importBatches = await verification.catalogImportBatch.findMany({
+      where: { importKey: 'operational-generic-import-v1' },
+      include: { rows: true },
+    });
+    const appliedImport = importBatches.find(({ dryRun }) => !dryRun);
+    const importedMediaSource = await verification.catalogSourceRecord.findUnique({
+      where: {
+        source_entityType_externalKey: {
+          source: 'ADMIN_UPLOAD',
+          entityType: 'IMAGE',
+          externalKey: 'operational-published-product-media:primary',
+        },
+      },
+      include: { image: true },
+    });
+    const importedMediaMetadata = importedMediaSource?.metadata;
+    if (
+      !importedProduct ||
+      importedProduct.publicationStatus !== 'DRAFT' ||
+      !importedProduct.requiresPricing ||
+      !importedProduct.requiresStock ||
+      importedProduct.variants.length !== 1 ||
+      importedProduct.variants[0]?.sku !== 'E2E-GENERIC-IMPORT-CITRUS' ||
+      importedProduct.variants[0]?.publicationStatus !== 'DRAFT' ||
+      importBatches.length !== 2 ||
+      appliedImport?.status !== 'APPLIED_WITH_WARNINGS' ||
+      appliedImport.appliedCount !== 2 ||
+      appliedImport.rows.length !== 2 ||
+      importedMediaSource?.verifiedAt !== null ||
+      importedMediaSource?.sourceUrl !==
+        'https://catalog-media-fixture.invalid/generic-import.png' ||
+      importedMediaSource.image?.moderationStatus !== 'APPROVED' ||
+      importedMediaSource.image?.isPrimary !== true ||
+      !importedMediaMetadata ||
+      typeof importedMediaMetadata !== 'object' ||
+      Array.isArray(importedMediaMetadata) ||
+      importedMediaMetadata.provenance !== 'OPERATOR_SUPPLIED_UNVERIFIED'
+    ) {
+      throw new Error(
+        'Operational E2E generic catalogue/media import was not applied and reviewed exactly once',
+      );
+    }
     console.info(
       JSON.stringify({
         suite: 'operational-e2e',
@@ -409,6 +600,10 @@ try {
         catalogCartCheckout: 'passed',
         adminTotpEnrollment: 'passed',
         productCreateEdit: 'passed',
+        productMediaLifecycle: 'passed',
+        genericCatalogImportReplay: 'passed',
+        genericCatalogMediaReview: 'passed',
+        localCatalogMediaFetches: mediaFixtureRequestCount,
         inventoryBatchReceipt: 'passed',
         orderDeliveryLifecycle: 'passed',
         codReconciliation: 'passed',
@@ -430,6 +625,16 @@ try {
   const cleanupFailures = [];
   for (const server of [...servers].reverse()) {
     await stopServer(server).catch((error) => cleanupFailures.push(error));
+  }
+  if (mediaFixtureServer) {
+    await new Promise((resolve, reject) => {
+      mediaFixtureServer.close((error) => (error ? reject(error) : resolve()));
+    }).catch((error) => cleanupFailures.push(error));
+  }
+  if (mediaFixtureDirectory) {
+    await rm(mediaFixtureDirectory, { recursive: true, force: true }).catch((error) =>
+      cleanupFailures.push(error),
+    );
   }
   await cleanRedis().catch((error) => cleanupFailures.push(error));
   if (runtimeGranted) {

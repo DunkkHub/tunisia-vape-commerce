@@ -17,6 +17,7 @@ const validated = {
   bytes: Buffer.from('decoded-image'),
   contentType: 'image/png' as const,
   extension: 'png' as const,
+  originalFilename: 'safe-image.png',
   byteSize: Buffer.byteLength('decoded-image'),
   checksumSha256: createHash('sha256').update('decoded-image').digest('hex'),
   width: 320,
@@ -31,6 +32,7 @@ const productImageRecord = (overrides: Record<string, unknown> = {}) => ({
   objectKeyHash: 'a'.repeat(64),
   bucket: 'test-media',
   contentType: 'image/png',
+  originalFilename: validated.originalFilename,
   byteSize: validated.byteSize,
   checksumSha256: validated.checksumSha256,
   width: 320,
@@ -41,6 +43,7 @@ const productImageRecord = (overrides: Record<string, unknown> = {}) => ({
   isPrimary: true,
   moderationStatus: 'APPROVED',
   createdAt: new Date('2026-07-20T00:00:00.000Z'),
+  updatedAt: new Date('2026-07-20T00:05:00.000Z'),
   deletedAt: null,
   product: { id: 'product-1', version: 1 },
   variant: null,
@@ -68,6 +71,7 @@ describe('ProductMediaService', () => {
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       productImage: {
+        findFirst: vi.fn().mockResolvedValue(null),
         count: vi.fn().mockResolvedValue(0),
         aggregate: vi.fn().mockResolvedValue({ _max: { sortOrder: null } }),
         updateMany: vi.fn().mockResolvedValue({ count: 0 }),
@@ -115,6 +119,7 @@ describe('ProductMediaService', () => {
         data: expect.objectContaining({
           productId: 'product-1',
           variantId: null,
+          originalFilename: 'safe-image.png',
           moderationStatus: 'APPROVED',
           isPrimary: true,
           sortOrder: 0,
@@ -137,8 +142,102 @@ describe('ProductMediaService', () => {
     expect(response.data).toMatchObject({
       id: 'image-1',
       ownerVersion: 2,
-      url: expect.stringMatching(/^\/api\/v1\/media\/[a-f0-9]{64}$/) as string,
+      originalFilename: 'safe-image.png',
+      updatedAt: '2026-07-20T00:05:00.000Z',
+      url: '/api/v1/admin/products/product-1/images/image-1/content',
     });
+  });
+
+  it('rejects duplicate processed bytes within one owner and removes the staged object', async () => {
+    const duplicate = { id: 'existing-image' };
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'product-1' }]),
+      product: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'product-1', version: 1 }),
+        updateMany: vi.fn(),
+      },
+      productImage: {
+        findFirst: vi.fn().mockResolvedValue(duplicate),
+        count: vi.fn(),
+        create: vi.fn(),
+      },
+      auditLog: { create: vi.fn() },
+    };
+    const prisma = {
+      product: { findFirst: vi.fn().mockResolvedValue({ id: 'product-1', version: 1 }) },
+      $transaction: vi.fn((callback: (client: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService;
+    const mediaStorage = storage();
+    const service = new ProductMediaService(prisma, validator(), mediaStorage);
+
+    await expect(
+      service.upload(
+        'product-1',
+        { expectedOwnerVersion: 1, altTextFr: 'Image', altTextAr: 'صورة' },
+        { buffer: validated.bytes, mimetype: 'image/png', originalname: 'image.png', size: 13 },
+        context,
+      ),
+    ).rejects.toMatchObject({ response: { code: 'PRODUCT_IMAGE_DUPLICATE' } });
+
+    expect(transaction.productImage.findFirst).toHaveBeenCalledWith({
+      where: {
+        productId: 'product-1',
+        variantId: null,
+        checksumSha256: validated.checksumSha256,
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    expect(transaction.productImage.count).not.toHaveBeenCalled();
+    expect(transaction.productImage.create).not.toHaveBeenCalled();
+    expect(transaction.product.updateMany).not.toHaveBeenCalled();
+    expect(transaction.auditLog.create).not.toHaveBeenCalled();
+    expect(mediaStorage.delete).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a byte-identical replacement after locking its owner and removes the staged object', async () => {
+    const current = productImageRecord();
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'product-1' }]),
+      product: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'product-1', version: 1 }),
+        updateMany: vi.fn(),
+      },
+      productImage: {
+        findFirst: vi.fn().mockResolvedValue(current),
+        create: vi.fn(),
+        updateMany: vi.fn(),
+      },
+      auditLog: { create: vi.fn() },
+      outboxEvent: { upsert: vi.fn() },
+    };
+    const prisma = {
+      productImage: { findFirst: vi.fn().mockResolvedValue(current) },
+      $transaction: vi.fn((callback: (client: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService;
+    const mediaStorage = storage();
+    const service = new ProductMediaService(prisma, validator(), mediaStorage);
+
+    await expect(
+      service.replace(
+        'product-1',
+        current.id,
+        { expectedOwnerVersion: 1 },
+        { buffer: validated.bytes, mimetype: 'image/png', originalname: 'same.png', size: 13 },
+        context,
+      ),
+    ).rejects.toMatchObject({ response: { code: 'PRODUCT_IMAGE_UNCHANGED' } });
+
+    expect(transaction.$queryRaw).toHaveBeenCalledOnce();
+    expect(transaction.productImage.create).not.toHaveBeenCalled();
+    expect(transaction.product.updateMany).not.toHaveBeenCalled();
+    expect(transaction.auditLog.create).not.toHaveBeenCalled();
+    expect(transaction.outboxEvent.upsert).not.toHaveBeenCalled();
+    expect(mediaStorage.delete).toHaveBeenCalledOnce();
   });
 
   it('deletes a staged object when the database transaction fails', async () => {
@@ -300,7 +399,10 @@ describe('ProductMediaService', () => {
         }) as object,
       }),
     );
-    expect(mediaStorage.get).toHaveBeenCalledWith('products/product-1/product/public.png');
+    expect(mediaStorage.get).toHaveBeenCalledWith(
+      'products/product-1/product/public.png',
+      bytes.length,
+    );
   });
 
   it('returns the same not-found result for invalid, unpublished, or missing public media', async () => {
@@ -336,5 +438,543 @@ describe('ProductMediaService', () => {
     await expect(service.readPublic('d'.repeat(64))).rejects.toMatchObject({
       response: { code: 'MEDIA_INTEGRITY_FAILURE' },
     });
+  });
+
+  it('atomically stages operator-imported media as pending, non-primary, and checkpointed', async () => {
+    const pending = productImageRecord({
+      moderationStatus: 'PENDING',
+      isPrimary: false,
+      product: { id: 'product-1', version: 4 },
+    });
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'product-1' }]),
+      product: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'product-1', version: 4 }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      productImage: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
+        aggregate: vi.fn().mockResolvedValue({ _max: { sortOrder: null } }),
+        create: vi.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) => ({
+          ...pending,
+          ...data,
+          product: { id: 'product-1', version: 4 },
+          variant: null,
+        })),
+        updateMany: vi.fn(),
+      },
+      catalogImportRow: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      catalogSourceRecord: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'source-prior',
+          imageId: 'image-prior',
+        }),
+        update: vi.fn().mockResolvedValue({ id: 'source-prior' }),
+        create: vi.fn().mockResolvedValue({ id: 'source-current' }),
+      },
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-import' }) },
+    };
+    const prisma = {
+      product: { findFirst: vi.fn().mockResolvedValue({ id: 'product-1', version: 4 }) },
+      $transaction: vi.fn((callback: (client: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService;
+    const mediaStorage = storage();
+    const service = new ProductMediaService(prisma, validator(), mediaStorage);
+
+    const result = await service.uploadImported(
+      'product-1',
+      {
+        expectedOwnerVersion: 4,
+        altTextFr: 'Image importée',
+        altTextAr: 'صورة مستوردة',
+        isPrimary: false,
+      },
+      { buffer: validated.bytes, mimetype: 'image/png', originalname: 'source.png', size: 13 },
+      {
+        source: 'ADMIN_UPLOAD',
+        externalKey: 'product-key:primary',
+        sourceUrl: 'https://media.example.com/source.png',
+        sourceUrlHash: '1'.repeat(64),
+        originalChecksumSha256: '2'.repeat(64),
+        expectedProductVersion: 4,
+        productCheckpointRowIds: ['row-1'],
+      },
+      context,
+    );
+
+    expect(transaction.productImage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          moderationStatus: 'PENDING',
+          isPrimary: false,
+        }) as object,
+      }),
+    );
+    expect(transaction.product.updateMany).toHaveBeenCalledWith({
+      where: { id: 'product-1', deletedAt: null, version: 4 },
+      data: { version: { increment: 1 }, needsMediaReview: true },
+    });
+    expect(transaction.catalogImportRow.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['row-1'] } },
+      data: { productPostVersion: 5 },
+    });
+    expect(transaction.catalogSourceRecord.update).toHaveBeenCalledWith({
+      where: { id: 'source-prior' },
+      data: { externalKey: 'history::source-prior' },
+    });
+    expect(transaction.catalogSourceRecord.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          source: 'ADMIN_UPLOAD',
+          verifiedAt: null,
+          imageId: 'image-1',
+        }) as object,
+      }),
+    );
+    expect(transaction.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          afterSummary: expect.objectContaining({
+            sourceRecordId: 'source-current',
+            sourceUrlHash: '1'.repeat(64),
+            originalChecksumSha256: '2'.repeat(64),
+            supersededSourceRecordId: 'source-prior',
+            supersededImageId: 'image-prior',
+          }) as object,
+        }) as object,
+      }),
+    );
+    expect(JSON.stringify(transaction.auditLog.create.mock.calls[0]?.[0])).not.toContain(
+      'https://media.example.com/source.png',
+    );
+    expect(result).toMatchObject({
+      data: { id: 'image-1', moderationStatus: 'PENDING', isPrimary: false, ownerVersion: 5 },
+      productVersion: 5,
+    });
+    expect(mediaStorage.put).toHaveBeenCalledOnce();
+  });
+
+  it('atomically checkpoints a pending variant import and flags the parent product', async () => {
+    const pending = productImageRecord({
+      id: 'image-variant-1',
+      productId: null,
+      variantId: 'variant-1',
+      moderationStatus: 'PENDING',
+      isPrimary: false,
+      product: null,
+      variant: { id: 'variant-1', productId: 'product-1', version: 6 },
+    });
+    const checkpointRows = vi
+      .fn()
+      .mockImplementation(({ where }: { where: { id: string | { in: string[] } } }) =>
+        Promise.resolve({ count: typeof where.id === 'string' ? 1 : where.id.in.length }),
+      );
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'locked-owner' }]),
+      product: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'product-1', version: 4 }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      productVariant: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ id: 'variant-1', productId: 'product-1', version: 6 }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      productImage: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
+        aggregate: vi.fn().mockResolvedValue({ _max: { sortOrder: null } }),
+        create: vi.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) => ({
+          ...pending,
+          ...data,
+          product: null,
+          variant: { id: 'variant-1', productId: 'product-1', version: 6 },
+        })),
+      },
+      catalogImportRow: { updateMany: checkpointRows },
+      catalogSourceRecord: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        update: vi.fn(),
+        create: vi.fn().mockResolvedValue({ id: 'source-variant-1' }),
+      },
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-variant-import' }) },
+    };
+    const runTransaction = vi.fn((callback: (client: typeof transaction) => unknown) =>
+      callback(transaction),
+    );
+    const prisma = {
+      product: { findFirst: vi.fn().mockResolvedValue({ id: 'product-1', version: 4 }) },
+      productVariant: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ id: 'variant-1', productId: 'product-1', version: 6 }),
+      },
+      $transaction: runTransaction,
+    } as unknown as PrismaService;
+    const mediaStorage = storage();
+    const service = new ProductMediaService(prisma, validator(), mediaStorage);
+
+    const result = await service.uploadImported(
+      'product-1',
+      {
+        variantId: 'variant-1',
+        expectedOwnerVersion: 6,
+        altTextFr: 'Image de variante importÃ©e',
+        altTextAr: 'ØµÙˆØ±Ø© Ù…Ø³ØªÙˆØ±Ø¯Ø© Ù„Ù„Ù†Ø³Ø®Ø©',
+        isPrimary: false,
+      },
+      { buffer: validated.bytes, mimetype: 'image/png', originalname: 'variant.png', size: 13 },
+      {
+        source: 'ADMIN_UPLOAD',
+        externalKey: 'variant-key:primary',
+        sourceUrl: 'https://media.example.com/variant.png',
+        sourceUrlHash: '3'.repeat(64),
+        originalChecksumSha256: '4'.repeat(64),
+        expectedProductVersion: 4,
+        productCheckpointRowIds: ['row-product', 'row-variant'],
+        variantCheckpointRowId: 'row-variant',
+      },
+      context,
+    );
+
+    expect(runTransaction).toHaveBeenCalledOnce();
+    expect(transaction.productImage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          productId: null,
+          variantId: 'variant-1',
+          moderationStatus: 'PENDING',
+          isPrimary: false,
+        }) as object,
+      }),
+    );
+    expect(transaction.productVariant.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'variant-1',
+        productId: 'product-1',
+        deletedAt: null,
+        version: 6,
+      },
+      data: { version: { increment: 1 } },
+    });
+    expect(transaction.product.updateMany).toHaveBeenCalledWith({
+      where: { id: 'product-1', version: 4, deletedAt: null },
+      data: { needsMediaReview: true, version: { increment: 1 } },
+    });
+    expect(checkpointRows).toHaveBeenNthCalledWith(1, {
+      where: { id: { in: ['row-product', 'row-variant'] } },
+      data: { productPostVersion: 5 },
+    });
+    expect(checkpointRows).toHaveBeenNthCalledWith(2, {
+      where: { id: 'row-variant' },
+      data: { postVersion: 7 },
+    });
+    expect(result).toMatchObject({
+      data: {
+        id: 'image-variant-1',
+        variantId: 'variant-1',
+        moderationStatus: 'PENDING',
+        isPrimary: false,
+        ownerVersion: 7,
+      },
+      productVersion: 5,
+    });
+    expect(mediaStorage.put).toHaveBeenCalledOnce();
+  });
+
+  it('reviews variant-owned media while versioning both the variant and its parent product', async () => {
+    const pending = productImageRecord({
+      id: 'image-variant-1',
+      productId: null,
+      variantId: 'variant-1',
+      moderationStatus: 'PENDING',
+      isPrimary: false,
+      product: null,
+      variant: { id: 'variant-1', productId: 'product-1', version: 6 },
+    });
+    const approved = productImageRecord({
+      ...pending,
+      moderationStatus: 'APPROVED',
+      isPrimary: false,
+    });
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'locked-owner' }]),
+      product: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'product-1', version: 4 }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      productVariant: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ id: 'variant-1', productId: 'product-1', version: 6 }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      productImage: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValueOnce(pending)
+          .mockResolvedValueOnce({ id: 'existing-primary' })
+          .mockResolvedValueOnce(approved),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-variant-review' }) },
+    };
+    const prisma = {
+      productImage: { findFirst: vi.fn().mockResolvedValue(pending) },
+      $transaction: vi.fn((callback: (client: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService;
+    const service = new ProductMediaService(prisma, validator(), storage());
+
+    await expect(
+      service.review(
+        'product-1',
+        'image-variant-1',
+        {
+          expectedOwnerVersion: 6,
+          decision: 'APPROVE',
+          confirmation: 'REVIEW_IMPORTED_PRODUCT_IMAGE',
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      data: {
+        id: 'image-variant-1',
+        variantId: 'variant-1',
+        moderationStatus: 'APPROVED',
+        isPrimary: false,
+        ownerVersion: 7,
+      },
+    });
+
+    expect(transaction.productVariant.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'variant-1',
+        productId: 'product-1',
+        deletedAt: null,
+        version: 6,
+      },
+      data: { version: { increment: 1 } },
+    });
+    expect(transaction.product.updateMany).toHaveBeenCalledWith({
+      where: { id: 'product-1', version: 4, deletedAt: null },
+      data: { needsMediaReview: true, version: { increment: 1 } },
+    });
+    expect(transaction.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'catalog.product_image.review',
+          afterSummary: expect.objectContaining({
+            decision: 'APPROVE',
+            ownerVersion: 7,
+            productVersion: 5,
+          }) as object,
+        }) as object,
+      }),
+    );
+  });
+
+  it('approves a pending import without demoting an existing approved primary', async () => {
+    const pending = productImageRecord({
+      moderationStatus: 'PENDING',
+      isPrimary: false,
+      product: { id: 'product-1', version: 4 },
+    });
+    const approved = productImageRecord({
+      moderationStatus: 'APPROVED',
+      isPrimary: false,
+      product: { id: 'product-1', version: 4 },
+    });
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'product-1' }]),
+      product: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'product-1', version: 4 }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      productImage: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValueOnce(pending)
+          .mockResolvedValueOnce({ id: 'manual-primary' })
+          .mockResolvedValueOnce(approved),
+        updateMany,
+      },
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-review' }) },
+    };
+    const prisma = {
+      productImage: { findFirst: vi.fn().mockResolvedValue(pending) },
+      $transaction: vi.fn((callback: (client: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService;
+    const service = new ProductMediaService(prisma, validator(), storage());
+
+    await expect(
+      service.review(
+        'product-1',
+        'image-1',
+        {
+          expectedOwnerVersion: 4,
+          decision: 'APPROVE',
+          confirmation: 'REVIEW_IMPORTED_PRODUCT_IMAGE',
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      data: { moderationStatus: 'APPROVED', isPrimary: false, ownerVersion: 5 },
+    });
+
+    expect(updateMany).toHaveBeenCalledTimes(1);
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ moderationStatus: 'PENDING' }) as object,
+        data: { moderationStatus: 'APPROVED', isPrimary: false },
+      }),
+    );
+    expect(transaction.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'catalog.product_image.review',
+          afterSummary: expect.objectContaining({ decision: 'APPROVE' }) as object,
+        }) as object,
+      }),
+    );
+  });
+
+  it('rejects repeated review of an image that is no longer pending', async () => {
+    const approved = productImageRecord({ product: { id: 'product-1', version: 4 } });
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'product-1' }]),
+      product: { findFirst: vi.fn().mockResolvedValue({ id: 'product-1', version: 4 }) },
+      productImage: { findFirst: vi.fn().mockResolvedValue(approved), updateMany: vi.fn() },
+    };
+    const prisma = {
+      productImage: { findFirst: vi.fn().mockResolvedValue(approved) },
+      $transaction: vi.fn((callback: (client: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService;
+    const service = new ProductMediaService(prisma, validator(), storage());
+
+    await expect(
+      service.review(
+        'product-1',
+        'image-1',
+        {
+          expectedOwnerVersion: 4,
+          decision: 'REJECT',
+          confirmation: 'REVIEW_IMPORTED_PRODUCT_IMAGE',
+        },
+        context,
+      ),
+    ).rejects.toMatchObject({ response: { code: 'PRODUCT_IMAGE_REVIEW_NOT_PENDING' } });
+    expect(transaction.productImage.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('records an explicit rejection and never makes the pending image primary', async () => {
+    const pending = productImageRecord({
+      moderationStatus: 'PENDING',
+      isPrimary: false,
+      product: { id: 'product-1', version: 4 },
+    });
+    const rejected = productImageRecord({
+      moderationStatus: 'REJECTED',
+      isPrimary: false,
+      product: { id: 'product-1', version: 4 },
+    });
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'product-1' }]),
+      product: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'product-1', version: 4 }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      productImage: {
+        findFirst: vi.fn().mockResolvedValueOnce(pending).mockResolvedValueOnce(rejected),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-reject' }) },
+    };
+    const prisma = {
+      productImage: { findFirst: vi.fn().mockResolvedValue(pending) },
+      $transaction: vi.fn((callback: (client: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService;
+    const service = new ProductMediaService(prisma, validator(), storage());
+
+    await expect(
+      service.review(
+        'product-1',
+        'image-1',
+        {
+          expectedOwnerVersion: 4,
+          decision: 'REJECT',
+          confirmation: 'REVIEW_IMPORTED_PRODUCT_IMAGE',
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      data: { moderationStatus: 'REJECTED', isPrimary: false, ownerVersion: 5 },
+    });
+    expect(transaction.productImage.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { moderationStatus: 'REJECTED', isPrimary: false },
+      }),
+    );
+  });
+
+  it('rejects a stale pending-image review before opening a transaction', async () => {
+    const pending = productImageRecord({
+      moderationStatus: 'PENDING',
+      isPrimary: false,
+      product: { id: 'product-1', version: 5 },
+    });
+    const transaction = vi.fn();
+    const prisma = {
+      productImage: { findFirst: vi.fn().mockResolvedValue(pending) },
+      $transaction: transaction,
+    } as unknown as PrismaService;
+    const service = new ProductMediaService(prisma, validator(), storage());
+
+    await expect(
+      service.review(
+        'product-1',
+        'image-1',
+        {
+          expectedOwnerVersion: 4,
+          decision: 'APPROVE',
+          confirmation: 'REVIEW_IMPORTED_PRODUCT_IMAGE',
+        },
+        context,
+      ),
+    ).rejects.toMatchObject({ response: { code: 'PRODUCT_MEDIA_VERSION_CONFLICT' } });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('lets administrators inspect pending bytes without making them publicly readable', async () => {
+    const pending = productImageRecord({
+      moderationStatus: 'PENDING',
+      isPrimary: false,
+      product: { id: 'product-1', version: 4 },
+    });
+    const findFirst = vi.fn().mockResolvedValueOnce(pending).mockResolvedValueOnce(null);
+    const prisma = { productImage: { findFirst } } as unknown as PrismaService;
+    const mediaStorage = storage(validated.bytes);
+    const service = new ProductMediaService(prisma, validator(), mediaStorage);
+
+    await expect(service.readAdmin('product-1', 'image-1')).resolves.toMatchObject({
+      bytes: validated.bytes,
+      contentType: 'image/png',
+    });
+    await expect(service.readPublic('a'.repeat(64))).rejects.toMatchObject({
+      response: { code: 'MEDIA_NOT_FOUND' },
+    });
+    expect(mediaStorage.get).toHaveBeenCalledOnce();
   });
 });

@@ -8,7 +8,7 @@ export interface StoreMediaObjectInput {
 export interface MediaStorage {
   readonly bucket: string;
   put(input: StoreMediaObjectInput): Promise<void>;
-  get(objectKey: string): Promise<Buffer>;
+  get(objectKey: string, maximumBytes: number): Promise<Buffer>;
   delete(objectKey: string): Promise<void>;
 }
 

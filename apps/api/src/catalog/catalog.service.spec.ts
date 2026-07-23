@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgeGateService } from '../compliance/age-gate.service';
 import type { Environment } from '../config/environment';
@@ -138,6 +139,8 @@ describe('CatalogService public filters and facets', () => {
         descriptionFr: null,
         descriptionAr: null,
         containsNicotine: true,
+        nicotineStrengthMg: new Prisma.Decimal(20),
+        puffCount: 15_000,
         productType: 'E_LIQUID',
         flavor: 'Menthe',
         basePriceMillimes: 20_000,
@@ -157,7 +160,28 @@ describe('CatalogService public filters and facets', () => {
             height: 800,
           },
         ],
-        variants: [],
+        variants: [
+          {
+            id: 'variant-1',
+            nameFr: 'Menthe fraîche',
+            nameAr: 'نعناع بارد',
+            sku: 'MENTHE-1-VARIANT',
+            priceMillimes: 20_000,
+            promotionalPriceMillimes: null,
+            nicotineStrengthMg: new Prisma.Decimal(20),
+            flavorId: 'flavor-1',
+            flavor: {
+              id: 'flavor-1',
+              slug: 'cool-mint',
+              canonicalName: 'Cool Mint',
+              nameFr: 'Menthe fraîche',
+              nameAr: 'نعناع بارد',
+            },
+            lowStockThreshold: 2,
+            images: [],
+            inventoryItems: [],
+          },
+        ],
         attributes: [],
       },
     ]);
@@ -193,7 +217,11 @@ describe('CatalogService public filters and facets', () => {
       brandName: 'Nexa',
       brandSlug: 'nexa',
       productType: 'E_LIQUID',
-      flavor: 'Menthe',
+      flavor: 'Menthe fraîche',
+      puffCount: 15_000,
+      nicotineStrengthMg: 20,
+      nicotineStrengthsMg: [20],
+      selectableFlavorCount: 1,
       priceMillimes: 20_000,
       promotionalPriceMillimes: 15_000,
       primaryImage: {
@@ -209,6 +237,9 @@ describe('CatalogService public filters and facets', () => {
       | {
           select?: {
             images?: { where?: unknown; orderBy?: unknown; take?: number };
+            variants?: {
+              select?: { inventoryItems?: { where?: unknown } };
+            };
           };
         }
       | undefined;
@@ -221,22 +252,57 @@ describe('CatalogService public filters and facets', () => {
       { sortOrder: 'asc' },
       { id: 'asc' },
     ]);
+    const inventoryWhere = request?.select?.variants?.select?.inventoryItems?.where as
+      | {
+          location: { is: { active: boolean; fulfillsOrders: boolean } };
+          OR: [
+            { batchId: null },
+            {
+              batch: {
+                is: {
+                  archivedAt: null;
+                  OR: [{ expiryDate: null }, { expiryDate: { gt: Date } }];
+                };
+              };
+            },
+          ];
+        }
+      | undefined;
+    expect(inventoryWhere?.location).toEqual({
+      is: { active: true, fulfillsOrders: true },
+    });
+    expect(inventoryWhere?.OR[0]).toEqual({ batchId: null });
+    expect(inventoryWhere?.OR[1].batch.is.archivedAt).toBeNull();
+    expect(inventoryWhere?.OR[1].batch.is.OR[0]).toEqual({ expiryDate: null });
+    expect(inventoryWhere?.OR[1].batch.is.OR[1].expiryDate.gt).toBeInstanceOf(Date);
   });
 
   it('returns only bounded public facet values and integer-millime price bounds', async () => {
     const findBrands = vi
       .fn<(args: unknown) => Promise<Array<{ id: string; name: string; slug: string }>>>()
       .mockResolvedValue([{ id: 'brand-1', name: 'Nexa', slug: 'nexa' }]);
-    const groupBy = vi
+    const productGroupBy = vi
       .fn()
       .mockResolvedValueOnce([{ productType: 'E_LIQUID' }, { productType: 'POD' }])
-      .mockResolvedValueOnce([
-        { flavor: 'Menthe', _count: { _all: 3 } },
-        { flavor: 'Vanille', _count: { _all: 2 } },
-      ]);
+      .mockResolvedValueOnce([{ flavor: 'Vanille', _count: { _all: 2 } }])
+      .mockResolvedValueOnce([{ puffCount: 15_000, _count: { _all: 4 } }])
+      .mockResolvedValueOnce([{ nicotineStrengthMg: new Prisma.Decimal(20), _count: { _all: 3 } }]);
     const prisma = {
       brand: { findMany: findBrands },
-      product: { groupBy },
+      product: { groupBy: productGroupBy },
+      flavor: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'flavor-1',
+            slug: 'cool-mint',
+            canonicalName: 'Cool Mint',
+            nameFr: 'Menthe fraîche',
+            nameAr: 'نعناع بارد',
+            _count: { variants: 3 },
+          },
+        ]),
+      },
+      productVariant: { groupBy: vi.fn().mockResolvedValue([]) },
       $queryRaw: vi.fn().mockResolvedValue([{ minimumMillimes: 9_900, maximumMillimes: 42_000 }]),
     } as unknown as PrismaService;
     const service = new CatalogService(prisma, {} as AgeGateService, config);
@@ -246,11 +312,23 @@ describe('CatalogService public filters and facets', () => {
         brands: [{ id: 'brand-1', name: 'Nexa', slug: 'nexa' }],
         productTypes: ['E_LIQUID', 'POD'],
         flavors: [
-          { value: 'Menthe', productCount: 3 },
-          { value: 'Vanille', productCount: 2 },
+          {
+            value: 'cool-mint',
+            nameFr: 'Menthe fraîche',
+            nameAr: 'نعناع بارد',
+            productCount: 3,
+          },
+          { value: 'Vanille', nameFr: 'Vanille', nameAr: 'Vanille', productCount: 2 },
         ],
+        puffCounts: [{ value: 15_000, productCount: 4 }],
+        nicotineStrengthsMg: [{ value: 20, productCount: 3 }],
         priceRange: { minimumMillimes: 9_900, maximumMillimes: 42_000 },
-        truncated: { brands: false, flavors: false },
+        truncated: {
+          brands: false,
+          flavors: false,
+          puffCounts: false,
+          nicotineStrengths: false,
+        },
       },
     });
     const request = findBrands.mock.calls[0]?.[0] as

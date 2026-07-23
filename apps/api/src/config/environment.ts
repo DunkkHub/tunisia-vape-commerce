@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isIP } from 'node:net';
 
 const booleanFromEnvironment = (defaultValue: 'true' | 'false') =>
   z
@@ -10,6 +11,9 @@ const optionalBooleanFromEnvironment = z
   .enum(['true', 'false'])
   .transform((value) => value === 'true')
   .optional();
+
+const hasUnsafeProductionPlaceholder = (value: string): boolean =>
+  /(?:change[_-]?me|development[-_]?only|replace(?:[_-]?with)?|placeholder)/i.test(value);
 
 const browserOrigin = z.url().refine((value) => {
   const url = new URL(value);
@@ -30,6 +34,24 @@ const browserHost = z
     'Must be a single DNS hostname',
   );
 
+const dnsHostname = browserHost.refine(
+  (value) => isIP(value) === 0,
+  'IP address literals are not allowed',
+);
+
+const catalogImportMediaHosts = z
+  .string()
+  .default('')
+  .transform((value) => [
+    ...new Set(
+      value
+        .split(',')
+        .map((host) => host.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ])
+  .pipe(z.array(dnsHostname).max(50));
+
 const environmentSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -48,7 +70,7 @@ const environmentSchema = z
       .min(1)
       .max(200)
       .regex(/^\d{14}_[a-z0-9_]+$/)
-      .default('20260720160000_cash_collection_idempotency'),
+      .default('20260721023000_unverified_operator_source_urls'),
     COOKIE_SECRET: z.string().default('development-only-cookie-secret-change-me'),
     FIELD_ENCRYPTION_KEY: z.string().default('development-only-field-key-change-me'),
     CHECKOUT_ENABLED: booleanFromEnvironment('true'),
@@ -88,6 +110,7 @@ const environmentSchema = z
       .max(25 * 1_024 * 1_024)
       .default(10 * 1_024 * 1_024),
     UPLOAD_MAX_PIXELS: z.coerce.number().int().min(1).max(64_000_000).default(40_000_000),
+    CATALOG_IMPORT_MEDIA_HOSTS: catalogImportMediaHosts,
   })
   .superRefine((environment, context) => {
     if (Boolean(environment.S3_ACCESS_KEY) !== Boolean(environment.S3_SECRET_KEY)) {
@@ -99,13 +122,13 @@ const environmentSchema = z
     }
     if (environment.NODE_ENV !== 'production') return;
 
-    const unsafeFragments = ['change_me', 'development-only', 'localhost'];
     for (const [name, value] of [
       ['DATABASE_URL', environment.DATABASE_URL],
+      ['REDIS_URL', environment.REDIS_URL],
       ['COOKIE_SECRET', environment.COOKIE_SECRET],
       ['FIELD_ENCRYPTION_KEY', environment.FIELD_ENCRYPTION_KEY],
     ] as const) {
-      if (unsafeFragments.some((fragment) => value.includes(fragment))) {
+      if (hasUnsafeProductionPlaceholder(value) || value.toLowerCase().includes('localhost')) {
         context.addIssue({
           code: 'custom',
           path: [name],
@@ -205,17 +228,25 @@ const environmentSchema = z
         });
       }
     }
-    if (
-      environment.MEDIA_STORAGE_DRIVER === 's3' &&
-      [environment.S3_ACCESS_KEY, environment.S3_SECRET_KEY].some((value) =>
-        value?.includes('change_me'),
-      )
-    ) {
-      context.addIssue({
-        code: 'custom',
-        path: ['S3_SECRET_KEY'],
-        message: 'S3 credentials contain an unsafe production default',
-      });
+    if (environment.MEDIA_STORAGE_DRIVER === 's3') {
+      if (
+        [environment.S3_ACCESS_KEY, environment.S3_SECRET_KEY].some(
+          (value) => value && hasUnsafeProductionPlaceholder(value),
+        )
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['S3_SECRET_KEY'],
+          message: 'S3 credentials contain an unsafe production default',
+        });
+      }
+      if (environment.S3_ENDPOINT && !environment.S3_ENDPOINT.startsWith('https://')) {
+        context.addIssue({
+          code: 'custom',
+          path: ['S3_ENDPOINT'],
+          message: 'Production S3_ENDPOINT must use HTTPS',
+        });
+      }
     }
   });
 

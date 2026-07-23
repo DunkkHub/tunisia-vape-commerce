@@ -13,8 +13,9 @@ export interface UploadedProductImage {
 
 export interface ValidatedProductImage {
   bytes: Buffer;
-  contentType: 'image/jpeg' | 'image/png' | 'image/webp';
-  extension: 'jpg' | 'png' | 'webp';
+  contentType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/avif';
+  extension: 'jpg' | 'png' | 'webp' | 'avif';
+  originalFilename: string;
   byteSize: number;
   checksumSha256: string;
   width: number;
@@ -26,9 +27,11 @@ const SAFE_TYPES = {
   jpeg: { contentType: 'image/jpeg', extension: 'jpg' },
   png: { contentType: 'image/png', extension: 'png' },
   webp: { contentType: 'image/webp', extension: 'webp' },
+  avif: { contentType: 'image/avif', extension: 'avif' },
 } as const;
 
 type SafeFormat = keyof typeof SAFE_TYPES;
+const AVIF_SUPPORTED = Boolean(sharp.format.heif?.input.buffer && sharp.format.heif.output.buffer);
 
 @Injectable()
 export class ProductImageValidatorService {
@@ -54,6 +57,7 @@ export class ProductImageValidatorService {
 
     const format = detectFormat(file.buffer);
     if (!format) throw this.unsupportedType();
+    if (format === 'avif' && !AVIF_SUPPORTED) throw this.unsupportedType();
     const expected = SAFE_TYPES[format];
     if (file.mimetype.trim().toLowerCase() !== expected.contentType) {
       throw new BadRequestException({
@@ -83,7 +87,7 @@ export class ProductImageValidatorService {
     const width = metadata.width;
     const height = metadata.height;
     if (
-      metadata.format !== format ||
+      !metadataFormatMatches(metadata.format, format) ||
       !width ||
       !height ||
       !Number.isSafeInteger(width) ||
@@ -105,36 +109,63 @@ export class ProductImageValidatorService {
       });
     }
 
+    let encoded: Buffer;
+    let output: { width: number; height: number; format: string; size: number };
     try {
-      // Decode every pixel instead of trusting metadata alone. The original bytes are retained so
-      // color profiles are not rewritten; strict container-boundary checks reject appended data.
-      await sharp(file.buffer, {
+      // Auto-orient pixels, keep only the ICC profile needed for color fidelity, and re-encode the
+      // selected safe raster format. Sharp strips EXIF, XMP, comments, and other untrusted metadata
+      // unless they are explicitly retained. Producing new bytes also canonicalizes duplicate
+      // detection across uploads that differ only by removable metadata.
+      let pipeline = sharp(file.buffer, {
         animated: false,
         failOn: 'error',
         limitInputPixels: maximumPixels,
         sequentialRead: true,
       })
-        .raw()
-        .toBuffer();
+        .rotate()
+        .keepIccProfile();
+      pipeline = encodeRaster(pipeline, format);
+      const result = await pipeline.toBuffer({ resolveWithObject: true });
+      encoded = result.data;
+      output = result.info;
     } catch {
       throw this.decodeFailed();
     }
 
+    if (
+      !metadataFormatMatches(output.format, format) ||
+      !Number.isSafeInteger(output.width) ||
+      !Number.isSafeInteger(output.height) ||
+      output.width < 1 ||
+      output.height < 1
+    ) {
+      throw this.decodeFailed();
+    }
+    if (encoded.length > maximumBytes) {
+      throw new PayloadTooLargeException({
+        code: 'IMAGE_TOO_LARGE_AFTER_PROCESSING',
+        message: `The safely processed product image must not exceed ${maximumBytes} bytes.`,
+      });
+    }
+
     return {
-      bytes: file.buffer,
+      bytes: encoded,
       contentType: expected.contentType,
       extension: expected.extension,
-      byteSize: file.buffer.length,
-      checksumSha256: createHash('sha256').update(file.buffer).digest('hex'),
-      width,
-      height,
+      originalFilename: sanitizeOriginalFilename(file.originalname, expected.extension),
+      byteSize: encoded.length,
+      checksumSha256: createHash('sha256').update(encoded).digest('hex'),
+      width: output.width,
+      height: output.height,
     };
   }
 
   private unsupportedType(): BadRequestException {
     return new BadRequestException({
       code: 'IMAGE_TYPE_NOT_ALLOWED',
-      message: 'Only non-animated JPEG, PNG, and WebP product images are allowed.',
+      message: AVIF_SUPPORTED
+        ? 'Only non-animated JPEG, PNG, WebP, and AVIF product images are allowed.'
+        : 'Only non-animated JPEG, PNG, and WebP product images are allowed.',
     });
   }
 
@@ -158,11 +189,13 @@ const detectFormat = (bytes: Buffer): SafeFormat | null => {
   ) {
     return 'webp';
   }
+  if (isAvifContainer(bytes)) return 'avif';
   return null;
 };
 
 const hasExactContainerBoundary = (bytes: Buffer, format: SafeFormat): boolean => {
   if (format === 'jpeg') return hasExactJpegBoundary(bytes);
+  if (format === 'avif') return hasExactIsoBmffBoundary(bytes);
   if (format === 'webp') {
     return bytes.length >= 12 && bytes.readUInt32LE(4) + 8 === bytes.length;
   }
@@ -177,6 +210,70 @@ const hasExactContainerBoundary = (bytes: Buffer, format: SafeFormat): boolean =
     if (type === 'IEND') return length === 0 && offset === bytes.length;
   }
   return false;
+};
+
+const metadataFormatMatches = (metadataFormat: string | undefined, format: SafeFormat): boolean =>
+  metadataFormat === format || (format === 'avif' && metadataFormat === 'heif');
+
+const encodeRaster = (pipeline: sharp.Sharp, format: SafeFormat): sharp.Sharp => {
+  if (format === 'jpeg') {
+    return pipeline.jpeg({ quality: 92, chromaSubsampling: '4:4:4', mozjpeg: true });
+  }
+  if (format === 'png') return pipeline.png({ adaptiveFiltering: true, compressionLevel: 9 });
+  if (format === 'webp') return pipeline.webp({ quality: 90, effort: 5 });
+  return pipeline.avif({ quality: 65, effort: 5, chromaSubsampling: '4:4:4' });
+};
+
+const isAvifContainer = (bytes: Buffer): boolean => {
+  if (bytes.length < 16 || bytes.toString('ascii', 4, 8) !== 'ftyp') return false;
+  const firstBoxSize = bytes.readUInt32BE(0);
+  if (firstBoxSize < 16 || firstBoxSize > bytes.length || (firstBoxSize - 8) % 4 !== 0) {
+    return false;
+  }
+  for (let offset = 8; offset + 4 <= firstBoxSize; offset += 4) {
+    const brand = bytes.toString('ascii', offset, offset + 4);
+    if (brand === 'avif' || brand === 'avis') return true;
+  }
+  return false;
+};
+
+const hasExactIsoBmffBoundary = (bytes: Buffer): boolean => {
+  let offset = 0;
+  while (offset < bytes.length) {
+    if (offset + 8 > bytes.length) return false;
+    const size32 = bytes.readUInt32BE(offset);
+    let boxSize: number;
+    if (size32 === 0) return offset + 8 <= bytes.length;
+    if (size32 === 1) {
+      if (offset + 16 > bytes.length) return false;
+      const size64 = bytes.readBigUInt64BE(offset + 8);
+      if (size64 > BigInt(Number.MAX_SAFE_INTEGER)) return false;
+      boxSize = Number(size64);
+      if (boxSize < 16) return false;
+    } else {
+      boxSize = size32;
+      if (boxSize < 8) return false;
+    }
+    if (offset + boxSize > bytes.length) return false;
+    offset += boxSize;
+  }
+  return offset === bytes.length;
+};
+
+export const sanitizeOriginalFilename = (originalName: string, extension: string): string => {
+  const leaf = originalName.normalize('NFKC').replaceAll('\\', '/').split('/').at(-1) ?? '';
+  const lastDot = leaf.lastIndexOf('.');
+  const rawStem = lastDot > 0 ? leaf.slice(0, lastDot) : leaf;
+  const stem = rawStem
+    .replace(/[\p{Cc}\p{Cf}]/gu, '')
+    .replace(/[^\p{L}\p{N} ._()+-]/gu, '-')
+    .replace(/\s+/gu, ' ')
+    .replace(/-+/gu, '-')
+    .replace(/^[.\s-]+|[.\s-]+$/gu, '');
+  const suffix = `.${extension}`;
+  const maximumStemLength = 255 - suffix.length;
+  const boundedStem = [...(stem || 'image-upload')].slice(0, maximumStemLength).join('');
+  return `${boundedStem}${suffix}`;
 };
 
 const hasExactJpegBoundary = (bytes: Buffer): boolean => {

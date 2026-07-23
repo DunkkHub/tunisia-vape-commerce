@@ -1,5 +1,8 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { CatalogImportController } from '../catalog-import/catalog-import.controller';
+import { CatalogMediaImportService } from '../catalog-import/catalog-media-import.service';
+import { CatalogImportService } from '../catalog-import/catalog-import.service';
 import { AdminProductsController } from '../catalog/admin-products.controller';
 import { AdminProductsService } from '../catalog/admin-products.service';
 import { AdminVariantsController } from '../catalog/admin-variants.controller';
@@ -60,6 +63,7 @@ import { WishlistService } from '../wishlist/wishlist.service';
     PublicProductMediaController,
     AdminBrandsController,
     AdminCategoriesController,
+    CatalogImportController,
   ],
   providers: [
     CatalogService,
@@ -81,6 +85,8 @@ import { WishlistService } from '../wishlist/wishlist.service';
     ProductMediaService,
     AdminBrandsService,
     AdminCategoriesService,
+    CatalogImportService,
+    CatalogMediaImportService,
   ],
   exports: [
     CatalogService,

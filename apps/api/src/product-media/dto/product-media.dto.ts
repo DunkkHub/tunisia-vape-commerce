@@ -4,8 +4,10 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   ArrayUnique,
+  Equals,
   IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -57,6 +59,24 @@ export class ProductMediaListQueryDto {
   @Length(1, 30)
   @Matches(ID_PATTERN)
   variantId?: string;
+
+  @ApiPropertyOptional({
+    default: false,
+    description: 'Return only pending or quarantined images requiring an administrator decision.',
+  })
+  @Transform(multipartBoolean)
+  @IsOptional()
+  @IsBoolean()
+  reviewRequired?: boolean;
+
+  @ApiPropertyOptional({
+    default: false,
+    description: 'Return only product-owned images (never variant-owned images).',
+  })
+  @Transform(multipartBoolean)
+  @IsOptional()
+  @IsBoolean()
+  productOnly?: boolean;
 
   @ApiPropertyOptional({ default: 1, minimum: 1 })
   @IsOptional()
@@ -157,6 +177,18 @@ export class ProductImageOwnerVersionDto {
   expectedOwnerVersion!: number;
 }
 
+const PRODUCT_IMAGE_REVIEW_DECISIONS = ['APPROVE', 'REJECT'] as const;
+
+export class ReviewProductImageDto extends ProductImageOwnerVersionDto {
+  @ApiProperty({ enum: PRODUCT_IMAGE_REVIEW_DECISIONS })
+  @IsIn(PRODUCT_IMAGE_REVIEW_DECISIONS)
+  decision!: (typeof PRODUCT_IMAGE_REVIEW_DECISIONS)[number];
+
+  @ApiProperty({ enum: ['REVIEW_IMPORTED_PRODUCT_IMAGE'] })
+  @Equals('REVIEW_IMPORTED_PRODUCT_IMAGE')
+  confirmation!: 'REVIEW_IMPORTED_PRODUCT_IMAGE';
+}
+
 export class DeleteProductImageQueryDto {
   @ApiProperty({ minimum: 1 })
   @Type(() => Number)
@@ -200,6 +232,9 @@ export class AdminProductImageDto {
   @ApiProperty()
   contentType!: string;
 
+  @ApiPropertyOptional({ nullable: true, maxLength: 255 })
+  originalFilename!: string | null;
+
   @ApiProperty({ minimum: 1 })
   byteSize!: number;
 
@@ -232,6 +267,9 @@ export class AdminProductImageDto {
 
   @ApiProperty({ format: 'date-time' })
   createdAt!: string;
+
+  @ApiProperty({ format: 'date-time' })
+  updatedAt!: string;
 }
 
 export class AdminProductImageResponseDto {

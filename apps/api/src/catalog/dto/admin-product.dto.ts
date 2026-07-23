@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  Equals,
   IsBoolean,
   IsIn,
   IsInt,
@@ -20,6 +21,8 @@ const PRODUCT_TYPES = [
   'DEVICE',
   'E_LIQUID',
   'POD',
+  'PREFILLED_POD_KIT',
+  'PREFILLED_REPLACEMENT_POD',
   'COIL',
   'DISPOSABLE',
   'ACCESSORY',
@@ -388,6 +391,14 @@ export class UpdateProductDto {
   @IsOptional()
   @IsIn(MUTABLE_PUBLICATION_STATUSES)
   publicationStatus?: MutablePublicationStatus;
+
+  @ApiPropertyOptional({
+    description:
+      'Explicit administrator assertion that imported product and variant imagery was reviewed.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  mediaReviewConfirmed?: boolean;
 }
 
 export class ProductVersionDto {
@@ -395,4 +406,20 @@ export class ProductVersionDto {
   @IsInt()
   @Min(1)
   version!: number;
+}
+
+export class ConfirmProductMediaReviewDto extends ProductVersionDto {
+  @ApiProperty({
+    minLength: 4,
+    maxLength: 500,
+    description: 'Operator reason retained in the immutable audit record.',
+  })
+  @IsString()
+  @Length(4, 500)
+  @Matches(/\S/)
+  reason!: string;
+
+  @ApiProperty({ enum: ['CONFIRM_PRODUCT_MEDIA_REVIEW'] })
+  @Equals('CONFIRM_PRODUCT_MEDIA_REVIEW')
+  confirmation!: 'CONFIRM_PRODUCT_MEDIA_REVIEW';
 }

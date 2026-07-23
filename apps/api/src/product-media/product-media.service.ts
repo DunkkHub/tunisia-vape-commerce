@@ -8,7 +8,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type CatalogImportSource } from '@prisma/client';
 import { buildPublicProductWhere } from '../catalog/catalog-policy';
 import { PrismaService } from '../database/prisma.service';
 import type {
@@ -16,6 +16,7 @@ import type {
   ProductMediaListQueryDto,
   ReorderProductImagesDto,
   ReplaceProductImageDto,
+  ReviewProductImageDto,
   UpdateProductImageMetadataDto,
   UploadProductImageDto,
 } from './dto/product-media.dto';
@@ -27,13 +28,28 @@ import {
 import { PRODUCT_MEDIA_STORAGE, type MediaStorage } from './storage/media-storage';
 
 const MAX_IMAGES_PER_OWNER = 20;
+const MAX_PUBLIC_MEDIA_BYTES = 25 * 1_024 * 1_024;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
+const historicalCatalogSourceExternalKey = (sourceRecordId: string): string =>
+  `history::${sourceRecordId}`;
 
 export interface ProductMediaMutationContext {
   userId: string;
   requestId: string;
   ipAddress?: string;
   userAgent?: string;
+}
+
+export interface ImportedProductImageProvenance {
+  source: CatalogImportSource;
+  externalKey: string;
+  sourceUrl: string;
+  sourceUrlHash: string;
+  originalChecksumSha256: string;
+  resolvedSourceUrl?: string;
+  expectedProductVersion: number;
+  productCheckpointRowIds: string[];
+  variantCheckpointRowId?: string;
 }
 
 interface MediaOwner {
@@ -51,6 +67,7 @@ const adminImageSelect = {
   objectKeyHash: true,
   bucket: true,
   contentType: true,
+  originalFilename: true,
   byteSize: true,
   checksumSha256: true,
   width: true,
@@ -61,6 +78,7 @@ const adminImageSelect = {
   isPrimary: true,
   moderationStatus: true,
   createdAt: true,
+  updatedAt: true,
   deletedAt: true,
   product: { select: { id: true, version: true } },
   variant: { select: { id: true, productId: true, version: true } },
@@ -89,14 +107,17 @@ export class ProductMediaService {
     }
     const where: Prisma.ProductImageWhereInput = {
       deletedAt: null,
+      ...(query.reviewRequired ? { moderationStatus: { in: ['PENDING', 'QUARANTINED'] } } : {}),
       ...(query.variantId
         ? { productId: null, variantId: query.variantId }
-        : {
-            OR: [
-              { productId, variantId: null },
-              { productId: null, variant: { is: { productId } } },
-            ],
-          }),
+        : query.productOnly
+          ? { productId, variantId: null }
+          : {
+              OR: [
+                { productId, variantId: null },
+                { productId: null, variant: { is: { productId } } },
+              ],
+            }),
     };
     const [records, total] = await this.prisma.$transaction([
       this.prisma.productImage.findMany({
@@ -135,6 +156,7 @@ export class ProductMediaService {
       const record = await this.prisma.$transaction(async (transaction) => {
         const owner = await this.lockOwner(transaction, preflightOwner, input.expectedOwnerVersion);
         const where = this.ownerImageWhere(owner);
+        await this.assertNoDuplicate(transaction, owner, image.checksumSha256);
         const count = await transaction.productImage.count({
           where: { ...where, deletedAt: null },
         });
@@ -152,6 +174,7 @@ export class ProductMediaService {
             objectKeyHash: stored.objectKeyHash,
             bucket: this.storage.bucket,
             contentType: image.contentType,
+            originalFilename: image.originalFilename,
             byteSize: image.byteSize,
             checksumSha256: image.checksumSha256,
             width: image.width,
@@ -175,6 +198,7 @@ export class ProductMediaService {
               productId,
               variantId: owner.kind === 'variant' ? owner.id : null,
               contentType: created.contentType,
+              originalFilename: created.originalFilename,
               byteSize: created.byteSize,
               width: created.width,
               height: created.height,
@@ -187,6 +211,209 @@ export class ProductMediaService {
         return created;
       });
       return { data: this.serialize(record, input.expectedOwnerVersion + 1) };
+    } catch (error) {
+      await this.cleanupFailedWrite(stored.objectKey);
+      throw error;
+    }
+  }
+
+  async uploadImported(
+    productId: string,
+    input: UploadProductImageDto,
+    file: UploadedProductImage | undefined,
+    provenance: ImportedProductImageProvenance,
+    context: ProductMediaMutationContext,
+  ) {
+    const image = await this.validator.validate(file);
+    const preflightOwner = await this.resolveOwner(this.prisma, productId, input.variantId);
+    this.assertVersion(preflightOwner.version, input.expectedOwnerVersion);
+    const preflightProduct = await this.prisma.product.findFirst({
+      where: { id: productId, deletedAt: null },
+      select: { version: true },
+    });
+    if (!preflightProduct) throw this.ownerNotFound();
+    this.assertVersion(preflightProduct.version, provenance.expectedProductVersion);
+    const checkpointRowIds = [...new Set(provenance.productCheckpointRowIds)];
+    if (
+      checkpointRowIds.length === 0 ||
+      (preflightOwner.kind === 'variant') !== Boolean(provenance.variantCheckpointRowId)
+    ) {
+      throw new ServiceUnavailableException({
+        code: 'CATALOG_MEDIA_CHECKPOINT_INVALID',
+        message: 'The catalogue media checkpoint was incomplete.',
+      });
+    }
+
+    const stored = this.storedObject(preflightOwner, image);
+    await this.store(stored, image);
+    const isOfficial = provenance.source === 'WOTOFO_OFFICIAL';
+
+    try {
+      const result = await this.prisma.$transaction(
+        async (transaction) => {
+          await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            SELECT id FROM Product
+            WHERE id = ${productId} AND deletedAt IS NULL
+            FOR UPDATE
+          `);
+          const currentProduct = await transaction.product.findFirst({
+            where: { id: productId, deletedAt: null },
+            select: { version: true },
+          });
+          if (!currentProduct) throw this.ownerNotFound();
+          this.assertVersion(currentProduct.version, provenance.expectedProductVersion);
+
+          const owner = await this.lockOwner(
+            transaction,
+            preflightOwner,
+            input.expectedOwnerVersion,
+          );
+          const where = this.ownerImageWhere(owner);
+          await this.assertNoDuplicate(transaction, owner, image.checksumSha256);
+          const count = await transaction.productImage.count({
+            where: { ...where, deletedAt: null },
+          });
+          if (count >= MAX_IMAGES_PER_OWNER) throw this.imageLimitReached();
+          const aggregate = await transaction.productImage.aggregate({
+            where: { ...where, deletedAt: null },
+            _max: { sortOrder: true },
+          });
+          const isPrimary = isOfficial;
+          if (isPrimary) await this.clearPrimary(transaction, owner);
+          const created = await transaction.productImage.create({
+            data: {
+              ...this.ownerData(owner),
+              objectKey: stored.objectKey,
+              objectKeyHash: stored.objectKeyHash,
+              bucket: this.storage.bucket,
+              contentType: image.contentType,
+              originalFilename: image.originalFilename,
+              byteSize: image.byteSize,
+              checksumSha256: image.checksumSha256,
+              width: image.width,
+              height: image.height,
+              altTextFr: input.altTextFr,
+              altTextAr: input.altTextAr,
+              sortOrder: (aggregate._max.sortOrder ?? -1) + 1,
+              isPrimary,
+              moderationStatus: isOfficial ? 'APPROVED' : 'PENDING',
+            },
+            select: adminImageSelect,
+          });
+
+          await this.bumpOwner(
+            transaction,
+            owner,
+            input.expectedOwnerVersion,
+            !isOfficial && owner.kind === 'product',
+          );
+          const ownerVersion = input.expectedOwnerVersion + 1;
+          let productVersion = provenance.expectedProductVersion;
+          if (owner.kind === 'product') {
+            productVersion = ownerVersion;
+          } else if (!isOfficial) {
+            const flagged = await transaction.product.updateMany({
+              where: {
+                id: productId,
+                version: provenance.expectedProductVersion,
+                deletedAt: null,
+              },
+              data: { needsMediaReview: true, version: { increment: 1 } },
+            });
+            if (flagged.count !== 1) throw this.versionConflict();
+            productVersion += 1;
+          }
+
+          const checkpointedProducts = await transaction.catalogImportRow.updateMany({
+            where: { id: { in: checkpointRowIds } },
+            data: { productPostVersion: productVersion },
+          });
+          if (checkpointedProducts.count !== checkpointRowIds.length) {
+            throw new ServiceUnavailableException({
+              code: 'CATALOG_MEDIA_CHECKPOINT_INVALID',
+              message: 'The catalogue media checkpoint could not be recorded.',
+            });
+          }
+          if (provenance.variantCheckpointRowId) {
+            const checkpointedVariant = await transaction.catalogImportRow.updateMany({
+              where: { id: provenance.variantCheckpointRowId },
+              data: { postVersion: ownerVersion },
+            });
+            if (checkpointedVariant.count !== 1) {
+              throw new ServiceUnavailableException({
+                code: 'CATALOG_MEDIA_CHECKPOINT_INVALID',
+                message: 'The catalogue variant media checkpoint could not be recorded.',
+              });
+            }
+          }
+
+          const canonicalSourceKey = {
+            source: provenance.source,
+            entityType: 'IMAGE' as const,
+            externalKey: provenance.externalKey,
+          };
+          const supersededSource = await transaction.catalogSourceRecord.findUnique({
+            where: { source_entityType_externalKey: canonicalSourceKey },
+            select: { id: true, imageId: true },
+          });
+          if (supersededSource) {
+            await transaction.catalogSourceRecord.update({
+              where: { id: supersededSource.id },
+              data: { externalKey: historicalCatalogSourceExternalKey(supersededSource.id) },
+            });
+          }
+          const sourceRecord = await transaction.catalogSourceRecord.create({
+            data: {
+              ...canonicalSourceKey,
+              sourceUrl: provenance.sourceUrl,
+              sourceUrlHash: provenance.sourceUrlHash,
+              contentHash: image.checksumSha256,
+              verifiedAt: isOfficial ? new Date() : null,
+              imageId: created.id,
+              metadata: {
+                originalChecksumSha256: provenance.originalChecksumSha256,
+                ...(provenance.resolvedSourceUrl
+                  ? { resolvedSourceUrl: provenance.resolvedSourceUrl }
+                  : {}),
+                provenance: isOfficial
+                  ? 'OFFICIAL_SOURCE_VERIFIED'
+                  : 'OPERATOR_SUPPLIED_UNVERIFIED',
+              },
+            },
+            select: { id: true },
+          });
+          await transaction.auditLog.create({
+            data: {
+              ...auditMetadata(context),
+              action: 'catalog.product_image.import',
+              resourceType: 'ProductImage',
+              resourceId: created.id,
+              afterSummary: {
+                productId,
+                variantId: owner.kind === 'variant' ? owner.id : null,
+                source: provenance.source,
+                externalKey: provenance.externalKey,
+                sourceRecordId: sourceRecord.id,
+                sourceUrlHash: provenance.sourceUrlHash,
+                originalChecksumSha256: provenance.originalChecksumSha256,
+                supersededSourceRecordId: supersededSource?.id ?? null,
+                supersededImageId: supersededSource?.imageId ?? null,
+                moderationStatus: created.moderationStatus,
+                isPrimary: created.isPrimary,
+                checksumSha256: created.checksumSha256,
+                ownerVersion,
+                productVersion,
+              },
+            },
+          });
+          return { record: created, ownerVersion, productVersion };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+      return {
+        data: this.serialize(result.record, result.ownerVersion),
+        productVersion: result.productVersion,
+      };
     } catch (error) {
       await this.cleanupFailedWrite(stored.objectKey);
       throw error;
@@ -239,6 +466,114 @@ export class ProductMediaService {
       });
       return changed;
     });
+    return { data: this.serialize(record, input.expectedOwnerVersion + 1) };
+  }
+
+  async review(
+    productId: string,
+    imageId: string,
+    input: ReviewProductImageDto,
+    context: ProductMediaMutationContext,
+  ) {
+    const preflight = await this.findScopedImage(this.prisma, productId, imageId);
+    const preflightOwner = this.ownerFromImage(preflight);
+    this.assertVersion(preflightOwner.version, input.expectedOwnerVersion);
+
+    const record = await this.prisma.$transaction(
+      async (transaction) => {
+        await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+          SELECT id FROM Product
+          WHERE id = ${productId} AND deletedAt IS NULL
+          FOR UPDATE
+        `);
+        const product = await transaction.product.findFirst({
+          where: { id: productId, deletedAt: null },
+          select: { version: true },
+        });
+        if (!product) throw this.ownerNotFound();
+        const owner = await this.lockOwner(transaction, preflightOwner, input.expectedOwnerVersion);
+        const current = await this.findExactImage(transaction, imageId, owner);
+        if (current.moderationStatus !== 'PENDING') {
+          throw new ConflictException({
+            code: 'PRODUCT_IMAGE_REVIEW_NOT_PENDING',
+            message: 'Only a pending imported image can be reviewed.',
+          });
+        }
+
+        const approved = input.decision === 'APPROVE';
+        const existingPrimary = approved
+          ? await transaction.productImage.findFirst({
+              where: {
+                ...this.ownerImageWhere(owner),
+                deletedAt: null,
+                moderationStatus: 'APPROVED',
+                isPrimary: true,
+                id: { not: current.id },
+              },
+              select: { id: true },
+            })
+          : null;
+        const makePrimary = approved && !existingPrimary;
+        if (makePrimary) await this.clearPrimary(transaction, owner);
+        const changedCount = await transaction.productImage.updateMany({
+          where: {
+            id: current.id,
+            ...this.ownerImageWhere(owner),
+            deletedAt: null,
+            moderationStatus: 'PENDING',
+          },
+          data: {
+            moderationStatus: approved ? 'APPROVED' : 'REJECTED',
+            isPrimary: makePrimary,
+          },
+        });
+        if (changedCount.count !== 1) throw this.imageNotFound();
+
+        await this.bumpOwner(
+          transaction,
+          owner,
+          input.expectedOwnerVersion,
+          owner.kind === 'product',
+        );
+        let productVersion = product.version;
+        if (owner.kind === 'product') {
+          productVersion = input.expectedOwnerVersion + 1;
+        } else {
+          const flagged = await transaction.product.updateMany({
+            where: {
+              id: productId,
+              version: product.version,
+              deletedAt: null,
+            },
+            data: { needsMediaReview: true, version: { increment: 1 } },
+          });
+          if (flagged.count !== 1) throw this.versionConflict();
+          productVersion += 1;
+        }
+        const changed = await this.findExactImage(transaction, imageId, owner);
+        await transaction.auditLog.create({
+          data: {
+            ...auditMetadata(context),
+            action: 'catalog.product_image.review',
+            resourceType: 'ProductImage',
+            resourceId: current.id,
+            beforeSummary: {
+              moderationStatus: current.moderationStatus,
+              isPrimary: current.isPrimary,
+            },
+            afterSummary: {
+              decision: input.decision,
+              moderationStatus: changed.moderationStatus,
+              isPrimary: changed.isPrimary,
+              ownerVersion: owner.version + 1,
+              productVersion,
+            },
+          },
+        });
+        return changed;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
     return { data: this.serialize(record, input.expectedOwnerVersion + 1) };
   }
 
@@ -349,6 +684,12 @@ export class ProductMediaService {
     const preflight = await this.findScopedImage(this.prisma, productId, imageId);
     const preflightOwner = this.ownerFromImage(preflight);
     this.assertVersion(preflightOwner.version, input.expectedOwnerVersion);
+    if (preflight.moderationStatus !== 'APPROVED') {
+      throw new ConflictException({
+        code: 'PRODUCT_IMAGE_REVIEW_REQUIRED',
+        message: 'Review or remove this imported image before replacing it.',
+      });
+    }
     const stored = this.storedObject(preflightOwner, image);
     await this.store(stored, image);
 
@@ -362,6 +703,10 @@ export class ProductMediaService {
           input.expectedOwnerVersion,
         );
         const current = await this.findExactImage(transaction, imageId, owner);
+        if (current.checksumSha256 === image.checksumSha256) {
+          throw this.imageUnchanged();
+        }
+        await this.assertNoDuplicate(transaction, owner, image.checksumSha256, current.id);
         const created = await transaction.productImage.create({
           data: {
             ...this.ownerData(owner),
@@ -369,6 +714,7 @@ export class ProductMediaService {
             objectKeyHash: stored.objectKeyHash,
             bucket: this.storage.bucket,
             contentType: image.contentType,
+            originalFilename: image.originalFilename,
             byteSize: image.byteSize,
             checksumSha256: image.checksumSha256,
             width: image.width,
@@ -400,6 +746,7 @@ export class ProductMediaService {
             afterSummary: {
               checksumSha256: created.checksumSha256,
               contentType: created.contentType,
+              originalFilename: created.originalFilename,
               byteSize: created.byteSize,
               ownerVersion: owner.version + 1,
             },
@@ -472,6 +819,11 @@ export class ProductMediaService {
     return { data: result };
   }
 
+  async readAdmin(productId: string, imageId: string) {
+    const image = await this.findScopedImage(this.prisma, productId, imageId);
+    return this.readStoredImage(image);
+  }
+
   async readPublic(objectKeyHash: string) {
     if (!HASH_PATTERN.test(objectKeyHash)) throw this.publicImageNotFound();
     const now = new Date();
@@ -506,10 +858,22 @@ export class ProductMediaService {
       },
     });
     if (!image) throw this.publicImageNotFound();
+    return this.readStoredImage(image);
+  }
+
+  private async readStoredImage(
+    image: Pick<AdminImageRecord, 'objectKey' | 'contentType' | 'byteSize' | 'checksumSha256'>,
+  ) {
+    if (image.byteSize < 1 || image.byteSize > MAX_PUBLIC_MEDIA_BYTES) {
+      throw new ServiceUnavailableException({
+        code: 'MEDIA_INTEGRITY_FAILURE',
+        message: 'The stored product image failed its integrity check.',
+      });
+    }
 
     let bytes: Buffer;
     try {
-      bytes = await this.storage.get(image.objectKey);
+      bytes = await this.storage.get(image.objectKey, image.byteSize);
     } catch (error) {
       if (isMissingStorageObject(error)) throw this.publicImageNotFound();
       throw new ServiceUnavailableException({
@@ -587,12 +951,16 @@ export class ProductMediaService {
     transaction: Prisma.TransactionClient,
     owner: MediaOwner,
     expectedVersion: number,
+    markProductMediaReview = false,
   ): Promise<void> {
     const changed =
       owner.kind === 'product'
         ? await transaction.product.updateMany({
             where: { id: owner.id, deletedAt: null, version: expectedVersion },
-            data: { version: { increment: 1 } },
+            data: {
+              version: { increment: 1 },
+              ...(markProductMediaReview ? { needsMediaReview: true } : {}),
+            },
           })
         : await transaction.productVariant.updateMany({
             where: {
@@ -673,6 +1041,24 @@ export class ProductMediaService {
     return owner.kind === 'product'
       ? { productId: owner.id, variantId: null }
       : { productId: null, variantId: owner.id };
+  }
+
+  private async assertNoDuplicate(
+    transaction: Prisma.TransactionClient,
+    owner: MediaOwner,
+    checksumSha256: string,
+    excludedImageId?: string,
+  ): Promise<void> {
+    const duplicate = await transaction.productImage.findFirst({
+      where: {
+        ...this.ownerImageWhere(owner),
+        checksumSha256,
+        deletedAt: null,
+        ...(excludedImageId ? { id: { not: excludedImageId } } : {}),
+      },
+      select: { id: true },
+    });
+    if (duplicate) throw this.imageDuplicate();
   }
 
   private async clearPrimary(
@@ -756,8 +1142,9 @@ export class ProductMediaService {
       id: record.id,
       productId: record.productId,
       variantId: record.variantId,
-      url: publicProductImageUrl(record.objectKeyHash),
+      url: `/api/v1/admin/products/${owner.productId}/images/${record.id}/content`,
       contentType: record.contentType,
+      originalFilename: record.originalFilename,
       byteSize: record.byteSize,
       checksumSha256: record.checksumSha256,
       width: record.width,
@@ -769,6 +1156,7 @@ export class ProductMediaService {
       moderationStatus: record.moderationStatus,
       ownerVersion: ownerVersion ?? owner.version,
       createdAt: record.createdAt.toISOString(),
+      updatedAt: record.updatedAt.toISOString(),
     };
   }
 
@@ -780,6 +1168,20 @@ export class ProductMediaService {
     return new ConflictException({
       code: 'PRODUCT_IMAGE_LIMIT_REACHED',
       message: `A product or variant can have at most ${MAX_IMAGES_PER_OWNER} active images.`,
+    });
+  }
+
+  private imageDuplicate(): ConflictException {
+    return new ConflictException({
+      code: 'PRODUCT_IMAGE_DUPLICATE',
+      message: 'This product or variant already has the same safely processed image.',
+    });
+  }
+
+  private imageUnchanged(): ConflictException {
+    return new ConflictException({
+      code: 'PRODUCT_IMAGE_UNCHANGED',
+      message: 'The replacement has the same safely processed content as the current image.',
     });
   }
 

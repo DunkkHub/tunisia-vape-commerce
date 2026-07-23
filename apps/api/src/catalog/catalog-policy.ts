@@ -11,6 +11,8 @@ export interface CatalogFilterInput {
   brand?: string;
   productType?: ProductType;
   flavor?: string;
+  puffCount?: number;
+  nicotineStrengthMg?: number;
   minPriceMillimes?: number;
   maxPriceMillimes?: number;
   featured?: boolean;
@@ -26,6 +28,8 @@ export interface NormalizedCatalogFilter {
   brand?: string;
   productType?: ProductType;
   flavor?: string;
+  puffCount?: number;
+  nicotineStrengthMg?: number;
   minPriceMillimes?: number;
   maxPriceMillimes?: number;
   featured?: boolean;
@@ -53,6 +57,10 @@ export const normalizeCatalogFilter = (input: CatalogFilterInput): NormalizedCat
   if (input.productType) normalized.productType = input.productType;
   const flavor = input.flavor?.trim();
   if (flavor) normalized.flavor = flavor;
+  if (input.puffCount !== undefined) normalized.puffCount = input.puffCount;
+  if (input.nicotineStrengthMg !== undefined) {
+    normalized.nicotineStrengthMg = input.nicotineStrengthMg;
+  }
   if (input.minPriceMillimes !== undefined) {
     normalized.minPriceMillimes = input.minPriceMillimes;
   }
@@ -74,6 +82,12 @@ const activeRestrictionFilter = (now: Date): Prisma.ProductRestrictionWhereInput
   OR: [{ endsAt: null }, { endsAt: { gt: now } }],
 });
 
+const publicVariantFilter = (): Prisma.ProductVariantWhereInput => ({
+  publicationStatus: 'PUBLISHED',
+  archivedAt: null,
+  deletedAt: null,
+});
+
 export const buildPublicProductWhere = (
   filters: Pick<
     NormalizedCatalogFilter,
@@ -83,6 +97,8 @@ export const buildPublicProductWhere = (
     | 'flavor'
     | 'maxPriceMillimes'
     | 'minPriceMillimes'
+    | 'nicotineStrengthMg'
+    | 'puffCount'
     | 'productType'
     | 'search'
   >,
@@ -107,24 +123,84 @@ export const buildPublicProductWhere = (
   };
   if (filters.brand) publishedBrand.slug = filters.brand;
 
-  const clauses: Prisma.ProductWhereInput[] = [];
+  const clauses: Prisma.ProductWhereInput[] = [hasNonNegativePublicPrice()];
   clauses.push(
     filters.brand
       ? { brand: { is: publishedBrand } }
       : { OR: [{ brandId: null }, { brand: { is: publishedBrand } }] },
   );
   if (filters.search) {
+    const variantSearch: Prisma.ProductVariantWhereInput = {
+      ...publicVariantFilter(),
+      OR: [
+        { nameFr: { contains: filters.search } },
+        { nameAr: { contains: filters.search } },
+        { sku: { contains: filters.search } },
+        {
+          flavor: {
+            is: {
+              OR: [
+                { canonicalName: { contains: filters.search } },
+                { nameFr: { contains: filters.search } },
+                { nameAr: { contains: filters.search } },
+                { slug: { contains: filters.search } },
+              ],
+            },
+          },
+        },
+      ],
+    };
     clauses.push({
       OR: [
         { nameFr: { contains: filters.search } },
         { nameAr: { contains: filters.search } },
         { slug: { contains: filters.search } },
         { sku: { contains: filters.search } },
+        { variants: { some: variantSearch } },
       ],
     });
   }
   if (filters.productType) clauses.push({ productType: filters.productType });
-  if (filters.flavor) clauses.push({ flavor: filters.flavor });
+  if (filters.flavor) {
+    clauses.push({
+      OR: [
+        { flavor: filters.flavor },
+        {
+          variants: {
+            some: {
+              ...publicVariantFilter(),
+              flavor: {
+                is: {
+                  OR: [
+                    { slug: filters.flavor },
+                    { canonicalName: filters.flavor },
+                    { nameFr: filters.flavor },
+                    { nameAr: filters.flavor },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+  }
+  if (filters.puffCount !== undefined) clauses.push({ puffCount: filters.puffCount });
+  if (filters.nicotineStrengthMg !== undefined) {
+    clauses.push({
+      OR: [
+        { nicotineStrengthMg: filters.nicotineStrengthMg },
+        {
+          variants: {
+            some: {
+              ...publicVariantFilter(),
+              nicotineStrengthMg: filters.nicotineStrengthMg,
+            },
+          },
+        },
+      ],
+    });
+  }
   if (filters.minPriceMillimes !== undefined || filters.maxPriceMillimes !== undefined) {
     if (!priceFields) {
       throw new TypeError('Catalog price field references are required for price filtering.');

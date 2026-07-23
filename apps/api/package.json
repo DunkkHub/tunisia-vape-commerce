@@ -13,7 +13,10 @@
     "test:security": "vitest run test/security --passWithNoTests",
     "test:e2e:fixture": "node test/e2e/seed-operational-fixture.mjs",
     "test:e2e:operational": "node test/e2e/run-operational-e2e.mjs",
-    "admin:create": "tsx src/cli/admin-create.ts"
+    "admin:create": "tsx src/cli/admin-create.ts",
+    "catalog:import:wotofo": "tsx src/cli/catalog-import-wotofo.ts",
+    "catalog:media:wotofo": "tsx src/cli/catalog-media-wotofo.ts",
+    "catalog:verify:wotofo": "tsx src/cli/catalog-verify-wotofo.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1090.0",
@@ -39,6 +42,7 @@
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
     "sharp": "0.35.3",
+    "undici": "7.28.0",
     "uuid": "14.0.1",
     "zod": "4.4.3"
   },

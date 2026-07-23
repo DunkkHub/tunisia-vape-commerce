@@ -392,7 +392,7 @@ const serializeCart = (cart: CartRecord, locale: StorefrontLocale) => {
     const shortDescription =
       locale === 'ar' ? product.shortDescriptionAr : product.shortDescriptionFr;
     const variantImage = variant.images?.[0];
-    const productImage = product.images?.[0] ?? variantImage;
+    const displayImage = variantImage ?? product.images?.[0];
     return {
       id: item.id,
       quantity: item.quantity,
@@ -412,7 +412,7 @@ const serializeCart = (cart: CartRecord, locale: StorefrontLocale) => {
         availableQuantity: availability,
         lowStock: availability <= variant.lowStockThreshold,
         ageRestricted: product.minimumAge !== null || product.containsNicotine,
-        primaryImage: productImage ? serializeCartImage(productImage, locale) : null,
+        primaryImage: displayImage ? serializeCartImage(displayImage, locale) : null,
       },
       variant: {
         id: variant.id,

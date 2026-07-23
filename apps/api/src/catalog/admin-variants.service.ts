@@ -6,8 +6,22 @@ import {
 } from '@nestjs/common';
 import { Prisma, type ProductVariant } from '@prisma/client';
 import type { Request } from 'express';
+import { CheckoutPolicyService } from '../checkout/checkout-policy.service';
 import { PrismaService } from '../database/prisma.service';
+import {
+  approvedPublicationImageWhere,
+  availablePublicationQuantity,
+  publicationInventoryWhere,
+  publicationNotReady,
+} from './catalog-publication-readiness';
 import type { CreateProductVariantDto, UpdateProductVariantDto } from './dto/admin-variant.dto';
+
+type CatalogDatabase = PrismaService | Prisma.TransactionClient;
+
+const PUBLICATION_TRANSACTION_OPTIONS = {
+  isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+  timeout: 10_000,
+} as const;
 
 const metadata = (request: Request) => {
   const userAgent = request.get('user-agent');
@@ -53,7 +67,10 @@ const mutableFields = [
 
 @Injectable()
 export class AdminVariantsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly policies: CheckoutPolicyService,
+  ) {}
 
   async list(productId: string) {
     await this.requireProduct(productId);
@@ -169,6 +186,15 @@ export class AdminVariantsService {
         ? current.promotionalPriceMillimes
         : input.promotionalPriceMillimes;
     this.validatePrices(price, promotion);
+    const sku = input.sku === undefined ? current.sku : input.sku.trim();
+    const targetStatus = input.publicationStatus ?? current.publicationStatus;
+    if (targetStatus === 'PUBLISHED') {
+      if (current.publicationStatus === 'PUBLISHED') {
+        this.validatePublishedUpdate(sku, price, promotion);
+      } else {
+        await this.validatePublication(productId, variantId, sku, price, promotion);
+      }
+    }
     const attributeIds =
       input.attributeValueIds === undefined
         ? undefined
@@ -185,47 +211,68 @@ export class AdminVariantsService {
     if (input.publicationStatus === 'PUBLISHED') data.archivedAt = null;
 
     try {
-      const variant = await this.prisma.$transaction(async (transaction) => {
-        const updated = await transaction.productVariant.updateMany({
-          where: { id: variantId, productId, version: input.version, deletedAt: null },
-          data,
-        });
-        if (updated.count !== 1) throw this.versionConflict();
-        if (attributeIds) {
-          await transaction.productVariantAttribute.deleteMany({ where: { variantId } });
-          if (attributeIds.length > 0) {
-            await transaction.productVariantAttribute.createMany({
-              data: attributeIds.map((attributeValueId) => ({ variantId, attributeValueId })),
-            });
+      const variant = await this.prisma.$transaction(
+        async (transaction) => {
+          if (targetStatus === 'PUBLISHED') {
+            await this.lockPublicationOwner(transaction, productId, variantId, input.version);
+            if (current.publicationStatus === 'PUBLISHED') {
+              this.validatePublishedUpdate(sku, price, promotion);
+            } else {
+              await this.validatePublication(
+                productId,
+                variantId,
+                sku,
+                price,
+                promotion,
+                transaction,
+              );
+            }
           }
-        }
-        const changed = await transaction.productVariant.findUnique({ where: { id: variantId } });
-        if (!changed) throw this.notFound();
-        await transaction.auditLog.create({
-          data: {
-            ...metadata(request),
-            action: 'catalog.variant.update',
-            resourceType: 'ProductVariant',
-            resourceId: variantId,
-            beforeSummary: {
-              sku: current.sku,
-              priceMillimes: current.priceMillimes,
-              promotionalPriceMillimes: current.promotionalPriceMillimes,
-              publicationStatus: current.publicationStatus,
-              version: current.version,
+
+          const updated = await transaction.productVariant.updateMany({
+            where: { id: variantId, productId, version: input.version, deletedAt: null },
+            data,
+          });
+          if (updated.count !== 1) throw this.versionConflict();
+          if (attributeIds) {
+            await transaction.productVariantAttribute.deleteMany({ where: { variantId } });
+            if (attributeIds.length > 0) {
+              await transaction.productVariantAttribute.createMany({
+                data: attributeIds.map((attributeValueId) => ({ variantId, attributeValueId })),
+              });
+            }
+          }
+          const changed = await transaction.productVariant.findUnique({
+            where: { id: variantId },
+          });
+          if (!changed) throw this.notFound();
+          await transaction.auditLog.create({
+            data: {
+              ...metadata(request),
+              action: 'catalog.variant.update',
+              resourceType: 'ProductVariant',
+              resourceId: variantId,
+              beforeSummary: {
+                sku: current.sku,
+                priceMillimes: current.priceMillimes,
+                promotionalPriceMillimes: current.promotionalPriceMillimes,
+                publicationStatus: current.publicationStatus,
+                version: current.version,
+              },
+              afterSummary: {
+                sku: changed.sku,
+                priceMillimes: changed.priceMillimes,
+                promotionalPriceMillimes: changed.promotionalPriceMillimes,
+                publicationStatus: changed.publicationStatus,
+                attributeValueIds: attributeIds,
+                version: changed.version,
+              },
             },
-            afterSummary: {
-              sku: changed.sku,
-              priceMillimes: changed.priceMillimes,
-              promotionalPriceMillimes: changed.promotionalPriceMillimes,
-              publicationStatus: changed.publicationStatus,
-              attributeValueIds: attributeIds,
-              version: changed.version,
-            },
-          },
-        });
-        return changed;
-      });
+          });
+          return changed;
+        },
+        targetStatus === 'PUBLISHED' ? PUBLICATION_TRANSACTION_OPTIONS : undefined,
+      );
       return response(variant);
     } catch (error) {
       this.rethrowUnique(error);
@@ -337,6 +384,127 @@ export class AdminVariantsService {
     }
   }
 
+  private async validatePublication(
+    productId: string,
+    variantId: string,
+    sku: string,
+    price: number,
+    promotionalPrice: number | null,
+    database: CatalogDatabase = this.prisma,
+  ): Promise<void> {
+    const now = new Date();
+    const [
+      product,
+      duplicateSku,
+      inventoryItems,
+      imageCount,
+      unresolvedImageCount,
+      deliveryBlocker,
+    ] = await Promise.all([
+      database.product.findFirst({
+        where: { id: productId, deletedAt: null },
+        select: {
+          id: true,
+          archivedAt: true,
+          requiresPricing: true,
+          requiresStock: true,
+          needsMediaReview: true,
+        },
+      }),
+      database.productVariant.findFirst({
+        where: { id: { not: variantId }, sku },
+        select: { id: true },
+      }),
+      database.inventoryItem.findMany({
+        where: { variantId, ...publicationInventoryWhere(now) },
+        select: {
+          onHandQuantity: true,
+          reservations: {
+            where: { state: 'ACTIVE', expiresAt: { gt: now } },
+            select: { quantity: true },
+          },
+        },
+      }),
+      database.productImage.count({
+        where: {
+          ...approvedPublicationImageWhere,
+          OR: [
+            { productId, variantId: null },
+            { productId: null, variantId },
+          ],
+        },
+      }),
+      database.productImage.count({
+        where: {
+          deletedAt: null,
+          moderationStatus: { in: ['PENDING', 'QUARANTINED'] },
+          OR: [
+            { productId, variantId: null },
+            { productId: null, variant: { is: { productId, deletedAt: null } } },
+          ],
+        },
+      }),
+      this.deliveryPublicationBlocker(database, now),
+    ]);
+    if (!product) throw this.notFound();
+    if (product.archivedAt) {
+      throw new ConflictException({
+        code: 'PRODUCT_ARCHIVED',
+        message: 'Restore the product before publishing a variant.',
+      });
+    }
+
+    const blockers: string[] = [];
+    const availableQuantity = availablePublicationQuantity(inventoryItems);
+    if (product.requiresPricing && price <= 0) blockers.push('PRICING_REVIEW_REQUIRED');
+    if (product.requiresStock && availableQuantity <= 0) blockers.push('STOCK_REVIEW_REQUIRED');
+    if (product.needsMediaReview && imageCount === 0) blockers.push('MEDIA_REVIEW_REQUIRED');
+    if (unresolvedImageCount > 0) blockers.push('MEDIA_REVIEW_PENDING');
+    if (product.needsMediaReview) blockers.push('MEDIA_REVIEW_CONFIRMATION_REQUIRED');
+    if (!sku.trim()) blockers.push('VARIANT_SKU_INVALID');
+    if (duplicateSku) blockers.push('VARIANT_SKU_DUPLICATE');
+    if (price <= 0 || (promotionalPrice !== null && promotionalPrice <= 0)) {
+      blockers.push('NON_POSITIVE_PRICE');
+    }
+    if (availableQuantity <= 0) {
+      blockers.push('AVAILABLE_STOCK_MISSING');
+    }
+    if (imageCount === 0) blockers.push('APPROVED_IMAGE_MISSING');
+    if (deliveryBlocker) blockers.push(deliveryBlocker);
+    if (blockers.length > 0) throw publicationNotReady('variant', blockers);
+  }
+
+  private async lockPublicationOwner(
+    transaction: Prisma.TransactionClient,
+    productId: string,
+    variantId: string,
+    version: number,
+  ): Promise<void> {
+    const product = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM Product
+      WHERE id = ${productId} AND deletedAt IS NULL
+      FOR UPDATE
+    `);
+    if (product.length !== 1) throw this.notFound();
+    const variant = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM ProductVariant
+      WHERE id = ${variantId}
+        AND productId = ${productId}
+        AND version = ${version}
+        AND deletedAt IS NULL
+      FOR UPDATE
+    `);
+    if (variant.length !== 1) throw this.versionConflict();
+  }
+
+  private async deliveryPublicationBlocker(
+    database: CatalogDatabase,
+    now: Date,
+  ): Promise<'DELIVERY_METHOD_MISSING' | null> {
+    const policy = await this.policies.evaluate(now, database);
+    return policy.blockers.includes('DELIVERY_METHOD_MISSING') ? 'DELIVERY_METHOD_MISSING' : null;
+  }
+
   private validatePrices(price: number, promotion: number | null): void {
     if (promotion !== null && promotion > price) {
       throw new BadRequestException({
@@ -346,7 +514,19 @@ export class AdminVariantsService {
     }
   }
 
+  private validatePublishedUpdate(sku: string, price: number, promotion: number | null): void {
+    const blockers: string[] = [];
+    if (!sku.trim()) blockers.push('VARIANT_SKU_INVALID');
+    if (price <= 0 || (promotion !== null && promotion <= 0)) {
+      blockers.push('NON_POSITIVE_PRICE');
+    }
+    if (blockers.length > 0) throw publicationNotReady('variant', blockers);
+  }
+
   private rethrowUnique(error: unknown): never {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2034') {
+      throw this.versionConflict();
+    }
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       throw new ConflictException({
         code: 'VARIANT_IDENTIFIER_CONFLICT',
