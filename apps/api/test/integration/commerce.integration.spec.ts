@@ -400,10 +400,21 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
       createCustomer(prisma),
     ]);
     const product = await createSellableVariant(prisma, foundation, { onHand: 1 });
-    const [firstInput, secondInput] = await Promise.all([
-      checkoutInput(prisma, firstCustomer.id, product.variant.id, foundation.validGeography),
-      checkoutInput(prisma, secondCustomer.id, product.variant.id, foundation.validGeography),
-    ]);
+    // Prepare the independent carts before starting the concurrency assertion. Running these
+    // fixture transactions together can make InnoDB deadlock on cart-item FK/gap locks and
+    // fail before the checkout race under test has started.
+    const firstInput = await checkoutInput(
+      prisma,
+      firstCustomer.id,
+      product.variant.id,
+      foundation.validGeography,
+    );
+    const secondInput = await checkoutInput(
+      prisma,
+      secondCustomer.id,
+      product.variant.id,
+      foundation.validGeography,
+    );
 
     const outcomes = await Promise.allSettled([
       checkout.create(firstInput, key('final-unit-a'), firstCustomer.id, requestFixture()),
