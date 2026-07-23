@@ -52,6 +52,18 @@ An admin request additionally requires:
 
 Only hashes of session, verification, reset, recovery, and CSRF tokens are stored. TOTP secrets are encrypted with an external key and key identifier. The structural seed creates no user or administrator. The first administrator must be created by the secure interactive CLI.
 
+## Catalog import, provenance, and publication readiness
+
+`CatalogImportBatch` is the durable receipt for a CSV, JSON, or reviewed official-source preview/apply. Its import key is scoped by dry-run/apply mode, the canonical payload is fingerprinted, and apply rechecks the stored preview before writing inside one transaction. If concurrent callers race on the apply-mode unique key, the loser reloads the committed row and returns it only after the fingerprint matches; a different payload conflicts and a unique failure without that winner remains an atomic-apply failure. `CatalogImportRow` records the row result, linked product/variant, before-state snapshot, and post-write version used by the guarded rollback. `CatalogSourceRecord` records an allowlisted source URL hash, verified time, payload or image checksum, and exactly one product, variant, or image owner. Replacing an image source slot changes the prior canonical external key to a reserved historical key derived from its immutable row ID, without changing its provenance or image owner, then creates a new canonical record for the replacement.
+
+`Flavor` is a relational bilingual taxonomy keyed by canonical name and category. A variant may reference one flavor and records normalized nicotine strength separately; device color remains a different field. Product family/model, puff count, product type, flavor, nicotine strength, and bounded price filters are therefore queryable without parsing display names.
+
+Imported products set `requiresPricing`, `requiresStock`, and `needsMediaReview`. New variants remain `DRAFT`; their selling-price placeholder is non-public and their unknown supplier `costMillimes` is `NULL`. Imports create no supplier, inventory item, batch, or stock movement and cannot publish a variant. Normal publication checks require valid identity, positive real price, available unexpired inventory, approved media, and active fulfillment pricing before an imported product can become public.
+
+The authoritative draft-to-published transition locks the owning product and, where applicable, variant before repeating the catalog, media, live inventory/reservation, and delivery-policy checks in a serializable transaction. A conflicting dependency update is observed or rejected; a stale preflight result is never sufficient to publish.
+
+Product-image and source-record ownership use database `CHECK` constraints for exactly one owner. Their owner foreign keys use `RESTRICT` rather than cascading deletion because MySQL does not permit the required checked cascade combination and provenance must not disappear with an ordinary catalog mutation. Normal catalog lifecycle remains soft-delete/archive.
+
 ## Inventory authority and availability
 
 `InventoryItem.onHandQuantity` is the authoritative physical quantity for one variant, location, and lot. `InventoryItem.version` supports optimistic conflict detection. There is deliberately no persisted `reservedQuantity` or `availableQuantity`, because duplicated counters drift under retries and failure recovery.
@@ -180,6 +192,7 @@ Mutable high-contention or safety-relevant records use an update condition equiv
 
 - `User.emailNormalized` and `CustomerProfile.phoneE164` are unique login/deduplication keys; `phoneSearch` supports normalized customer search.
 - catalog slug, SKU, and barcode uniqueness prevents ambiguous public and operational identifiers; publication/category/brand indexes serve storefront lists.
+- catalog import key/mode, batch status/date, row status/identity, source/entity/external key, flavor/publication, puff/publication, and readiness-flag indexes serve bounded preview, verification, storefront filtering, and operator review.
 - `(variantId, locationId, lotKey)` identifies an inventory bucket; active/expiry reservation indexes serve locked availability and cleanup.
 - unique `Order.orderNumber` and `OrderIdempotencyKey.keyHash` prevent ambiguous or duplicate checkout records.
 - order customer/status/payment plus creation time serve history, work queues, and bounded reporting.
@@ -240,6 +253,12 @@ Never run `prisma migrate dev`, `prisma db push`, or automatic destructive reset
 
 `20260720160000_cash_collection_idempotency` adds hashed request/key receipts for replay-safe physical COD collection. It extends the notification event vocabulary for internal new-order, security, and low-stock email; adds validated operational-alert settings through the structural seed; and backfills deterministic `media.object.delete.requested` events for already soft-deleted image objects that may still require cleanup. Existing notification rows and live catalog media are not rewritten. The nullable cash fields leave existing collections valid; a key is recorded only by a new collection operation.
 
+`20260720213000_catalog_import_and_verified_media` adds catalog import batches/rows/source provenance, relational flavors, Wotofo product types, product readiness flags, variant nicotine strength, image filename/update metadata, reviewed indexes, and exact-owner checks. It does not import a catalog or change publication state. Product-image and source-record ownership foreign keys are restrictive so MySQL can enforce the owner checks and preserve provenance.
+
+`20260721011000_nullable_unknown_variant_cost` makes `ProductVariant.costMillimes` nullable. It converts only zero costs on variants linked to a `WOTOFO_OFFICIAL` variant source record to `NULL`; it does not rewrite a manual nonzero cost or an unrelated variant. This distinguishes an unknown procurement cost from a real zero and does not affect checkout selling-price authority.
+
+`20260721023000_unverified_operator_source_urls` makes `CatalogSourceRecord.verifiedAt` nullable. Operator-uploaded URLs are marked `OPERATOR_SUPPLIED_UNVERIFIED` and receive no verification timestamp; official Wotofo records retain a verified timestamp and explicit `OFFICIAL_SOURCE_VERIFIED` metadata.
+
 ## Structural seed safety
 
 `prisma/seed.ts` is idempotent and contains only:
@@ -251,7 +270,7 @@ Never run `prisma migrate dev`, `prisma db push`, or automatic destructive reset
 - disabled-by-default sensitive feature flags;
 - the order-number sequence counter.
 
-The six controls are `age_gate.entry.enabled`, `age_gate.checkout.enabled`, `consent.terms.required`, `consent.privacy.required`, `consent.recording.enabled`, and `delivery.age_verification_required`. It creates no user, administrator, customer, product, variant, stock, delivery rate, pickup, provider credential, or published document. It does not seed `legal_review.completed`; a legacy row has no checkout effect. Empty store identity/contact settings and missing delivery configuration continue to block checkout. Never add a default password or production administrator to this seed.
+The six controls are `age_gate.entry.enabled`, `age_gate.checkout.enabled`, `consent.terms.required`, `consent.privacy.required`, `consent.recording.enabled`, and `delivery.age_verification_required`. It creates no user, administrator, customer, product, variant, catalog import batch, source record, image, stock, delivery rate, pickup, provider credential, or published document. It does not seed `legal_review.completed`; a legacy row has no checkout effect. Empty store identity/contact settings and missing delivery configuration continue to block checkout. Never add a default password or production administrator to this seed.
 
 ## Backup and restore implementation status
 

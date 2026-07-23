@@ -220,6 +220,18 @@ startup/reconciliation, protected off-site retention, or accepted full-service R
 8. Communicate actual data-loss window and manual reconciliation needs.
 9. Run a post-incident review and close recovery gaps.
 
+## Catalog import and media recovery
+
+Before applying a large catalog batch, create a committed MySQL backup artifact/manifest and confirm that the matching object-storage bucket is versioned or copied into the same recovery scope. Record the import key, preview and applied batch IDs, operator, source revision, database backup reference, object-storage recovery point, and verification-report checksum in the change record. Do not put the backup, real catalog export, or credentials in Git.
+
+The reviewed Wotofo workflow writes database records and object data in separate explicit phases. Database apply is atomic; official media download is idempotent per verified source record but necessarily performs external object writes. Recovery therefore has three distinct choices:
+
+1. use the guarded catalog rollback only when the applied batch is create-only and every imported record is still at its recorded version;
+2. preserve manually changed records and perform an audited forward correction when rollback reports a version/manual-review conflict; or
+3. restore MySQL and the corresponding object-storage point together in an isolated recovery workflow when broader corruption requires it.
+
+Catalog rollback archives products/variants and preserves receipts/provenance; it is not a database restore and does not roll object storage back in time. A database-only restore can leave unreferenced objects, while an object-only restore can leave database references to missing bytes. After any recovery, run `pnpm catalog:verify:wotofo`, verify a sample of stored checksums through the media API, inspect queued media-deletion events, and keep checkout disabled until catalog, inventory, delivery, and order/COD invariants have been reconciled. See [Catalog import and media operations](CATALOG_IMPORT_AND_MEDIA.md).
+
 ## Migration rollback
 
 Prisma migrations should use expand-contract and roll forward with a corrective migration. Before a destructive step, retain a tested backup and a compatible prior image. If point-in-time restoration is required, separately reconcile legitimate orders, inventory, delivery, and cash events that occurred after the chosen point; do not silently discard them.

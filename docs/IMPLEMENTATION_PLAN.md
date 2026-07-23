@@ -1,6 +1,6 @@
 # Implementation plan
 
-Last updated: 2026-07-20
+Last updated: 2026-07-21
 
 ## Delivery policy
 
@@ -30,9 +30,9 @@ The lockfile, not this summary, resolves transitive versions. Before controlled 
 | Phase                             | Scope                                                                         | Status                   | Recorded exit evidence                                                      |
 | --------------------------------- | ----------------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------- |
 | 1. Foundation                     | pnpm workspace, React, NestJS, worker, configuration, Docker, CI              | Implemented/local pass   | Frozen gate, production builds, healthy full Compose stack                  |
-| 2. Database                       | Complete Prisma model, migration, structural Tunisia/RBAC seed, indexes       | Implemented/local pass   | Six clean MySQL 8.4 migrations; safe seed; isolated restore                 |
+| 2. Database                       | Complete Prisma model, migration, structural Tunisia/RBAC seed, indexes       | Implemented/local pass   | MySQL 8.4 migration/seed checks; safe seed; isolated restore                |
 | 3. Authentication and RBAC        | Separate customer/admin authentication, sessions, 2FA, permissions, admin CLI | Implemented/local pass   | Realm/CSRF/TOTP/RBAC positive and negative tests                            |
-| 4. Catalog                        | Products, variants, taxonomy, suppliers, images, admin CRUD, storefront       | Implemented/local pass   | CRUD/media/archive/filter/UI and upload-security tests                      |
+| 4. Catalog                        | Products, variants, taxonomy, suppliers, images, admin CRUD, storefront       | Implemented/local pass   | CRUD/media/import/archive/filter/UI tests; Wotofo 19/321/145 verification   |
 | 5. Inventory                      | Locations, movements, reservations, batch/expiry, concurrency                 | Implemented/local pass   | Receipt/adjustment/transfer plus full-target final-unit race                |
 | 6. Geography and delivery pricing | Tunisia hierarchy, zones, rates, pickup, deterministic resolver               | Implemented/local pass   | 24 governorates and deterministic method/rate validation                    |
 | 7. Cart and checkout              | Customer carts, authoritative totals, COD, reservations and idempotency       | Implemented/local pass   | Real browser checkout/replay and 50-checkout/20-replay load                 |
@@ -85,7 +85,8 @@ Fresh-database operational defaults are `checkout.enabled=true` and `prelaunch.m
 
 ### Phases 4–7 — commerce core
 
-- Catalog/media, promotion validation, supplier/batch operations, product/variant/taxonomy writes, archival, ordering, secure image upload, durable deletion, and production-scale verification are implemented and covered by the release, browser, and load gates.
+- Catalog/media, promotion validation, supplier/batch operations, product/variant/taxonomy writes, archival, ordering, secure image upload, durable deletion, and production-scale verification are implemented and covered by the release, browser, and load gates. Imported-media review closes through a distinct audited, recent-authenticated draft transition only after every pending/quarantined image is resolved and an approved eligible image remains; it never publishes or clears pricing/stock controls.
+- Catalog import now uses persisted CSV/JSON previews, canonical payload fingerprints, bounded validation, explicit replay-safe apply, row receipts, source provenance, audit, and a create-only version-guarded archival rollback. Concurrent identical apply calls converge on one fingerprint-validated receipt. Image-source overrides retain the prior source row and image link under a reserved historical key before creating the new canonical record. The reviewed official Wotofo path verifies 19 products and 321 deterministic variants against allowlisted source endpoints, then imports approved media through the normal validator/storage boundary. The recorded local media result is 145 stored images. All imported records remain drafts and real price, supplier cost, available stock, and publication remain operator work.
 - The current commerce API exposes bounded published catalog and facet reads; guarded/audited product, variant, brand, and category lifecycle operations; reservation-aware inventory reads and adjustments; bounded geography/delivery-option reads; authenticated customer cart operations; authoritative checkout-policy evaluation; and a non-reserving integer-millime quote.
 - `POST /api/v1/checkout/orders` is implemented for authenticated customers and COD only. One bounded `READ COMMITTED` transaction claims a customer-scoped hashed idempotency key, replays a completed identical request, validates authoritative policy/customer/catalog/pricing/delivery data, locks eligible inventory rows in stable order, subtracts active reservations, and creates immutable order/item/address/consent/fee snapshots, active reservations, initial order/delivery/COD records, a queued notification, audit evidence, and the completed idempotency result. Checkout reserves but does not decrement physical on-hand.
 - The public home surface uses a responsive French/Arabic dark-neon presentation with API-derived featured products, prices, availability, flavors, and categories. Decorative device artwork is code-native; empty catalogs remain explicit and no demonstration product claims, ratings, nicotine levels, stock, or delivery promises are fabricated.
@@ -125,6 +126,7 @@ Legal approval is recorded complete by owner instruction and no additional legal
 
 - Verified legal store identity and real store contact information in operational settings.
 - Real delivery coverage/rates and an approved pickup/courier operating process.
+- Real commercial prices, supplier/stock intake, and publication review for any imported catalog drafts.
 - Interactive creation and TOTP enrollment of the first Super Administrator.
 - Approved manual courier process or optional provider credentials.
 - Production DNS/TLS, secrets, SMTP/SMS, object-storage, monitoring, and backup destinations.

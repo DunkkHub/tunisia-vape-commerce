@@ -40,7 +40,7 @@ corepack pnpm admin:create
 corepack pnpm dev
 ```
 
-Use `cp .env.example .env` on macOS/Linux. On Windows, `corepack pnpm <command>` avoids requiring a global pnpm shim. Detailed Docker, Dockerless Windows, migration, and start procedures are in [Local setup](docs/LOCAL_SETUP.md).
+Use `cp .env.example .env` on macOS/Linux. On Windows, `corepack pnpm <command>` avoids requiring a global pnpm shim. Detailed Docker, Dockerless Windows, migration, and start procedures are in [Local setup](docs/LOCAL_SETUP.md). Machines running XAMPP or WSL MySQL should also follow [Windows MySQL and phpMyAdmin troubleshooting](docs/WINDOWS_MYSQL_PHPMYADMIN.md); the repository's Docker MySQL uses host port `13306` to avoid the usual XAMPP `3306` listener.
 
 For production-shaped deployment, use `.env.production.example` as the variable contract, replace every placeholder through the operator's secret manager, and keep populated environment and secret files outside Git. See the [Deployment guide](docs/DEPLOYMENT.md).
 
@@ -74,7 +74,9 @@ All six default to `true` in a fresh structural seed and can be changed only thr
 
 ## Catalog and administration
 
-The public catalog supports combined search, category, brand, product type, flavor, featured, price-range, and allowlisted sort filters. Prices cross the API boundary as integer millimes. Public facets are bounded and follow the same publication and restriction policy as product reads.
+The public catalog supports combined search, category, brand, product type, flavor, puff-count, nicotine-strength, featured, price-range, and allowlisted sort filters. Prices cross the API boundary as integer millimes. Public facets are bounded and follow the same publication and restriction policy as product reads.
+
+The guarded catalog-import workflow supports versioned CSV/JSON previews, explicit field overrides, allowlisted operator-media acquisition, and a reviewed official Wotofo path. Generic URLs are disabled by default, remain unverified, and require manual review even after transport and raster validation. The recorded local Wotofo run created 19 draft products, 321 deterministic variants, and 145 approved stored images without inventing prices, costs, suppliers, or stock. Real price and inventory entry plus the normal media/delivery/publication checks remain mandatory. See [Catalog import and media operations](docs/CATALOG_IMPORT_AND_MEDIA.md).
 
 Administrator surfaces include writable product/variant and taxonomy operations, secure product media, batch inventory receipt and dual-controlled adjustments, transfers and movement history, orders, manual courier/manifests/status CSV operations, COD reconciliation and discrepancy resolution, customer lifecycle actions, settings transfer, access control, and audit/security reads. Capabilities that still lack complete production evidence are listed in the readiness report; documentation does not imply that an unfinished external provider is configured.
 
@@ -92,6 +94,8 @@ The gate performs frozen installation, Prisma generation and validation, formatt
 
 - [Buyer handoff](docs/BUYER_HANDOFF.md)
 - [Local and Docker setup](docs/LOCAL_SETUP.md)
+- [Windows MySQL and phpMyAdmin troubleshooting](docs/WINDOWS_MYSQL_PHPMYADMIN.md)
+- [Catalog import and media operations](docs/CATALOG_IMPORT_AND_MEDIA.md)
 - [Store configuration](docs/STORE_CONFIGURATION.md)
 - [Checkout and order lifecycle](docs/CHECKOUT_AND_ORDER_LIFECYCLE.md)
 - [Inventory operations](docs/INVENTORY_OPERATIONS.md)

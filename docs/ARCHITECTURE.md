@@ -28,7 +28,7 @@ Mailpit and MinIO in Docker Compose are development services, not production ser
 2. Nginx to web/API: private network; forwarded host, scheme, IP, and request ID are trusted only from known proxies.
 3. API/worker to MySQL: TLS where supported and separate least-privilege runtime/migration identities.
 4. API/worker to Redis: private authenticated/TLS connection in production with distinct key namespaces.
-5. API/worker to object storage and notification/courier providers: egress allowlist, timeouts, safe DNS/IP validation, credentials scoped to the adapter.
+5. API/worker to object storage, reviewed official catalog sources, and notification/courier providers: egress allowlist, timeouts, redirect/response bounds, safe DNS/IP validation where a provider is configurable, and credentials scoped to the adapter.
 6. Administrator to privileged APIs: separate authentication realm, mandatory TOTP, permission checks, recent authentication, and audit.
 
 ## Authentication architecture
@@ -54,6 +54,7 @@ For staging/production, use different storefront and admin hostnames with host-o
 
 NestJS modules follow the domains named in the product specification. Modules may call public application services, not another module's Prisma internals. The current API composes separate commerce, inventory, order intake, delivery configuration, manual delivery, cash, settings, health, access, and operations modules. Cross-domain operations are coordinated by explicit use cases:
 
+- Catalog import separates untrusted intake from mutation. A bounded CSV/JSON or reviewed Wotofo payload becomes a persisted dry-run receipt with row issues and a canonical fingerprint; explicit apply revalidates that receipt and writes catalog/source records atomically. The official media phase fetches only reviewed Wotofo/Shopify HTTPS paths with bounded concurrency/retry/redirects, then passes bytes through the same decode/re-encode/checksum and object-storage boundary as manual uploads. Imports cannot publish or create inventory, and version-guarded rollback only archives unchanged create-only records.
 - Checkout coordinates catalog, geography/rates, inventory, orders, consent, and a durable queued `Notification` plus its deterministic `OutboxEvent` in one database transaction. The worker source bridge only recovers eligible legacy notifications that predate that invariant.
 - Delivery transition coordinates delivery history, order projection, age outcome, inventory return workflow, COD collection, and notifications.
 - COD reconciliation coordinates collections, remittances, discrepancies, approval, and append-only audit.
@@ -110,6 +111,8 @@ Logical backup tooling uses `mysqldump --single-transaction`, streams SQL throug
 ## Caching
 
 Only public, non-sensitive, reconstructible reads are candidates for caching. Cache keys include locale and representation version. Catalog/settings changes publish invalidation events. Authorization, checkout totals, stock availability decisions, compliance gates, and COD balances are never trusted from stale cache.
+
+Public catalog filtering uses indexed relational product type, puff count, variant nicotine strength, flavor, brand, and integer-millime price fields. Source URLs and import payloads are provenance/receipt data, never browser authority or a substitute for current publication, pricing, or inventory state.
 
 ## Internationalization and locale
 

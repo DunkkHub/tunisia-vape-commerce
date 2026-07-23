@@ -93,7 +93,7 @@ Dashboard summaries are pointers. Financial and operational decisions must drill
 - Product, variant, category, and brand archival removes them from purchase while historical order snapshots remain.
 - On a fresh store, create and publish the first category and brand from the product editor before saving the first product. The editor exposes archive/restore separately; archived products cannot be edited as though they were active.
 - Price changes require the correct permission and are audited with safe before/after values.
-- Upload only operator-approved JPEG, PNG, or WebP rasters and supply meaningful French and Arabic alt text. Validation is synchronous; a successful upload is recorded as approved, not placed in an external moderation queue.
+- Upload only operator-approved JPEG, PNG, WebP, or AVIF rasters (AVIF only when supported by the installed image library) and supply meaningful French and Arabic alt text. Validation is synchronous; a successful upload is recorded as approved, not placed in an external moderation queue.
 - Never edit stock as a catalog field. Use inventory receipt, adjustment, transfer, reservation, or disposition commands with reason/evidence.
 - Record supplier stock through an expiring, idempotent batch receipt. Manual adjustments enter a 24-hour approval queue and the requester cannot approve or reject their own request. Transfers create paired source/destination movements in one transaction.
 - Returned stock remains in inspection until an Inventory Manager explicitly restocks/quarantines/damages/expires it.
@@ -103,11 +103,30 @@ Dashboard summaries are pointers. Financial and operational decisions must drill
 1. Open the product image list with `products.read`; choose the product owner or one exact variant owner and note its current owner version.
 2. With `products.update`, recent authentication, and the administrator CSRF token, upload the `file` plus non-empty `altTextFr`, `altTextAr`, and `expectedOwnerVersion`. Do not reuse customer-supplied filenames as labels.
 3. Review the rendered storefront/cart result in both locales. Update either alt-text field with the latest owner version when wording changes.
-4. Set one approved image primary and submit reorder requests containing every active image ID for that one owner exactly once.
-5. Use replacement to change bytes without losing order/primary metadata. Use delete to soft-retire an image; when a primary image is removed, the service promotes the next approved image when available.
-6. On `PRODUCT_MEDIA_VERSION_CONFLICT`, reload the product/variant and its image list. Never retry with a guessed version or edit image rows/object keys directly.
+4. For remote operator imports, open the bounded awaiting-review queue and inspect bytes through the administrator-only content route. Approve or reject each pending candidate. Approval preserves an existing approved primary; select a new primary separately only after comparison.
+5. Set one approved image primary and submit reorder requests containing every active image ID for that one owner exactly once.
+6. Use replacement to change bytes without losing order/primary metadata. Use delete to soft-retire an image; when a primary image is removed, the service promotes the next approved image when available.
+7. While a flagged product remains a draft, resolve every pending/quarantined image, retain at least one approved eligible image, enter the review reason, accept the explicit declaration, and use **Confirm media review**. The server records this separate versioned assertion without publishing the product or clearing its pricing/stock requirements. Publish eligible variants and then the product only through their normal actions.
+8. On `PRODUCT_MEDIA_VERSION_CONFLICT`, reload the product/variant and its image list. Never retry with a guessed version or edit image rows/object keys directly.
 
-The API ignores original filenames, generates non-guessable storage keys, verifies MIME plus magic bytes, fully decodes the raster, enforces byte/pixel limits, rejects SVG/executable/animated/trailing content, and records a SHA-256 checksum. Each image belongs to exactly one product or variant, and product-scoped lookup prevents cross-product image actions. Local development writes beneath the configured ignored upload directory; MinIO/S3 credentials stay in server environment variables and must never be copied into the browser or admin notes.
+The API sanitizes the original filename for audit display, generates non-guessable storage keys, verifies MIME plus magic bytes and the exact container boundary, fully decodes and safely re-encodes the raster, enforces byte/pixel limits, rejects SVG/executable/animated/trailing content, strips untrusted metadata, and records a SHA-256 checksum. Each image belongs to exactly one product or variant, and product-scoped lookup prevents cross-product image actions. Local development writes beneath the configured ignored upload directory; MinIO/S3 credentials stay in server environment variables and must never be copied into the browser or admin notes.
+
+### Catalog import workflow
+
+Open `/admin/catalog/imports` only with the `catalog.import` permission. The screen exposes bounded history/detail, the versioned CSV template, CSV/JSON preview, the reviewed official Wotofo preview, explicit apply, allowlisted-media import, and guarded rollback. All mutations require recent authentication and an exact typed confirmation; do not attempt to work around a failed receipt by editing the database.
+
+For CSV/JSON, download the template and preserve its exact version 1.0 headers. Preview first, inspect every row issue, and keep partial mode plus price/status/image overrides off unless a documented correction explicitly requires one. Formula-prefixed cells, duplicate identities, invalid bilingual flavor metadata, and invalid source URLs are rejected. Generic source images download only from exact hostnames configured in `CATALOG_IMPORT_MEDIA_HOSTS`; the server checks HTTPS/public DNS/redirects and raster bytes, but the result remains unverified and requires human media review. Leave the allowlist empty and use the normal image workflow when remote acquisition is unnecessary.
+
+For the reviewed Wotofo path:
+
+1. Use a stable import key for one exact reviewed payload and run the official preview.
+2. Confirm the receipt reports 19 products and 321 variants before apply.
+3. Apply the unchanged preview. It creates or updates drafts, never public products, inventory, suppliers, or verified commercial values.
+4. Run official media import for the applied batch. The recorded local result stored 145 approved images because shared official variant assets use product fallback instead of duplicate objects.
+5. Run verification and resolve every missing/rejected/manual-review item.
+6. Enter real price and stock through their normal guarded workflows, review both locales, then publish through the standard product/variant actions.
+
+An automatic rollback is available only for an unchanged create-only batch. It archives records rather than deleting history and stops atomically if a product or variant has been manually changed. See [Catalog import and media operations](CATALOG_IMPORT_AND_MEDIA.md) for commands, safeguards, official manifest corrections, backup requirements, and publication gates.
 
 ## Orders and delivery
 

@@ -29,7 +29,7 @@ corepack pnpm prisma:seed
 corepack pnpm admin:create
 ```
 
-The latest expected migration is `20260720160000_cash_collection_idempotency`. Prove clean installation and a representative upgrade containing existing orders, inventory, deliveries, and cash records. The seed creates structure only and preserves existing setting values on rerun.
+The latest expected migration is `20260721023000_unverified_operator_source_urls`. Prove clean installation and a representative upgrade containing existing orders, inventory, deliveries, cash records, catalog/media, and an import receipt. The seed creates structure only and preserves existing setting values on rerun.
 
 ## 3. Configure the store
 
@@ -37,13 +37,15 @@ Follow [Store configuration](STORE_CONFIGURATION.md):
 
 - replace all placeholder secrets and credentials;
 - set store name, phone, email, and address;
-- create real products/variants without demonstration production data;
+- create real products/variants without demonstration production data, or explicitly run and review the optional catalog importer;
 - create an inventory location and audited stock buckets;
 - configure at least one active pickup or a supported zone with valid, unambiguous rates;
 - review the six age/consent/delivery controls and minimum age; and
 - confirm `GET /api/v1/checkout/policy` returns the intended requirements and no blockers.
 
 Legal approval and legal-document publication are not checkout or software-readiness inputs. The optional [purchaser/operator checklist](LEGAL_AND_COMPLIANCE_CHECKLIST.md) is separate from this handoff.
+
+If the reviewed Wotofo workflow is in scope, follow [Catalog import and media operations](CATALOG_IMPORT_AND_MEDIA.md). Its recorded local evidence is 19 draft products, 321 variants, and 145 stored approved images. The importer deliberately supplies no real selling prices, supplier costs, inventory, or publication approval. Enter and verify those values through the normal catalog and inventory workflows, rerun the verifier, and publish only after every product passes media, price, stock, and delivery readiness. Back up both MySQL and object storage before apply; catalog rollback is limited to unchanged create-only batches and is not a backup substitute.
 
 ## 4. Establish named administration
 
