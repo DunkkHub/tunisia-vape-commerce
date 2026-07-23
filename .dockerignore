@@ -5,6 +5,10 @@
 .env
 .env.*
 !.env.example
+secrets
+**/secrets
+uploads
+**/uploads
 node_modules
 **/node_modules
 **/dist

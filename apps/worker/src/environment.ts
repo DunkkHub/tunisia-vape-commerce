@@ -5,6 +5,9 @@ import { z } from 'zod';
 const booleanFromEnvironment = z.enum(['true', 'false']).transform((value) => value === 'true');
 const notificationAdapterSchema = z.enum(['console', 'smtp', 'smtp-webhook', 'disabled']);
 
+const hasUnsafeProductionPlaceholder = (value: string): boolean =>
+  /(?:change[_-]?me|development[-_]?only|replace(?:[_-]?with)?|placeholder)/i.test(value);
+
 const addConfigurationIssue = (context: z.RefinementCtx, path: string, message: string): void => {
   context.addIssue({ code: 'custom', path: [path], message });
 };
@@ -202,10 +205,26 @@ const schema = z
     }
 
     if (value.NODE_ENV === 'production') {
+      for (const [name, credential] of [
+        ['DATABASE_URL', value.DATABASE_URL],
+        ['REDIS_URL', value.REDIS_URL],
+        ['FIELD_ENCRYPTION_KEY', value.FIELD_ENCRYPTION_KEY],
+        ['SMTP_USER', value.SMTP_USER],
+        ['SMTP_PASSWORD', value.SMTP_PASSWORD],
+        ['SMS_WEBHOOK_AUTH_TOKEN', value.SMS_WEBHOOK_AUTH_TOKEN],
+      ] as const) {
+        if (hasUnsafeProductionPlaceholder(credential)) {
+          addConfigurationIssue(
+            context,
+            name,
+            `${name} contains an unsafe production placeholder.`,
+          );
+        }
+      }
       if (
         value.MEDIA_STORAGE_DRIVER === 's3' &&
-        [value.S3_ACCESS_KEY, value.S3_SECRET_KEY].some((credential) =>
-          credential?.includes('change_me'),
+        [value.S3_ACCESS_KEY, value.S3_SECRET_KEY].some(
+          (credential) => credential && hasUnsafeProductionPlaceholder(credential),
         )
       ) {
         addConfigurationIssue(
@@ -213,6 +232,13 @@ const schema = z
           'S3_SECRET_KEY',
           'S3 credentials contain an unsafe production default.',
         );
+      }
+      if (
+        value.MEDIA_STORAGE_DRIVER === 's3' &&
+        value.S3_ENDPOINT &&
+        !value.S3_ENDPOINT.startsWith('https://')
+      ) {
+        addConfigurationIssue(context, 'S3_ENDPOINT', 'Production S3_ENDPOINT must use HTTPS.');
       }
       if (value.NOTIFICATION_ADAPTER !== 'smtp-webhook') {
         addConfigurationIssue(
@@ -226,17 +252,6 @@ const schema = z
           context,
           'FIELD_ENCRYPTION_KEY',
           'Production FIELD_ENCRYPTION_KEY must contain at least 32 characters.',
-        );
-      }
-      if (
-        ['development-only', 'change_me'].some((fragment) =>
-          value.FIELD_ENCRYPTION_KEY.includes(fragment),
-        )
-      ) {
-        addConfigurationIssue(
-          context,
-          'FIELD_ENCRYPTION_KEY',
-          'Production FIELD_ENCRYPTION_KEY contains an unsafe placeholder.',
         );
       }
       if (!value.WEB_URL.startsWith('https://')) {

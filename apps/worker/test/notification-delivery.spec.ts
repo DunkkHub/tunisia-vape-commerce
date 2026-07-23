@@ -182,6 +182,28 @@ describe('notification environment validation', () => {
       SMS_WEBHOOK_URL: 'https://sms.example.com/v1/messages',
     });
   });
+
+  it('rejects production placeholders and plaintext object-storage endpoints', () => {
+    for (const override of [
+      { DATABASE_URL: 'mysql://worker:REPLACE_WITH_PASSWORD@mysql.internal:3306/store' },
+      { REDIS_URL: 'redis://:REPLACE_WITH_PASSWORD@redis.internal:6379/0' },
+      { FIELD_ENCRYPTION_KEY: 'REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS' },
+      { SMTP_USER: 'REPLACE_WITH_SMTP_USER' },
+      { SMTP_PASSWORD: 'REPLACE_WITH_AT_LEAST_16_RANDOM_CHARACTERS' },
+      { SMS_WEBHOOK_AUTH_TOKEN: 'REPLACE_WITH_PROVIDER_TOKEN' },
+    ]) {
+      expect(() => parseWorkerEnvironment({ ...productionInput(), ...override })).toThrow();
+    }
+    expect(() =>
+      parseWorkerEnvironment({
+        ...productionInput(),
+        MEDIA_STORAGE_DRIVER: 's3',
+        S3_ENDPOINT: 'http://objects.internal',
+        S3_ACCESS_KEY: 'scoped-access-key',
+        S3_SECRET_KEY: 'scoped-secret-key',
+      }),
+    ).toThrow();
+  });
 });
 
 describe('provider-neutral notification adapter', () => {

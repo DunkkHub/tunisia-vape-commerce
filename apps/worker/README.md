@@ -80,7 +80,7 @@ and batch sizes have validated `OUTBOX_*`, `WORKER_*`, and `RESERVATION_*` varia
 ## Operations and limitations
 
 Apply every migration through `pnpm prisma:migrate:deploy` before starting this worker. The API
-readiness check expects `20260720160000_cash_collection_idempotency` by default.
+readiness check expects `20260721023000_unverified_operator_source_urls` by default.
 Monitor `RETRY`, expired leases, oldest available event age, `DEAD_LETTER`, and heartbeat age. This
 foundation has no dead-letter replay UI or health-record retention job, and it has no proof of
 multi-instance/final-unit/provider behavior against production-shaped MySQL, Redis, SMTP, and SMS

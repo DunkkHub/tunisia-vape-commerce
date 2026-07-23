@@ -15,6 +15,7 @@ x-app-environment: &app-environment
   FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:-development-only-field-encryption-key-change-before-staging}
   MEDIA_STORAGE_DRIVER: ${MEDIA_STORAGE_DRIVER:-s3}
   MEDIA_LOCAL_ROOT: ${MEDIA_LOCAL_ROOT:-uploads/media}
+  CATALOG_IMPORT_MEDIA_HOSTS: ${CATALOG_IMPORT_MEDIA_HOSTS:-}
   S3_ENDPOINT: http://minio:9000
   S3_REGION: ${S3_REGION:-us-east-1}
   S3_BUCKET: ${S3_BUCKET:-vape-store}

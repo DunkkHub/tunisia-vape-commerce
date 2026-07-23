@@ -3,16 +3,18 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 test('migration and production Compose wiring preserve least privilege and private data services', async () => {
-  const [base, production, gateway, apiDockerfile, workerDockerfile] = await Promise.all([
-    readFile(new URL('../../docker-compose.yml', import.meta.url), 'utf8'),
-    readFile(new URL('../../docker-compose.production.yml', import.meta.url), 'utf8'),
-    readFile(
-      new URL('../../docker/nginx/production-gateway.conf.template', import.meta.url),
-      'utf8',
-    ),
-    readFile(new URL('../../docker/Dockerfile.api', import.meta.url), 'utf8'),
-    readFile(new URL('../../docker/Dockerfile.worker', import.meta.url), 'utf8'),
-  ]);
+  const [base, production, gateway, apiDockerfile, workerDockerfile, dockerignore] =
+    await Promise.all([
+      readFile(new URL('../../docker-compose.yml', import.meta.url), 'utf8'),
+      readFile(new URL('../../docker-compose.production.yml', import.meta.url), 'utf8'),
+      readFile(
+        new URL('../../docker/nginx/production-gateway.conf.template', import.meta.url),
+        'utf8',
+      ),
+      readFile(new URL('../../docker/Dockerfile.api', import.meta.url), 'utf8'),
+      readFile(new URL('../../docker/Dockerfile.worker', import.meta.url), 'utf8'),
+      readFile(new URL('../../.dockerignore', import.meta.url), 'utf8'),
+    ]);
   assert.match(
     base,
     /migrate:[\s\S]*DATABASE_URL: \$\{DATABASE_MIGRATION_URL:-mysql:\/\/migration_user/,
@@ -23,6 +25,7 @@ test('migration and production Compose wiring preserve least privilege and priva
   assert.match(production, /health\/ready/);
   assert.match(production, /ADMIN_WEB_URL: \$\{ADMIN_WEB_URL:\?/);
   assert.match(production, /OPENAPI_ENABLED: \$\{OPENAPI_ENABLED:-false\}/);
+  assert.match(production, /CATALOG_IMPORT_MEDIA_HOSTS: \$\{CATALOG_IMPORT_MEDIA_HOSTS:-\}/);
   assert.match(production, /production-gateway\.conf\.template/);
   assert.match(production, /STOREFRONT_HOST: \$\{STOREFRONT_HOST:\?/);
   assert.match(production, /ADMIN_HOST: \$\{ADMIN_HOST:\?/);
@@ -31,6 +34,11 @@ test('migration and production Compose wiring preserve least privilege and priva
   assert.match(gateway, /\^\/admin\(\?:\/\|\$\)/);
   assert.match(gateway, /auth\/admin/);
   assert.match(gateway, /api\/docs/);
+  assert.match(
+    gateway,
+    /catalog\/imports\/\[\^\/\]\+\/media\/apply\$ \{[\s\S]*proxy_read_timeout 7200s;/,
+  );
+  assert.match(gateway, /location \/api\/ \{[\s\S]*proxy_read_timeout 30s;/);
   assert.match(gateway, /server_name _;[\s\S]*return 444;/);
   assert.match(
     apiDockerfile,
@@ -44,4 +52,8 @@ test('migration and production Compose wiring preserve least privilege and priva
     );
   }
   assert.doesNotMatch(production, /change_me|development-only/);
+  assert.match(dockerignore, /^secrets$/m);
+  assert.match(dockerignore, /^\*\*\/secrets$/m);
+  assert.match(dockerignore, /^uploads$/m);
+  assert.match(dockerignore, /^\*\*\/uploads$/m);
 });
