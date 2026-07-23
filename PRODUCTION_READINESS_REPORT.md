@@ -103,7 +103,7 @@ idempotency, transaction, and COD validation.
 ## Release verification evidence
 
 The 2026-07-23 complete local `pnpm verify:release` command completed all 14 ordered stages in
-402.958 seconds on the committed release candidate. It used MySQL 8.4, distinct migration
+383.092 seconds on the final release-candidate source. It used MySQL 8.4, distinct migration
 and runtime users, Redis database 15 for integration, Redis database 14 for operational E2E, the
 frozen lockfile, and Chromium.
 
@@ -124,7 +124,13 @@ Results from that complete run:
 - operations: 26 tests passed;
 - API, worker, shared packages, and web production builds: passed;
 - fast Playwright: 8 passed and 2 project-matrix skips; and
-- real-service operational Playwright: 1 passed in 38.2 seconds.
+- real-service operational Playwright: 1 passed in 36.7 seconds.
+
+The promoted-candidate CI run exposed one fixture-only InnoDB deadlock while two independent carts
+were being prepared before the final-unit checkout race. The fixture now prepares those carts in a
+deterministic sequence; the two checkout transactions under assertion remain concurrent. The
+disposable integration suite then passed twice on separate fresh databases, including once inside
+the complete release command above.
 
 The operational browser test proved registration/login, atomic COD checkout and order creation,
 customer history, mandatory admin TOTP, simultaneous realm cookies, product create/edit and media
