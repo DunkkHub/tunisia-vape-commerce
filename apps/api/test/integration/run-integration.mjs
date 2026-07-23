@@ -154,18 +154,22 @@ try {
   );
   if (seedExitCode !== 0) throw new Error('Structural seed failed');
 
-  testExitCode = await execute(process.execPath, [vitestCli, 'run', 'test/integration'], {
-    cwd: apiRoot,
-    env: {
-      ...process.env,
-      NODE_ENV: 'test',
-      DATABASE_URL: runtimeUrl,
-      DATABASE_MIGRATION_URL: migrationUrl,
-      REDIS_URL: redisUrl.toString(),
-      TEST_REDIS_PREFIX: redisPrefix,
-      INTEGRATION_DATABASE_NAME: databaseName,
+  testExitCode = await execute(
+    process.execPath,
+    [vitestCli, 'run', 'test/integration', '--no-file-parallelism'],
+    {
+      cwd: apiRoot,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        DATABASE_URL: runtimeUrl,
+        DATABASE_MIGRATION_URL: migrationUrl,
+        REDIS_URL: redisUrl.toString(),
+        TEST_REDIS_PREFIX: redisPrefix,
+        INTEGRATION_DATABASE_NAME: databaseName,
+      },
     },
-  });
+  );
 } finally {
   const cleanupFailures = [];
   await cleanupRedisPrefix().catch((error) => cleanupFailures.push(error));
