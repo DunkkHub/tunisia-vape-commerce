@@ -103,7 +103,7 @@ idempotency, transaction, and COD validation.
 ## Release verification evidence
 
 The 2026-07-23 complete local `pnpm verify:release` command completed all 14 ordered stages in
-418.3 seconds on the current working-tree release candidate. It used MySQL 8.4, distinct migration
+402.958 seconds on the committed release candidate. It used MySQL 8.4, distinct migration
 and runtime users, Redis database 15 for integration, Redis database 14 for operational E2E, the
 frozen lockfile, and Chromium.
 
@@ -124,7 +124,7 @@ Results from that complete run:
 - operations: 26 tests passed;
 - API, worker, shared packages, and web production builds: passed;
 - fast Playwright: 8 passed and 2 project-matrix skips; and
-- real-service operational Playwright: 1 passed in 42.5 seconds.
+- real-service operational Playwright: 1 passed in 38.2 seconds.
 
 The operational browser test proved registration/login, atomic COD checkout and order creation,
 customer history, mandatory admin TOTP, simultaneous realm cookies, product create/edit and media
@@ -133,6 +133,12 @@ selection, two public media fetches, inventory receipt, order confirmation, cour
 delivery, collection, independent reconciliation, RBAC denial, and technical gates. Persisted
 terminal state was `DELIVERED`, `CASH_REMITTED`, and reservation `CONSUMED`, with reconciled
 inventory.
+
+An earlier final-gate attempt exposed a test-harness race: the two new publication/media integration
+files could create a product while the structural-seed integration file asserted the shared
+disposable database was empty. The runner now serializes real-database test files while retaining
+the explicit concurrent operations inside each file. A focused rerun passed 3 files/15 tests, and
+the subsequent uninterrupted 14-stage release command passed.
 
 Container execution found and repaired two production-only packaging issues before the final gate:
 the non-root migration entrypoint no longer invokes mutable pnpm workspace logic, and API/worker
@@ -232,9 +238,10 @@ appeared as a blocker.
 ## Local security and artifact evidence
 
 - `pnpm audit --audit-level high` reported no known high-severity dependency vulnerability.
-- Gitleaks 8.30.1 scanned all 20 Git commits (approximately 3.73 MB) with the four exact historical
-  placeholder/test fingerprints in `.gitleaksignore`; it found no leak. The ignore file has no
-  wildcard, path-wide, rule-wide, or entropy suppression.
+- Gitleaks 8.30.1 scanned Git history with the four exact historical placeholder/test fingerprints
+  in `.gitleaksignore`; it found no leak. The ignore file has no wildcard, path-wide, rule-wide, or
+  entropy suppression. A separate Trivy secret-only stream of all 493 tracked and nonignored files
+  also reported zero findings.
 - Trivy 0.69.3 scanned the freshly built API, worker, and web runtime images for fixed
   `HIGH`/`CRITICAL` vulnerabilities with the same `ignore-unfixed` policy as CI. Every image reported
   zero high and zero critical findings.
