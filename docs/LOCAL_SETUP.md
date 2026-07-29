@@ -111,7 +111,7 @@ URL before applying migrations.
 
 ## Migration state
 
-The latest expected migration is `20260721023000_unverified_operator_source_urls`. The catalog migrations add reviewed import receipts, flavor/source provenance, product readiness flags, exact image ownership constraints, nullable unknown supplier cost, and an explicit distinction between verified official sources and unverified operator URLs. The earlier `20260720010000_configurable_checkout_consent` migration makes `Order.ageConfirmedAt` nullable when `age_gate.checkout.enabled=false`. None of these migrations creates or requires legal documents, users, products, prices, or stock.
+The latest expected migration is `20260727090000_delivery_zone_operational_metadata`. It adds bounded minute-based delivery estimates and operational delivery-zone metadata while constraining persisted delivery fees to integer millimes. The catalog migrations add reviewed import receipts, flavor/source provenance, product readiness flags, exact image ownership constraints, nullable unknown supplier cost, and an explicit distinction between verified official sources and unverified operator URLs. The earlier `20260720010000_configurable_checkout_consent` migration makes `Order.ageConfirmedAt` nullable when `age_gate.checkout.enabled=false`. None of these migrations creates or requires legal documents, users, products, prices, stock, delivery zones, or delivery rates.
 
 For controlled staging or production, set `DATABASE_URL` to the least-privilege runtime identity and apply migrations only with the migration identity:
 

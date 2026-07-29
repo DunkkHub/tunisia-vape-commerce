@@ -29,7 +29,7 @@ corepack pnpm prisma:seed
 corepack pnpm admin:create
 ```
 
-The latest expected migration is `20260721023000_unverified_operator_source_urls`. Prove clean installation and a representative upgrade containing existing orders, inventory, deliveries, cash records, catalog/media, and an import receipt. The seed creates structure only and preserves existing setting values on rerun.
+The latest expected migration is `20260727090000_delivery_zone_operational_metadata`. Prove clean installation and a representative upgrade containing existing orders, inventory, deliveries, cash records, catalog/media, and an import receipt. The seed creates structure only and preserves existing setting values on rerun.
 
 ## 3. Configure the store
 

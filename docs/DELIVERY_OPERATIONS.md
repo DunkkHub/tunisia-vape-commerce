@@ -6,6 +6,12 @@ The backend state machine is authoritative. UI options are only hints. Every tra
 
 Age verification and cash collection are explicit outcomes, not assumptions inferred from a delivered status. A failed required age check cannot be delivered. Returned parcels are quarantined for inspection and stock is not restored automatically.
 
+The delivery configuration UI uses the active geography hierarchy to select governorate, delegation, or locality coverage by name; administrators never need to copy an internal geography identifier. Configuration codes are normalized to uppercase before validation. Mutation failures remain beside their originating form with a stable localized explanation and request reference; the generic service-retry panel is reserved for read failures.
+
+`/admin/delivery` opens on a guided configuration workspace and keeps daily fulfillment and advanced CSV transfers in separate selectable workspaces. The configuration view presents zone, coverage, active-rate, and activation steps in order. Each zone card identifies its missing prerequisite and disables only activation—not deactivation—until both coverage and a current active base rate are present. Optional pickup setup and detailed zone editing use native disclosures so the primary workflow stays scannable. These controls are presentation guidance; the server repeats every activation check.
+
+The idempotent structural seed loads the validated bilingual INS 2024 hierarchy: 24 governorates, 279 delegations, and 2,082 localities, including Bizerte's 14 delegations and 101 localities. The committed snapshot records Institut National de la Statistique (Tunisia), the `RGPH 2024 - population by sector, age and sex` dataset, source/download/license URLs, edition `2025-05-17`, retrieval `2026-07-27`, attribution, and source SHA-256 `70f8f9f872862d6947d08fc1b2775c66cf6b4d114a55f68092e7a4ce70d5d9ae`. Geography alone does not enable delivery: the seed creates no delivery zone, coverage link, rate, pickup, courier, or provider integration.
+
 ## Roles
 
 - Order Manager: confirmation, hold, preparation, cancellation under policy
@@ -86,6 +92,30 @@ Notifications are queued after commit, localized in French/Arabic, idempotent, a
 ## Manual couriers
 
 `GET /api/v1/admin/deliveries/courier-records` lists bounded records. Creation and optimistic update require `deliveries.update`, administrator CSRF, recent authentication, and an explicit confirmation string. Creation writes a `MANUAL` integration marker without credentials or provider configuration. Update refuses records carrying API/CSV integrations. Suspension and archival are non-destructive and fail with `COURIER_HAS_ACTIVE_CUSTODY` until every assigned delivery is terminal and every manifest is closed or cancelled. There is no courier-delete route.
+
+## Operator-supplied target service profiles
+
+The following July 2026 target profiles are recorded as operational input. They are not seed data, are not active merely because they appear in this document, and do not claim an external provider integration.
+
+| Profile         | Recorded target                                                                                                                                                                                                                           |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STANDARD_COD`  | Manual/Intigo operating label; national coverage; customer fee `8000` millimes (8.000 TND); cash on delivery; estimated 1–3 days; phone confirmation required; manual tracking; returns handled by the existing return-to-sender workflow |
+| Bizerte Express | 30–50 minute target; only explicitly approved Bizerte localities; manual driver assignment; WhatsApp as persisted internal driver-communication metadata; cash on delivery                                                                |
+
+Safe mapping to the current system:
+
+- Represent Intigo and each manual driver/provider as credential-free manual courier records. A label or note does not enable an Intigo API.
+- `STANDARD_COD` is an administrator UI preset, not a code-specific backend exception. It pre-fills `estimatedMinDays=1`, `estimatedMaxDays=3`, `paymentMethod=CASH_ON_DELIVERY`, `assignmentMode=MANUAL`, and `phoneConfirmationRequired=true`. National coverage still means linking every approved active locality, and the operator must separately create and activate a zone-scoped `BASE` rate of `8000` millimes.
+- `BIZERTE_EXPRESS` is a reserved server-validated code. Before activation and on every update while active, it requires day estimates to be null, exact `estimatedMinMinutes=30` and `estimatedMaxMinutes=50`, `paymentMethod=CASH_ON_DELIVERY`, `assignmentMode=MANUAL`, and `driverCommunication=WHATSAPP`. Active coverage must come from explicit delegation/locality links that resolve entirely inside Bizerte; a whole-governorate link or any outside-Bizerte locality is rejected.
+- COD, manually entered tracking numbers, and return-to-sender controls exist independently of a courier profile. The WhatsApp value is persisted internal operating metadata only; it does not send a message or enable a messaging adapter.
+
+For every zone, day estimates must be supplied as an ordered complete 0–365 pair or minute estimates as an ordered complete 1–10,080 pair; the units cannot be mixed. Money values are integer millimes from 0 to 1,000,000. A zero rate is valid only when the zone explicitly configures a zero free-delivery threshold. The API refuses to remove that explicit free setting while any active zero-fee rate remains and rechecks the invariant before zone activation.
+
+The rate-creation form and existing-rate editor are explicitly denominated in TND. They accept a dot or comma with at most three decimal places and convert the text with integer/`BigInt` arithmetic before sending `feeMillimes`; for example, `8` or `8,000` becomes the integer `8000`. Both show the converted millime/TND preview and enforce the one-million-millime ceiling. Updates also submit the current optimistic version, invalidate the delivery/checkout/storefront caches on success, and preserve a field-scoped error plus request reference on failure. Persisted values are reloaded from the API rather than retained only in component state.
+
+Activation remains blocked until the operator selects the exact intended coverage and supplies a valid customer fee. A zone must resolve to at least one active locality and own one current active zone-scoped base rate before activation. Never bypass this by editing MySQL directly.
+
+Customer-visible delivery methods, quotes, and created orders expose safe timing, COD, phone-confirmation, label, fee, and availability data only. They do not expose manual assignment, WhatsApp/phone driver communication, manual-review state, provider internals, or tracking operations. Those values remain available to authorized administrators and may be preserved in the immutable internal fulfillment snapshot.
 
 ## Manifests
 
