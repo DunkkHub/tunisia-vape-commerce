@@ -1,22 +1,10 @@
 import { ConflictException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import type { CheckoutPolicyService } from '../checkout/checkout-policy.service';
+import { eligibleOrderInventoryWhere } from '../inventory/inventory-eligibility';
 
-export const publicationInventoryWhere = (now: Date): Prisma.InventoryItemWhereInput => ({
-  onHandQuantity: { gt: 0 },
-  location: { is: { active: true, fulfillsOrders: true } },
-  OR: [
-    { batchId: null },
-    {
-      batch: {
-        is: {
-          archivedAt: null,
-          OR: [{ expiryDate: null }, { expiryDate: { gt: now } }],
-        },
-      },
-    },
-  ],
-});
+export const publicationInventoryWhere = (now: Date): Prisma.InventoryItemWhereInput =>
+  eligibleOrderInventoryWhere(now);
 
 export const approvedPublicationImageWhere = {
   deletedAt: null,

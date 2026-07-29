@@ -199,6 +199,7 @@ export const createSellableVariant = async (
   options: { onHand?: number; published?: boolean } = {},
 ) => {
   const fixture = nextFixture('product');
+  const imageHash = fixtureCounter.toString(16).padStart(64, '0');
   const published = options.published ?? true;
   const product = await prisma.product.create({
     data: {
@@ -213,6 +214,22 @@ export const createSellableVariant = async (
       minimumAge: 18,
       publicationStatus: published ? 'PUBLISHED' : 'DRAFT',
       publishedAt: published ? new Date(Date.now() - 60_000) : null,
+      images: {
+        create: {
+          objectKey: `integration/${fixture}.png`,
+          objectKeyHash: imageHash,
+          bucket: 'integration',
+          contentType: 'image/png',
+          byteSize: 1,
+          checksumSha256: imageHash,
+          width: 1,
+          height: 1,
+          altTextFr: fixture,
+          altTextAr: fixture,
+          isPrimary: true,
+          moderationStatus: 'APPROVED',
+        },
+      },
       variants: {
         create: {
           nameFr: `${fixture} variant`,

@@ -1,10 +1,27 @@
+import { ConflictException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
-import type { Product } from '@prisma/client';
+import { Prisma, type Product } from '@prisma/client';
 import type { CheckoutPolicyService } from '../checkout/checkout-policy.service';
 import type { PrismaService } from '../database/prisma.service';
 import { AdminProductsService } from './admin-products.service';
 
 const context = { userId: 'admin-1', requestId: 'request-1' };
+
+const duplicateSlugError = () =>
+  new Prisma.PrismaClientKnownRequestError('duplicate product slug', {
+    code: 'P2002',
+    clientVersion: '6.19.3',
+    meta: { target: ['slug'] },
+  });
+
+const expectSlugConflict = (error: unknown) => {
+  expect(error).toBeInstanceOf(ConflictException);
+  expect((error as ConflictException).getResponse()).toEqual({
+    code: 'PRODUCT_SLUG_CONFLICT',
+    message: 'The product slug is already assigned to another product.',
+    errors: { slug: ['The product slug is already assigned to another product.'] },
+  });
+};
 
 const checkoutPolicyFixture = (blockers: string[] = []) => {
   const evaluate = vi.fn().mockResolvedValue({ blockers });
@@ -168,6 +185,38 @@ describe('AdminProductsService list', () => {
   });
 });
 
+describe('AdminProductsService product identifiers', () => {
+  it('maps duplicate slugs during product creation to a stable field conflict', async () => {
+    const transaction = {
+      product: { create: vi.fn().mockRejectedValue(duplicateSlugError()) },
+      auditLog: { create: vi.fn() },
+    };
+    const prisma = {
+      category: { findFirst: vi.fn().mockResolvedValue({ id: 'category-1' }) },
+      $transaction: vi.fn((callback: (client: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService;
+    const service = new AdminProductsService(prisma, checkoutPolicies());
+
+    const error = await service
+      .create(
+        {
+          categoryId: 'category-1',
+          nameFr: 'Produit',
+          nameAr: 'Produit',
+          slug: 'produit',
+          productType: 'E_LIQUID',
+        },
+        context,
+      )
+      .catch((caught: unknown) => caught);
+
+    expectSlugConflict(error);
+    expect(transaction.auditLog.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('AdminProductsService publication readiness', () => {
   const publicationPrisma = ({
     current = productRecord(),
@@ -222,6 +271,19 @@ describe('AdminProductsService publication readiness', () => {
     } as unknown as PrismaService;
     return { prisma, transaction, prismaTransaction, variantFindMany, imageCount };
   };
+
+  it('maps duplicate slugs during product updates to the same stable field conflict', async () => {
+    const { prisma, transaction } = publicationPrisma();
+    transaction.product.updateMany.mockRejectedValueOnce(duplicateSlugError());
+    const service = new AdminProductsService(prisma, checkoutPolicies());
+
+    const error = await service
+      .update('product-1', { version: 1, slug: 'existing-product' }, context)
+      .catch((caught: unknown) => caught);
+
+    expectSlugConflict(error);
+    expect(transaction.auditLog.create).not.toHaveBeenCalled();
+  });
 
   it('publishes a reviewed, priced, stocked and imaged product with operational delivery', async () => {
     const { prisma, transaction, prismaTransaction } = publicationPrisma();

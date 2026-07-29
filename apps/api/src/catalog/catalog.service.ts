@@ -10,6 +10,7 @@ import {
   buildPublicProductWhere,
   catalogProductOrderBy,
   normalizeCatalogFilter,
+  publicSellableVariantWhere,
 } from './catalog-policy';
 import type { BoundedPageQueryDto, CatalogProductsQueryDto } from './dto/catalog-query.dto';
 
@@ -59,11 +60,7 @@ const publicProductSelect = (now: Date) =>
     brand: { select: { name: true, slug: true } },
     images: publicImages,
     variants: {
-      where: {
-        publicationStatus: 'PUBLISHED',
-        archivedAt: null,
-        deletedAt: null,
-      },
+      where: publicSellableVariantWhere(),
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
       select: {
         id: true,
@@ -143,10 +140,10 @@ const displayPrice = (product: PublicProductRecord) => {
     promotional: number | null;
     effective: number;
   }> = [];
-  if (product.basePriceMillimes !== null && product.basePriceMillimes >= 0) {
+  if (product.basePriceMillimes !== null && product.basePriceMillimes > 0) {
     const promotional =
       product.promotionalPriceMillimes !== null &&
-      product.promotionalPriceMillimes >= 0 &&
+      product.promotionalPriceMillimes > 0 &&
       product.promotionalPriceMillimes <= product.basePriceMillimes
         ? product.promotionalPriceMillimes
         : null;
@@ -157,10 +154,10 @@ const displayPrice = (product: PublicProductRecord) => {
     });
   }
   for (const variant of product.variants) {
-    if (variant.priceMillimes < 0) continue;
+    if (variant.priceMillimes <= 0) continue;
     const promotional =
       variant.promotionalPriceMillimes !== null &&
-      variant.promotionalPriceMillimes >= 0 &&
+      variant.promotionalPriceMillimes > 0 &&
       variant.promotionalPriceMillimes <= variant.priceMillimes
         ? variant.promotionalPriceMillimes
         : null;
@@ -264,7 +261,7 @@ const serializeDetail = (product: PublicProductRecord, locale: StorefrontLocale)
     priceMillimes: variant.priceMillimes,
     promotionalPriceMillimes:
       variant.promotionalPriceMillimes !== null &&
-      variant.promotionalPriceMillimes >= 0 &&
+      variant.promotionalPriceMillimes > 0 &&
       variant.promotionalPriceMillimes <= variant.priceMillimes
         ? variant.promotionalPriceMillimes
         : null,

@@ -31,10 +31,11 @@ const delay = (milliseconds: number) =>
 const publicationError = (
   error: unknown,
   code: 'PRODUCT_PUBLICATION_NOT_READY' | 'VARIANT_PUBLICATION_NOT_READY',
+  blocker = 'AVAILABLE_STOCK_MISSING',
 ) => {
   expect(error).toMatchObject({ response: { code } });
   const response = (error as { response: { blockers: unknown } }).response;
-  expect(response.blockers).toContain('AVAILABLE_STOCK_MISSING');
+  expect(response.blockers).toContain(blocker);
 };
 
 describe.sequential('catalog publication concurrency on disposable MySQL', () => {
@@ -56,12 +57,13 @@ describe.sequential('catalog publication concurrency on disposable MySQL', () =>
   let categoryId: string;
   let locationId: string;
   let zoneId: string;
+  let adminUserId: string;
   const fixtureProductIds: string[] = [];
 
   beforeAll(async () => {
     await prisma.$connect();
     const fixture = suffix();
-    const [category, location, zone] = await Promise.all([
+    const [category, location, zone, admin] = await Promise.all([
       prisma.category.create({
         data: {
           nameFr: `Publication ${fixture}`,
@@ -88,6 +90,15 @@ describe.sequential('catalog publication concurrency on disposable MySQL', () =>
           temporarilySuspended: false,
         },
       }),
+      prisma.user.create({
+        data: {
+          audience: 'ADMIN',
+          email: `publication-${fixture}@example.test`,
+          emailNormalized: `publication-${fixture}@example.test`,
+          passwordHash: 'integration-only-not-a-login-credential',
+          status: 'ACTIVE',
+        },
+      }),
     ]);
     await prisma.deliveryRate.create({
       data: {
@@ -101,6 +112,7 @@ describe.sequential('catalog publication concurrency on disposable MySQL', () =>
     categoryId = category.id;
     locationId = location.id;
     zoneId = zone.id;
+    adminUserId = admin.id;
   });
 
   const removePublicationFixtures = async () => {
@@ -132,6 +144,8 @@ describe.sequential('catalog publication concurrency on disposable MySQL', () =>
       await prisma.deliveryZone.delete({ where: { id: zoneId } });
       await prisma.inventoryLocation.delete({ where: { id: locationId } });
       await prisma.category.delete({ where: { id: categoryId } });
+      await prisma.auditLog.deleteMany({ where: { actorUserId: adminUserId } });
+      await prisma.user.delete({ where: { id: adminUserId } });
     } finally {
       await prisma.$disconnect();
     }
@@ -187,6 +201,17 @@ describe.sequential('catalog publication concurrency on disposable MySQL', () =>
     });
     return { product, variant, inventory };
   };
+
+  const publishFixtureOwner = (productId: string) =>
+    prisma.product.update({
+      where: { id: productId },
+      data: {
+        publicationStatus: 'PUBLISHED',
+        publishedAt: new Date(),
+        suspendedAt: null,
+        archivedAt: null,
+      },
+    });
 
   const removeStockWhilePublicationWaits = async (
     inventoryId: string,
@@ -282,5 +307,62 @@ describe.sequential('catalog publication concurrency on disposable MySQL', () =>
     await expect(
       prisma.productVariant.findUniqueOrThrow({ where: { id: fixture.variant.id } }),
     ).resolves.toMatchObject({ publicationStatus: 'DRAFT', version: fixture.variant.version });
+  });
+
+  it('does not archive the last sellable variant of a published product', async () => {
+    const fixture = await createPublicationFixture(true);
+    await publishFixtureOwner(fixture.product.id);
+
+    let rejection: unknown;
+    try {
+      await variants.archive(
+        fixture.product.id,
+        fixture.variant.id,
+        fixture.variant.version,
+        requestFixture(adminUserId),
+      );
+    } catch (error) {
+      rejection = error;
+    }
+    publicationError(rejection, 'PRODUCT_PUBLICATION_NOT_READY', 'SELLABLE_VARIANT_MISSING');
+
+    await expect(
+      prisma.productVariant.findUniqueOrThrow({ where: { id: fixture.variant.id } }),
+    ).resolves.toMatchObject({
+      publicationStatus: 'PUBLISHED',
+      archivedAt: null,
+      version: fixture.variant.version,
+    });
+  });
+
+  it('allows suspending a variant when another sellable variant keeps the product consistent', async () => {
+    const fixture = await createPublicationFixture(true);
+    const siblingSuffix = suffix();
+    await prisma.productVariant.create({
+      data: {
+        productId: fixture.product.id,
+        nameFr: `Variante alternative ${siblingSuffix}`,
+        nameAr: `Variante alternative ${siblingSuffix}`,
+        sku: `PUB-SIBLING-${siblingSuffix}`,
+        priceMillimes: 20_000,
+        publicationStatus: 'PUBLISHED',
+      },
+    });
+    await publishFixtureOwner(fixture.product.id);
+
+    await expect(
+      variants.update(
+        fixture.product.id,
+        fixture.variant.id,
+        { version: fixture.variant.version, publicationStatus: 'SUSPENDED' },
+        requestFixture(adminUserId),
+      ),
+    ).resolves.toMatchObject({
+      data: {
+        id: fixture.variant.id,
+        publicationStatus: 'SUSPENDED',
+        version: fixture.variant.version + 1,
+      },
+    });
   });
 });

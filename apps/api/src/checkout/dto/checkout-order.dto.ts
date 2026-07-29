@@ -133,6 +133,29 @@ export class CheckoutOrderDto extends CheckoutQuoteDto {
   consent!: CheckoutConsentDto;
 }
 
+export class CheckoutOrderFulfillmentDto {
+  @ApiProperty({ enum: ['COURIER', 'STORE_PICKUP'] })
+  type!: 'COURIER' | 'STORE_PICKUP';
+
+  @ApiProperty({ type: Number, nullable: true })
+  estimatedMinDays!: number | null;
+
+  @ApiProperty({ type: Number, nullable: true })
+  estimatedMaxDays!: number | null;
+
+  @ApiProperty({ type: Number, nullable: true })
+  estimatedMinMinutes!: number | null;
+
+  @ApiProperty({ type: Number, nullable: true })
+  estimatedMaxMinutes!: number | null;
+
+  @ApiProperty({ enum: ['CASH_ON_DELIVERY'], nullable: true })
+  paymentMethod!: 'CASH_ON_DELIVERY' | null;
+
+  @ApiProperty()
+  phoneConfirmationRequired!: boolean;
+}
+
 export class CheckoutOrderCreatedDataDto {
   @ApiProperty()
   id!: string;
@@ -169,6 +192,9 @@ export class CheckoutOrderCreatedDataDto {
 
   @ApiProperty({ enum: ['COURIER', 'STORE_PICKUP'] })
   deliveryMethodType!: 'COURIER' | 'STORE_PICKUP';
+
+  @ApiProperty({ type: CheckoutOrderFulfillmentDto })
+  fulfillment!: CheckoutOrderFulfillmentDto;
 
   @ApiProperty()
   createdAt!: string;

@@ -5,6 +5,8 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 
 import { storefrontClient } from '../../api/storefront-client';
 import { ServiceModePage } from '../../components/compliance/compliance-boundary';
+import { DeliveryMetadata } from '../../components/storefront/delivery-metadata';
+import { readDisplayableDeliveryMetadata } from '../../components/storefront/safe-delivery-metadata';
 import { Button } from '../../components/ui/button';
 import { EmptyState, LoadingState } from '../../components/ui/feedback';
 
@@ -87,7 +89,16 @@ export function LegalPage() {
 
 export function OrderConfirmationPage() {
   const { orderNumber = '' } = useParams();
+  const location = useLocation();
   const { t } = useTranslation();
+  const state =
+    location.state && typeof location.state === 'object'
+      ? (location.state as Record<string, unknown>)
+      : undefined;
+  const fulfillment =
+    state?.orderNumber === orderNumber
+      ? readDisplayableDeliveryMetadata(state.fulfillment)
+      : undefined;
   return (
     <section className="confirmation-page container page-pad">
       <div className="confirmation-icon">
@@ -100,6 +111,7 @@ export function OrderConfirmationPage() {
         <dt>{t('order.number')}</dt>
         <dd>{orderNumber}</dd>
       </dl>
+      <DeliveryMetadata metadata={fulfillment} />
       <Button asChild>
         <Link to="/catalog">{t('order.continue')}</Link>
       </Button>

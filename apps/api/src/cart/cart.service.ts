@@ -5,9 +5,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { buildPublicProductWhere } from '../catalog/catalog-policy';
+import { buildPublicProductWhere, publicSellableVariantWhere } from '../catalog/catalog-policy';
 import type { StorefrontLocale } from '../catalog/catalog.service';
 import { PrismaService } from '../database/prisma.service';
+import { eligibleOrderInventoryWhere } from '../inventory/inventory-eligibility';
 import { publicProductImageUrl } from '../product-media/product-media.service';
 import type { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import {
@@ -38,27 +39,8 @@ const cartImages = {
   select: cartImageSelect,
 };
 
-const eligibleInventoryWhere = (now: Date): Prisma.InventoryItemWhereInput => ({
-  onHandQuantity: { gt: 0 },
-  location: { is: { active: true, fulfillsOrders: true } },
-  OR: [
-    { batchId: null },
-    {
-      batch: {
-        is: {
-          archivedAt: null,
-          OR: [{ expiryDate: null }, { expiryDate: { gt: now } }],
-        },
-      },
-    },
-  ],
-});
-
 const publicVariantWhere = (now: Date): Prisma.ProductVariantWhereInput => ({
-  publicationStatus: 'PUBLISHED',
-  archivedAt: null,
-  deletedAt: null,
-  priceMillimes: { gte: 0 },
+  ...publicSellableVariantWhere(),
   product: { is: buildPublicProductWhere({}, now) },
 });
 
@@ -89,7 +71,7 @@ const cartVariantSelect = (now: Date) =>
       },
     },
     inventoryItems: {
-      where: eligibleInventoryWhere(now),
+      where: eligibleOrderInventoryWhere(now),
       orderBy: { id: 'asc' },
       select: {
         onHandQuantity: true,

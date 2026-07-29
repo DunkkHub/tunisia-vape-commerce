@@ -27,6 +27,10 @@ The storefront catalog independently supports brand, product type, flavor, price
 4. The receipt transaction locks the variant, location, and existing bucket; validates stable batch metadata and future expiry; creates the batch/bucket when absent; increments integer stock and version; then appends `PURCHASE_RECEIPT` and audit evidence atomically.
 5. Re-read the variant and immutable movement history to reconcile the physical receipt.
 
+The administrator page keeps the receipt and empty-bucket actions disabled while no active inventory location exists and reports that prerequisite beside the forms. An unchanged low-stock threshold is a no-op, not a stock failure. Safe API error codes are shown beside the operation that failed; the UI does not replace recent authentication, future-expiry validation, idempotency, or dual control.
+
+Supplier association remains optional at receipt. Until bounded supplier management and active-supplier options are implemented, the administrator page records only an external invoice or delivery-note reference and never accepts a raw `Supplier.id`. The API continues to validate a `supplierId` when trusted clients explicitly provide one.
+
 `POST /api/v1/admin/inventory/items` now creates an empty bucket only. A positive `initialQuantity` returns `INITIAL_STOCK_RECEIPT_REQUIRED`; this prevents arbitrary opening stock from bypassing traceable batch intake. Existing unbatched buckets remain readable and transferable.
 
 ## Dual-control adjustments

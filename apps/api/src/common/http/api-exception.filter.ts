@@ -11,7 +11,31 @@ interface NestErrorResponse {
   message?: string | string[];
   error?: string;
   code?: string;
+  blockers?: unknown;
 }
+
+const BLOCKER_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/;
+const MAX_BLOCKER_CODES = 20;
+
+const safeBlockerCodes = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+
+  const blockers: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (blockers.length >= MAX_BLOCKER_CODES) break;
+    if (
+      typeof candidate !== 'string' ||
+      !BLOCKER_CODE_PATTERN.test(candidate) ||
+      seen.has(candidate)
+    ) {
+      continue;
+    }
+    seen.add(candidate);
+    blockers.push(candidate);
+  }
+  return blockers;
+};
 
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
@@ -29,8 +53,10 @@ export class ApiExceptionFilter implements ExceptionFilter {
       }
       if ('error' in raw && typeof raw.error === 'string') detail.error = raw.error;
       if ('code' in raw && typeof raw.code === 'string') detail.code = raw.code;
+      if ('blockers' in raw) detail.blockers = raw.blockers;
     }
     const validationMessages = Array.isArray(detail.message) ? detail.message : undefined;
+    const blockers = safeBlockerCodes(detail.blockers);
 
     response.status(statusCode).json({
       statusCode,
@@ -50,6 +76,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
             : 'The request could not be completed.',
       requestId: request.requestId,
       ...(validationMessages ? { errors: { request: validationMessages } } : {}),
+      ...(blockers.length > 0 ? { blockers } : {}),
     });
   }
 }

@@ -70,7 +70,7 @@ const environmentSchema = z
       .min(1)
       .max(200)
       .regex(/^\d{14}_[a-z0-9_]+$/)
-      .default('20260721023000_unverified_operator_source_urls'),
+      .default('20260727090000_delivery_zone_operational_metadata'),
     COOKIE_SECRET: z.string().default('development-only-cookie-secret-change-me'),
     FIELD_ENCRYPTION_KEY: z.string().default('development-only-field-key-change-me'),
     CHECKOUT_ENABLED: booleanFromEnvironment('true'),

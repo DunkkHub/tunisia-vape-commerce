@@ -8,6 +8,7 @@ import { Link } from 'react-router-dom';
 import { adminDataClient } from '../../api/admin-data-client';
 import type { AdminInventoryPage } from '../../api/types';
 import { useAdminAuth } from '../../auth/admin-auth-context';
+import { AdminDisclosure } from '../../components/admin/admin-workspace';
 import { Button } from '../../components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
 import { FormField, SelectField } from '../../components/ui/form-field';
@@ -26,8 +27,7 @@ function StockSummary({ title, items }: { title: string; items: SummaryItem[] })
   const { t } = useTranslation();
   if (items.length === 0) return null;
   return (
-    <section className="admin-stock-summary" aria-labelledby={`stock-${items[0]?.key ?? 'group'}`}>
-      <h2 id={`stock-${items[0]?.key ?? 'group'}`}>{title}</h2>
+    <section className="admin-stock-summary" aria-label={title}>
       <div className="admin-stock-summary__grid" role="list">
         {items.map((item) => (
           <article key={item.key} role="listitem">
@@ -157,62 +157,68 @@ export function AdminInventoryPage() {
         </p>
       ) : null}
 
-      <form className="admin-inventory-filters" onSubmit={applyFilters}>
-        <FormField
-          name="q"
-          type="search"
-          label={t('admin.filterPlaceholder')}
-          defaultValue={searchParams.get('q') ?? ''}
-          leading={<Search aria-hidden="true" size={17} />}
-        />
-        <SelectField
-          name="brand"
-          label={t('catalog.brand')}
-          defaultValue={searchParams.get('brand') ?? ''}
-        >
-          <option value="">{t('catalog.allBrands')}</option>
-          {inventory.data?.grouping.byBrand.map((brand) => (
-            <option key={brand.brandId ?? 'none'} value={brand.brandId ?? ''}>
-              {brand.brandName ?? t('admin.unbranded')}
-            </option>
-          ))}
-        </SelectField>
-        <SelectField
-          name="productType"
-          label={t('catalog.productType')}
-          defaultValue={searchParams.get('productType') ?? ''}
-        >
-          <option value="">{t('catalog.allProductTypes')}</option>
-          {inventory.data?.grouping.byProductType.map((group) => (
-            <option key={group.productType} value={group.productType}>
-              {t(`admin.productTypes.${group.productType}`)}
-            </option>
-          ))}
-        </SelectField>
-        <SelectField
-          name="flavor"
-          label={t('catalog.flavor')}
-          defaultValue={searchParams.get('flavor') ?? ''}
-        >
-          <option value="">{t('catalog.allFlavors')}</option>
-          {inventory.data?.grouping.byFlavor.map((group) => (
-            <option key={group.flavor ?? 'none'} value={group.flavor ?? ''}>
-              {group.flavor ?? t('admin.unspecifiedFlavor')}
-            </option>
-          ))}
-        </SelectField>
-        <div className="admin-inventory-filters__actions">
-          <Button type="submit" variant="admin">
-            {t('catalog.apply')}
-          </Button>
-          {searchParams.size > 0 ? (
-            <Button type="button" variant="ghost" onClick={() => setSearchParams({})}>
-              <X aria-hidden="true" size={17} />
-              {t('catalog.clear')}
+      <AdminDisclosure
+        title={t('admin.ui.filtersTitle')}
+        description={t('admin.ui.filtersHint')}
+        defaultOpen
+      >
+        <form className="admin-inventory-filters" onSubmit={applyFilters}>
+          <FormField
+            name="q"
+            type="search"
+            label={t('admin.filterPlaceholder')}
+            defaultValue={searchParams.get('q') ?? ''}
+            leading={<Search aria-hidden="true" size={17} />}
+          />
+          <SelectField
+            name="brand"
+            label={t('catalog.brand')}
+            defaultValue={searchParams.get('brand') ?? ''}
+          >
+            <option value="">{t('catalog.allBrands')}</option>
+            {inventory.data?.grouping.byBrand.map((brand) => (
+              <option key={brand.brandId ?? 'none'} value={brand.brandId ?? ''}>
+                {brand.brandName ?? t('admin.unbranded')}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField
+            name="productType"
+            label={t('catalog.productType')}
+            defaultValue={searchParams.get('productType') ?? ''}
+          >
+            <option value="">{t('catalog.allProductTypes')}</option>
+            {inventory.data?.grouping.byProductType.map((group) => (
+              <option key={group.productType} value={group.productType}>
+                {t(`admin.productTypes.${group.productType}`)}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField
+            name="flavor"
+            label={t('catalog.flavor')}
+            defaultValue={searchParams.get('flavor') ?? ''}
+          >
+            <option value="">{t('catalog.allFlavors')}</option>
+            {inventory.data?.grouping.byFlavor.map((group) => (
+              <option key={group.flavor ?? 'none'} value={group.flavor ?? ''}>
+                {group.flavor ?? t('admin.unspecifiedFlavor')}
+              </option>
+            ))}
+          </SelectField>
+          <div className="admin-inventory-filters__actions">
+            <Button type="submit" variant="admin">
+              {t('catalog.apply')}
             </Button>
-          ) : null}
-        </div>
-      </form>
+            {searchParams.size > 0 ? (
+              <Button type="button" variant="ghost" onClick={() => setSearchParams({})}>
+                <X aria-hidden="true" size={17} />
+                {t('catalog.clear')}
+              </Button>
+            ) : null}
+          </div>
+        </form>
+      </AdminDisclosure>
 
       {inventory.isPending ? <LoadingState label={t('common.loading')} tone="admin" /> : null}
       {inventory.isError ? <ErrorState onRetry={() => void inventory.refetch()} /> : null}
@@ -224,9 +230,15 @@ export function AdminInventoryPage() {
           </div>
           {grouped ? (
             <div className="admin-stock-sections">
-              <StockSummary title={t('admin.stockByBrand')} items={grouped.brands} />
-              <StockSummary title={t('admin.stockByType')} items={grouped.productTypes} />
-              <StockSummary title={t('admin.stockByFlavor')} items={grouped.flavors} />
+              <AdminDisclosure title={t('admin.stockByBrand')} defaultOpen>
+                <StockSummary title={t('admin.stockByBrand')} items={grouped.brands} />
+              </AdminDisclosure>
+              <AdminDisclosure title={t('admin.stockByType')}>
+                <StockSummary title={t('admin.stockByType')} items={grouped.productTypes} />
+              </AdminDisclosure>
+              <AdminDisclosure title={t('admin.stockByFlavor')}>
+                <StockSummary title={t('admin.stockByFlavor')} items={grouped.flavors} />
+              </AdminDisclosure>
             </div>
           ) : null}
           {inventory.data.items.length === 0 ? (

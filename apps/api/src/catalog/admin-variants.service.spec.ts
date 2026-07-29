@@ -54,6 +54,7 @@ const variantRecord = (overrides: Partial<ProductVariant> = {}): ProductVariant 
 
 const publicationPrisma = ({
   current = variantRecord(),
+  changed,
   parent = {
     id: 'product-1',
     archivedAt: null,
@@ -65,8 +66,11 @@ const publicationPrisma = ({
   inventoryItems = [{ onHandQuantity: 4, reservations: [{ quantity: 1 }] }],
   imageCount = 1,
   unresolvedImageCount = 0,
+  productPublicationStatus = 'DRAFT',
+  remainingSellableVariantCount = 0,
 }: {
   current?: ProductVariant;
+  changed?: ProductVariant;
   parent?: {
     id: string;
     archivedAt: Date | null;
@@ -78,12 +82,16 @@ const publicationPrisma = ({
   inventoryItems?: Array<{ onHandQuantity: number; reservations: Array<{ quantity: number }> }>;
   imageCount?: number;
   unresolvedImageCount?: number;
+  productPublicationStatus?: 'DRAFT' | 'PUBLISHED' | 'SUSPENDED' | 'ARCHIVED';
+  remainingSellableVariantCount?: number;
 } = {}) => {
-  const changed = variantRecord({
-    ...current,
-    publicationStatus: 'PUBLISHED',
-    version: current.version + 1,
-  });
+  const updatedVariant =
+    changed ??
+    variantRecord({
+      ...current,
+      publicationStatus: 'PUBLISHED',
+      version: current.version + 1,
+    });
   const productFindFirst = vi.fn().mockResolvedValue(parent);
   const variantFindFirst = vi
     .fn()
@@ -94,13 +102,19 @@ const publicationPrisma = ({
   const countProductImages = vi.fn(({ where }: { where: Record<string, unknown> }) =>
     Promise.resolve(typeof where.moderationStatus === 'object' ? unresolvedImageCount : imageCount),
   );
+  const countSellableVariants = vi.fn().mockResolvedValue(remainingSellableVariantCount);
+  const queryRaw = vi
+    .fn()
+    .mockResolvedValueOnce([{ id: 'product-1', publicationStatus: productPublicationStatus }])
+    .mockResolvedValueOnce([{ id: 'variant-1' }]);
   const transaction = {
-    $queryRaw: vi.fn().mockResolvedValue([{ id: 'locked' }]),
+    $queryRaw: queryRaw,
     product: { findFirst: productFindFirst },
     productVariant: {
       findFirst: variantFindFirst,
+      count: countSellableVariants,
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
-      findUnique: vi.fn().mockResolvedValue(changed),
+      findUnique: vi.fn().mockResolvedValue(updatedVariant),
     },
     inventoryItem: { findMany: inventoryFindMany },
     productImage: { count: countProductImages },
@@ -116,7 +130,14 @@ const publicationPrisma = ({
     productImage: { count: countProductImages },
     $transaction: prismaTransaction,
   } as unknown as PrismaService;
-  return { prisma, transaction, countProductImages, inventoryFindMany, prismaTransaction };
+  return {
+    prisma,
+    transaction,
+    countProductImages,
+    countSellableVariants,
+    inventoryFindMany,
+    prismaTransaction,
+  };
 };
 
 describe('AdminVariantsService publication readiness', () => {
@@ -205,6 +226,120 @@ describe('AdminVariantsService publication readiness', () => {
     await expect(
       service.update('product-1', 'variant-1', { version: 1, nameFr: 'Nom corrigé' }, request),
     ).resolves.toMatchObject({ data: { id: 'variant-1', version: 2 } });
+  });
+
+  it.each(['DRAFT', 'SUSPENDED'] as const)(
+    'does not move the last sellable variant to %s while its product remains published',
+    async (publicationStatus) => {
+      const current = variantRecord({ publicationStatus: 'PUBLISHED' });
+      const { prisma, transaction, countSellableVariants, prismaTransaction } = publicationPrisma({
+        current,
+        changed: variantRecord({
+          ...current,
+          publicationStatus,
+          version: current.version + 1,
+        }),
+        productPublicationStatus: 'PUBLISHED',
+      });
+      const service = new AdminVariantsService(prisma, checkoutPolicies());
+
+      await expect(
+        service.update('product-1', 'variant-1', { version: 1, publicationStatus }, request),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'PRODUCT_PUBLICATION_NOT_READY',
+          blockers: ['SELLABLE_VARIANT_MISSING'],
+        },
+      });
+
+      expect(countSellableVariants).toHaveBeenCalledWith({
+        where: {
+          productId: 'product-1',
+          id: { not: 'variant-1' },
+          publicationStatus: 'PUBLISHED',
+          archivedAt: null,
+          deletedAt: null,
+          priceMillimes: { gt: 0 },
+          OR: [{ promotionalPriceMillimes: null }, { promotionalPriceMillimes: { gt: 0 } }],
+        },
+      });
+      expect(transaction.productVariant.updateMany).not.toHaveBeenCalled();
+      expect(prismaTransaction).toHaveBeenCalledWith(expect.any(Function), {
+        isolationLevel: 'Serializable',
+        timeout: 10_000,
+      });
+    },
+  );
+
+  it('allows a published variant to be suspended when another sellable variant remains', async () => {
+    const current = variantRecord({ publicationStatus: 'PUBLISHED' });
+    const { prisma, transaction } = publicationPrisma({
+      current,
+      changed: variantRecord({
+        ...current,
+        publicationStatus: 'SUSPENDED',
+        version: current.version + 1,
+      }),
+      productPublicationStatus: 'PUBLISHED',
+      remainingSellableVariantCount: 1,
+    });
+    const service = new AdminVariantsService(prisma, checkoutPolicies());
+
+    await expect(
+      service.update(
+        'product-1',
+        'variant-1',
+        { version: 1, publicationStatus: 'SUSPENDED' },
+        request,
+      ),
+    ).resolves.toMatchObject({
+      data: { id: 'variant-1', publicationStatus: 'SUSPENDED', version: 2 },
+    });
+
+    expect(transaction.productVariant.updateMany).toHaveBeenCalledWith({
+      where: { id: 'variant-1', productId: 'product-1', version: 1, deletedAt: null },
+      data: { publicationStatus: 'SUSPENDED', version: { increment: 1 } },
+    });
+  });
+
+  it('allows cleanup of a published variant while its owning product is still a draft', async () => {
+    const current = variantRecord({ publicationStatus: 'PUBLISHED' });
+    const { prisma, countSellableVariants } = publicationPrisma({
+      current,
+      changed: variantRecord({
+        ...current,
+        publicationStatus: 'DRAFT',
+        version: current.version + 1,
+      }),
+      productPublicationStatus: 'DRAFT',
+    });
+    const service = new AdminVariantsService(prisma, checkoutPolicies());
+
+    await expect(
+      service.update('product-1', 'variant-1', { version: 1, publicationStatus: 'DRAFT' }, request),
+    ).resolves.toMatchObject({
+      data: { id: 'variant-1', publicationStatus: 'DRAFT', version: 2 },
+    });
+    expect(countSellableVariants).not.toHaveBeenCalled();
+  });
+
+  it('does not archive the last sellable variant while its product remains published', async () => {
+    const current = variantRecord({ publicationStatus: 'PUBLISHED' });
+    const { prisma, transaction } = publicationPrisma({
+      current,
+      productPublicationStatus: 'PUBLISHED',
+    });
+    const service = new AdminVariantsService(prisma, checkoutPolicies());
+
+    await expect(
+      service.archive('product-1', 'variant-1', current.version, request),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'PRODUCT_PUBLICATION_NOT_READY',
+        blockers: ['SELLABLE_VARIANT_MISSING'],
+      },
+    });
+    expect(transaction.productVariant.updateMany).not.toHaveBeenCalled();
   });
 
   it('still rejects a zero price when an already-published variant is edited', async () => {

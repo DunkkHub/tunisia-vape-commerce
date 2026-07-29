@@ -154,6 +154,50 @@ try {
   );
   if (seedExitCode !== 0) throw new Error('Structural seed failed');
 
+  const seededDatabase = prismaFor(runtimeUrl);
+  try {
+    const beforeSecondSeed = await seededDatabase.delegation.findFirst({
+      where: { code: '1751', governorate: { code: '23' } },
+      select: { id: true },
+    });
+    const firstCounts = await Promise.all([
+      seededDatabase.governorate.count(),
+      seededDatabase.delegation.count(),
+      seededDatabase.locality.count(),
+    ]);
+    if (!beforeSecondSeed || firstCounts.join('/') !== '24/279/2082') {
+      throw new Error(`Structural geography seed is incomplete: ${firstCounts.join('/')}`);
+    }
+
+    const repeatedSeedExitCode = await execute(
+      process.execPath,
+      [tsxCli, path.join(repositoryRoot, 'prisma', 'seed.ts')],
+      {
+        cwd: repositoryRoot,
+        env: { ...process.env, NODE_ENV: 'test', DATABASE_URL: runtimeUrl },
+      },
+    );
+    if (repeatedSeedExitCode !== 0) throw new Error('Repeated structural seed failed');
+
+    const afterSecondSeed = await seededDatabase.delegation.findFirst({
+      where: { code: '1751', governorate: { code: '23' } },
+      select: { id: true },
+    });
+    const repeatedCounts = await Promise.all([
+      seededDatabase.governorate.count(),
+      seededDatabase.delegation.count(),
+      seededDatabase.locality.count(),
+    ]);
+    if (
+      afterSecondSeed?.id !== beforeSecondSeed.id ||
+      repeatedCounts.join('/') !== firstCounts.join('/')
+    ) {
+      throw new Error('Repeated structural seed changed geography identifiers or counts');
+    }
+  } finally {
+    await seededDatabase.$disconnect();
+  }
+
   testExitCode = await execute(
     process.execPath,
     [vitestCli, 'run', 'test/integration', '--no-file-parallelism'],

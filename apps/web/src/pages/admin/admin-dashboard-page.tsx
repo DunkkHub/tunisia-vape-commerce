@@ -96,13 +96,28 @@ export function AdminDashboardPage() {
           ))}
         </div>
       ) : null}
-      <section className="admin-attention">
-        <AlertTriangle aria-hidden="true" />
-        <div>
-          <h2>{t('admin.lowStock')}</h2>
-          <p>{t('admin.dashboardSubtitle')}</p>
+      {metrics.data && (metrics.data.lowStockCount > 0 || metrics.data.deliveryFailureCount > 0) ? (
+        <div className="admin-attention-list" aria-label={t('admin.ui.attentionTitle')}>
+          {metrics.data.lowStockCount > 0 ? (
+            <section className="admin-attention">
+              <AlertTriangle aria-hidden="true" />
+              <div>
+                <h2>{t('admin.lowStock')}</h2>
+                <p>{t('admin.ui.attentionCount', { count: metrics.data.lowStockCount })}</p>
+              </div>
+            </section>
+          ) : null}
+          {metrics.data.deliveryFailureCount > 0 ? (
+            <section className="admin-attention">
+              <AlertTriangle aria-hidden="true" />
+              <div>
+                <h2>{t('admin.deliveryFailures')}</h2>
+                <p>{t('admin.ui.attentionCount', { count: metrics.data.deliveryFailureCount })}</p>
+              </div>
+            </section>
+          ) : null}
         </div>
-      </section>
+      ) : null}
     </div>
   );
 }

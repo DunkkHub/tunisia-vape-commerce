@@ -5,8 +5,9 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { addMillimes } from '../common/money/money';
-import { buildPublicProductWhere } from '../catalog/catalog-policy';
+import { buildPublicProductWhere, publicSellableVariantWhere } from '../catalog/catalog-policy';
 import { PrismaService } from '../database/prisma.service';
+import { eligibleOrderInventoryWhere } from '../inventory/inventory-eligibility';
 import {
   calculateQuoteLine,
   RateResolutionError,
@@ -77,9 +78,7 @@ export class CheckoutQuoteService {
     const variants = await this.prisma.productVariant.findMany({
       where: {
         id: { in: variantIds },
-        publicationStatus: 'PUBLISHED',
-        archivedAt: null,
-        deletedAt: null,
+        ...publicSellableVariantWhere(),
         product: { is: buildPublicProductWhere({}, now) },
       },
       select: {
@@ -93,12 +92,7 @@ export class CheckoutQuoteService {
         weightGrams: true,
         product: { select: { id: true, nameFr: true, nameAr: true, slug: true } },
         inventoryItems: {
-          where: {
-            OR: [
-              { batchId: null },
-              { batch: { is: { OR: [{ expiryDate: null }, { expiryDate: { gt: now } }] } } },
-            ],
-          },
+          where: eligibleOrderInventoryWhere(now),
           select: {
             onHandQuantity: true,
             reservations: {
@@ -302,6 +296,10 @@ export class CheckoutQuoteService {
                 freeDeliveryThresholdMillimes: true,
                 estimatedMinDays: true,
                 estimatedMaxDays: true,
+                estimatedMinMinutes: true,
+                estimatedMaxMinutes: true,
+                paymentMethod: true,
+                phoneConfirmationRequired: true,
               },
             },
           },
@@ -436,6 +434,10 @@ export class CheckoutQuoteService {
           selectedRateIds: selectedRates.map((rate) => rate.id),
           estimatedMinDays: selectedZone.zone.estimatedMinDays,
           estimatedMaxDays: selectedZone.zone.estimatedMaxDays,
+          estimatedMinMinutes: selectedZone.zone.estimatedMinMinutes,
+          estimatedMaxMinutes: selectedZone.zone.estimatedMaxMinutes,
+          paymentMethod: selectedZone.zone.paymentMethod,
+          phoneConfirmationRequired: selectedZone.zone.phoneConfirmationRequired,
           freeDeliveryApplied: deliveryTotalMillimes === 0,
         },
       };

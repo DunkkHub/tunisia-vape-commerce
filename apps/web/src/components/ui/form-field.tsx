@@ -1,5 +1,12 @@
 import { Eye, EyeOff } from 'lucide-react';
-import { forwardRef, useId, useState, type InputHTMLAttributes, type ReactNode } from 'react';
+import {
+  forwardRef,
+  useId,
+  useState,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type TextareaHTMLAttributes,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 
 interface FormFieldProps extends InputHTMLAttributes<HTMLInputElement> {
@@ -96,6 +103,45 @@ export const SelectField = forwardRef<HTMLSelectElement, SelectFieldProps>(funct
     </div>
   );
 });
+
+interface TextareaFieldProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
+  label: string;
+  error?: string | undefined;
+  hint?: string | undefined;
+}
+
+export const TextareaField = forwardRef<HTMLTextAreaElement, TextareaFieldProps>(
+  function TextareaField({ label, error, hint, id: providedId, className = '', ...props }, ref) {
+    const generatedId = useId();
+    const id = providedId ?? generatedId;
+    const errorId = `${id}-error`;
+    const hintId = `${id}-hint`;
+    const describedBy =
+      [hint ? hintId : null, error ? errorId : null].filter(Boolean).join(' ') || undefined;
+    return (
+      <div className={`field ${error ? 'field--error' : ''} ${className}`}>
+        <label htmlFor={id}>{label}</label>
+        <textarea
+          ref={ref}
+          id={id}
+          aria-invalid={Boolean(error)}
+          aria-describedby={describedBy}
+          {...props}
+        />
+        {hint ? (
+          <p id={hintId} className="field__hint">
+            {hint}
+          </p>
+        ) : null}
+        {error ? (
+          <p id={errorId} className="field__error" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
+    );
+  },
+);
 
 interface CheckboxFieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> {
   label: ReactNode;

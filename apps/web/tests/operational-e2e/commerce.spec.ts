@@ -50,6 +50,15 @@ interface CheckoutResult {
   taxTotalMillimes: number;
   grandTotalMillimes: number;
   expectedCodMillimes: number;
+  fulfillment: {
+    type: 'COURIER' | 'STORE_PICKUP';
+    estimatedMinDays: number | null;
+    estimatedMaxDays: number | null;
+    estimatedMinMinutes: number | null;
+    estimatedMaxMinutes: number | null;
+    paymentMethod: 'CASH_ON_DELIVERY' | null;
+    phoneConfirmationRequired: boolean;
+  };
 }
 
 interface AdminDelivery {
@@ -95,6 +104,67 @@ interface AdminVariantSummary {
   id: string;
   sku: string;
   version: number;
+}
+
+interface AdminManagedVariant extends AdminVariantSummary {
+  nameFr: string;
+  nameAr: string;
+  color: string | null;
+  priceMillimes: number;
+  publicationStatus: string;
+}
+
+interface AdminManagedProduct {
+  id: string;
+  version: number;
+  nameFr: string;
+  flavor: string | null;
+  featured: boolean;
+  publicationStatus: string;
+}
+
+interface AdminDeliveryZoneConfig {
+  id: string;
+  code: string;
+  nameFr: string;
+  active: boolean;
+  supported: boolean;
+  phoneConfirmationRequired: boolean;
+  manualReviewRequired: boolean;
+  estimatedMinDays: number | null;
+  estimatedMaxDays: number | null;
+  estimatedMinMinutes: number | null;
+  estimatedMaxMinutes: number | null;
+  paymentMethod: 'CASH_ON_DELIVERY' | null;
+  assignmentMode: 'MANUAL' | null;
+  driverCommunication: 'WHATSAPP' | 'PHONE' | null;
+  localityCount: number;
+  activeRateCount: number;
+  updatedAt: string;
+}
+
+interface AdminDeliveryRateConfig {
+  id: string;
+  name: string;
+  feeMillimes: number;
+  active: boolean;
+  version: number;
+}
+
+interface GeographyOption {
+  id: string;
+  name: string;
+  supported: boolean;
+}
+
+interface DeliveryMethod {
+  id: string;
+  type: 'COURIER' | 'STORE_PICKUP';
+  label: string;
+  estimatedMinMinutes: number | null;
+  estimatedMaxMinutes: number | null;
+  paymentMethod: 'CASH_ON_DELIVERY' | null;
+  phoneConfirmationRequired: boolean;
 }
 
 interface AdminProductImage {
@@ -278,10 +348,643 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
   context,
   browser,
 }) => {
-  test.setTimeout(420_000);
+  test.setTimeout(600_000);
   page.setDefaultTimeout(20_000);
   let checkout!: CheckoutResult;
   let remittanceId = '';
+  let managedProductId = '';
+  let managedVariantId = '';
+  let supportedBizerteLocalityId = '';
+  let unsupportedBizerteLocalityId = '';
+
+  await test.step('super-administrator completes password and TOTP authentication', async () => {
+    await loginAdmin(page, adminEmail, adminPassword);
+    const [customerSession, adminSession] = await Promise.all([
+      context.request.get(`${apiUrl}/api/v1/auth/customer/session`, {
+        headers: { 'X-Client-Context': 'customer' },
+      }),
+      context.request.get(`${apiUrl}/api/v1/auth/admin/session`, {
+        headers: { 'X-Client-Context': 'admin' },
+      }),
+    ]);
+    expect(customerSession.status()).toBe(401);
+    expect(adminSession.status()).toBe(200);
+  });
+
+  await test.step('Bizerte Express configuration persists atomically from 4 to 8000 millimes', async () => {
+    let zones = await adminApi<PageResult<AdminDeliveryZoneConfig>>(
+      context,
+      'GET',
+      '/admin/delivery-config/zones?page=1&limit=50',
+    );
+    let zone = zones.items.find(({ code }) => code === 'BIZERTE_EXPRESS');
+    expect(zone).toMatchObject({
+      active: false,
+      supported: false,
+      localityCount: 0,
+      activeRateCount: 0,
+      estimatedMinMinutes: null,
+      estimatedMaxMinutes: null,
+    });
+    if (!zone) throw new Error('The disposable Bizerte Express zone is missing');
+    const deliveryZoneId = zone.id;
+    const rates = await adminApi<PageResult<AdminDeliveryRateConfig>>(
+      context,
+      'GET',
+      '/admin/delivery-config/rates?page=1&limit=50',
+    );
+    let rate = rates.items.find(({ name }) => name === 'Bizerte Express E2E base rate');
+    expect(rate).toMatchObject({ feeMillimes: 4, active: false, version: 1 });
+    if (!rate) throw new Error('The disposable Bizerte Express rate is missing');
+    const deliveryRateId = rate.id;
+
+    const rejectedActivation = await adminRaw(
+      context,
+      'POST',
+      `/admin/delivery-config/zones/${deliveryZoneId}/activate`,
+      { expectedUpdatedAt: zone.updatedAt, confirmed: true },
+    );
+    expect(rejectedActivation.status()).toBe(409);
+    expect((await rejectedActivation.json()) as { code?: string }).toMatchObject({
+      code: 'BIZERTE_EXPRESS_CONFIGURATION_INVALID',
+    });
+    zone = await adminApi<AdminDeliveryZoneConfig>(
+      context,
+      'GET',
+      `/admin/delivery-config/zones/${deliveryZoneId}`,
+    );
+    expect(zone).toMatchObject({ active: false, supported: false, localityCount: 0 });
+
+    await page.goto('/admin/delivery');
+    await expect(page.getByRole('heading', { name: /livraisons/i }).first()).toBeVisible();
+    let zonePanel = page
+      .locator('article.admin-delivery-zone-card')
+      .filter({ hasText: 'BIZERTE_EXPRESS' });
+    await zonePanel.getByText('Modifier les réglages de la zone').click();
+    const zoneEditor = zonePanel.locator('form[aria-label*="BIZERTE_EXPRESS"]');
+    await zoneEditor.getByRole('button', { name: /Appliquer Bizerte Express/ }).click();
+    await expect(zoneEditor.locator('input[name="estimatedMinMinutes"]')).toHaveValue('30');
+    await expect(zoneEditor.locator('input[name="estimatedMaxMinutes"]')).toHaveValue('50');
+    await expect(zoneEditor.locator('select[name="paymentMethod"]')).toHaveValue(
+      'CASH_ON_DELIVERY',
+    );
+    await expect(zoneEditor.locator('select[name="assignmentMode"]')).toHaveValue('MANUAL');
+    await expect(zoneEditor.locator('select[name="driverCommunication"]')).toHaveValue('WHATSAPP');
+    const zoneUpdateResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname ===
+          `/api/v1/admin/delivery-config/zones/${deliveryZoneId}` &&
+        candidate.request().method() === 'PATCH',
+    );
+    await zoneEditor.getByRole('button', { name: 'Enregistrer la zone' }).click();
+    expect((await zoneUpdateResponse).status()).toBe(200);
+
+    let ratePanel = page
+      .locator('article.admin-delivery-record')
+      .filter({ hasText: 'Bizerte Express E2E base rate' });
+    const rateAmount = ratePanel.locator('input[name^="rate-"][name$="-amountTnd"]');
+    await expect(rateAmount).toHaveValue('0,004');
+    await rateAmount.fill('8,000');
+    const rateUpdateResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname ===
+          `/api/v1/admin/delivery-config/rates/${deliveryRateId}` &&
+        candidate.request().method() === 'PATCH',
+    );
+    await ratePanel.getByRole('button', { name: 'Enregistrer le montant' }).click();
+    expect((await rateUpdateResponse).status()).toBe(200);
+
+    await page.reload();
+    ratePanel = page
+      .locator('article.admin-delivery-record')
+      .filter({ hasText: 'Bizerte Express E2E base rate' });
+    await expect(ratePanel.locator('input[name^="rate-"][name$="-amountTnd"]')).toHaveValue(
+      '8,000',
+    );
+    rate = await adminApi<AdminDeliveryRateConfig>(
+      context,
+      'GET',
+      `/admin/delivery-config/rates/${deliveryRateId}`,
+    );
+    expect(rate).toMatchObject({ feeMillimes: 8_000, active: false, version: 2 });
+
+    zone = await adminApi<AdminDeliveryZoneConfig>(
+      context,
+      'GET',
+      `/admin/delivery-config/zones/${deliveryZoneId}`,
+    );
+    const rejectedIncompleteActivation = await adminRaw(
+      context,
+      'POST',
+      `/admin/delivery-config/zones/${deliveryZoneId}/activate`,
+      { expectedUpdatedAt: zone.updatedAt, confirmed: true },
+    );
+    expect(rejectedIncompleteActivation.status()).toBe(409);
+    expect((await rejectedIncompleteActivation.json()) as { code?: string }).toMatchObject({
+      code: 'DELIVERY_ZONE_GEOGRAPHY_MISSING',
+    });
+    zone = await adminApi<AdminDeliveryZoneConfig>(
+      context,
+      'GET',
+      `/admin/delivery-config/zones/${deliveryZoneId}`,
+    );
+    rate = await adminApi<AdminDeliveryRateConfig>(
+      context,
+      'GET',
+      `/admin/delivery-config/rates/${deliveryRateId}`,
+    );
+    expect(zone).toMatchObject({ active: false, supported: false, localityCount: 0 });
+    expect(rate).toMatchObject({ feeMillimes: 8_000, active: false, version: 2 });
+
+    const governorates = await adminApi<GeographyOption[]>(
+      context,
+      'GET',
+      '/admin/delivery-config/geography/governorates',
+    );
+    const bizerte = governorates.find(({ name }) => name === 'Bizerte');
+    const tunis = governorates.find(({ name }) => name === 'Tunis');
+    expect(bizerte).toBeTruthy();
+    expect(tunis).toBeTruthy();
+    const [bizerteDelegations, tunisDelegations] = await Promise.all([
+      adminApi<GeographyOption[]>(
+        context,
+        'GET',
+        `/admin/delivery-config/geography/governorates/${bizerte!.id}/delegations`,
+      ),
+      adminApi<GeographyOption[]>(
+        context,
+        'GET',
+        `/admin/delivery-config/geography/governorates/${tunis!.id}/delegations`,
+      ),
+    ]);
+    const bizerteNorth = bizerteDelegations.find(({ name }) => name === 'Bizerte Nord');
+    const tunisDelegation = tunisDelegations[0];
+    expect(bizerteNorth).toBeTruthy();
+    expect(tunisDelegation).toBeTruthy();
+    const [bizerteLocalities, tunisLocalities] = await Promise.all([
+      adminApi<GeographyOption[]>(
+        context,
+        'GET',
+        `/admin/delivery-config/geography/delegations/${bizerteNorth!.id}/localities`,
+      ),
+      adminApi<GeographyOption[]>(
+        context,
+        'GET',
+        `/admin/delivery-config/geography/delegations/${tunisDelegation!.id}/localities`,
+      ),
+    ]);
+    const supportedBizerteLocality = bizerteLocalities.find(({ name }) => name === 'La medina');
+    const unsupportedBizerteLocality = bizerteLocalities.find(({ name }) => name === 'El corniche');
+    expect(supportedBizerteLocality).toBeTruthy();
+    expect(unsupportedBizerteLocality).toBeTruthy();
+    expect(tunisLocalities[0]).toBeTruthy();
+    supportedBizerteLocalityId = supportedBizerteLocality!.id;
+    unsupportedBizerteLocalityId = unsupportedBizerteLocality!.id;
+
+    zone = await adminApi<AdminDeliveryZoneConfig>(
+      context,
+      'GET',
+      `/admin/delivery-config/zones/${deliveryZoneId}`,
+    );
+    const rejectedCoverage = await adminRaw(
+      context,
+      'PUT',
+      `/admin/delivery-config/zones/${deliveryZoneId}/geography-links`,
+      {
+        expectedUpdatedAt: zone.updatedAt,
+        confirmed: true,
+        scope: 'LOCALITY',
+        geographyId: tunisLocalities[0]!.id,
+        active: true,
+      },
+    );
+    expect(rejectedCoverage.status()).toBe(409);
+    expect((await rejectedCoverage.json()) as { code?: string }).toMatchObject({
+      code: 'BIZERTE_EXPRESS_COVERAGE_INVALID',
+    });
+    zone = await adminApi<AdminDeliveryZoneConfig>(
+      context,
+      'GET',
+      `/admin/delivery-config/zones/${deliveryZoneId}`,
+    );
+    expect(zone).toMatchObject({ active: false, supported: false, localityCount: 0 });
+
+    const geographyForm = page.locator('form').filter({
+      has: page.locator('select[name="zoneId"]'),
+    });
+    await geographyForm.locator('select[name="zoneId"]').selectOption(deliveryZoneId);
+    await geographyForm.locator('select[name="scope"]').selectOption('LOCALITY');
+    const delegationsResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname ===
+          `/api/v1/admin/delivery-config/geography/governorates/${bizerte!.id}/delegations` &&
+        candidate.request().method() === 'GET',
+    );
+    await geographyForm.locator('select[name="governorateId"]').selectOption(bizerte!.id);
+    expect((await delegationsResponse).status()).toBe(200);
+    const localitiesResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname ===
+          `/api/v1/admin/delivery-config/geography/delegations/${bizerteNorth!.id}/localities` &&
+        candidate.request().method() === 'GET',
+    );
+    await geographyForm.locator('select[name="delegationId"]').selectOption(bizerteNorth!.id);
+    expect((await localitiesResponse).status()).toBe(200);
+    await geographyForm
+      .locator('select[name="localityId"]')
+      .selectOption(supportedBizerteLocalityId);
+    const linkResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname ===
+          `/api/v1/admin/delivery-config/zones/${deliveryZoneId}/geography-links` &&
+        candidate.request().method() === 'PUT',
+    );
+    await geographyForm.getByRole('button', { name: 'Ajouter cette couverture' }).click();
+    expect((await linkResponse).status()).toBe(200);
+    await page.reload();
+
+    ratePanel = page
+      .locator('article.admin-delivery-record')
+      .filter({ hasText: 'Bizerte Express E2E base rate' });
+    zonePanel = page
+      .locator('article.admin-delivery-zone-card')
+      .filter({ hasText: 'BIZERTE_EXPRESS' });
+    await expect(
+      zonePanel.getByRole('button', { name: 'Activer la zone BIZERTE_EXPRESS' }),
+    ).toBeDisabled();
+    const rateActivation = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname ===
+          `/api/v1/admin/delivery-config/rates/${deliveryRateId}/activate` &&
+        candidate.request().method() === 'POST',
+    );
+    await ratePanel
+      .getByRole('button', { name: 'Activer le tarif Bizerte Express E2E base rate' })
+      .click();
+    expect((await rateActivation).status()).toBe(200);
+
+    await expect(
+      zonePanel.getByRole('button', { name: 'Activer la zone BIZERTE_EXPRESS' }),
+    ).toBeEnabled();
+    const zoneActivation = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname ===
+          `/api/v1/admin/delivery-config/zones/${deliveryZoneId}/activate` &&
+        candidate.request().method() === 'POST',
+    );
+    await zonePanel.getByRole('button', { name: 'Activer la zone BIZERTE_EXPRESS' }).click();
+    expect((await zoneActivation).status()).toBe(200);
+
+    await page.reload();
+    zones = await adminApi<PageResult<AdminDeliveryZoneConfig>>(
+      context,
+      'GET',
+      '/admin/delivery-config/zones?page=1&limit=50',
+    );
+    zone = zones.items.find(({ code }) => code === 'BIZERTE_EXPRESS');
+    expect(zone).toMatchObject({
+      active: true,
+      supported: true,
+      localityCount: 1,
+      activeRateCount: 1,
+      estimatedMinDays: null,
+      estimatedMaxDays: null,
+      estimatedMinMinutes: 30,
+      estimatedMaxMinutes: 50,
+      paymentMethod: 'CASH_ON_DELIVERY',
+      assignmentMode: 'MANUAL',
+      driverCommunication: 'WHATSAPP',
+      phoneConfirmationRequired: false,
+    });
+  });
+
+  await test.step('administrator creates the sellable product, media, variant, stock, and publication', async () => {
+    const [categories, brands] = await Promise.all([
+      adminApi<PageResult<{ id: string }>>(
+        context,
+        'GET',
+        '/admin/categories?page=1&limit=50&sort=name_asc',
+      ),
+      adminApi<PageResult<{ id: string }>>(
+        context,
+        'GET',
+        '/admin/brands?page=1&limit=50&sort=name_asc',
+      ),
+    ]);
+    const categoryId = categories.items[0]?.id;
+    const brandId = brands.items[0]?.id;
+    expect(categoryId).toBeTruthy();
+    expect(brandId).toBeTruthy();
+    await page.goto('/admin/catalog/new');
+    await expect(page.getByRole('heading', { name: 'Fiche produit' })).toBeVisible();
+    const createProductForm = page.locator('.admin-editor > form');
+    await expect(
+      createProductForm.locator(`select[name="categoryId"] option[value="${categoryId}"]`),
+    ).toHaveCount(1);
+    await expect(
+      createProductForm.locator(`select[name="brandId"] option[value="${brandId}"]`),
+    ).toHaveCount(1);
+    await createProductForm.locator('input[name="nameFr"]').fill('Produit E2E administré');
+    await createProductForm.locator('input[name="nameAr"]').fill('منتج إدارة E2E');
+    await createProductForm.locator('input[name="slug"]').fill('admin-created-e2e-product');
+    await createProductForm.locator('select[name="productType"]').selectOption('DISPOSABLE');
+    await createProductForm.locator('input[name="flavor"]').fill('Agrumes E2E');
+    await createProductForm.locator('select[name="categoryId"]').selectOption(categoryId!);
+    await createProductForm.locator('select[name="brandId"]').selectOption(brandId!);
+    await createProductForm.locator('input[name="sku"]').fill('E2E-ADMIN-PRODUCT');
+    await createProductForm.locator('input[name="basePriceMillimes"]').fill('13000');
+    await createProductForm
+      .locator('input[name="shortDescriptionFr"]')
+      .fill('Créé par le workflow Playwright réel.');
+    await createProductForm
+      .locator('input[name="shortDescriptionAr"]')
+      .fill('تم إنشاؤه من خلال اختبار Playwright الحقيقي.');
+    await createProductForm
+      .locator('textarea[name="descriptionFr"]')
+      .fill('Produit créé, modifié et publié depuis la véritable interface administrateur.');
+    await createProductForm
+      .locator('textarea[name="descriptionAr"]')
+      .fill('تم إنشاء المنتج وتعديله ونشره من واجهة الإدارة الحقيقية.');
+    await createProductForm.locator('input[name="warningFr"]').fill('Réservé aux adultes.');
+    await createProductForm.locator('input[name="warningAr"]').fill('مخصص للبالغين.');
+    await createProductForm.locator('input[name="minimumAge"]').fill('18');
+    await createProductForm.locator('input[name="containsNicotine"]').check();
+    const productCreateResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === '/api/v1/admin/products' &&
+        candidate.request().method() === 'POST',
+    );
+    await createProductForm.getByRole('button', { name: 'Enregistrer le produit' }).click();
+    const createdHttp = await productCreateResponse;
+    expect(createdHttp.status()).toBe(201);
+    const created = ((await createdHttp.json()) as { data: AdminManagedProduct }).data;
+    managedProductId = created.id;
+    expect(created).toMatchObject({
+      nameFr: 'Produit E2E administré',
+      flavor: 'Agrumes E2E',
+      publicationStatus: 'DRAFT',
+      featured: false,
+    });
+    await expect(page).toHaveURL(/\/admin\/catalog$/);
+
+    await page.goto(`/admin/catalog/${managedProductId}/edit`);
+    const updateProductForm = page.locator('.admin-editor > form');
+    await expect(updateProductForm.locator('input[name="nameFr"]')).toHaveValue(
+      'Produit E2E administré',
+    );
+    await updateProductForm.locator('input[name="nameFr"]').fill('Produit E2E administré modifié');
+    await updateProductForm.locator('input[name="flavor"]').fill('Citron E2E');
+    const productUpdateResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === `/api/v1/admin/products/${managedProductId}` &&
+        candidate.request().method() === 'PATCH',
+    );
+    await updateProductForm.getByRole('button', { name: 'Enregistrer le produit' }).click();
+    const updatedHttp = await productUpdateResponse;
+    expect(updatedHttp.status()).toBe(200);
+    const updated = ((await updatedHttp.json()) as { data: AdminManagedProduct }).data;
+    expect(updated.id).toBe(managedProductId);
+    expect(updated).toMatchObject({
+      nameFr: 'Produit E2E administré modifié',
+      flavor: 'Citron E2E',
+      publicationStatus: 'DRAFT',
+    });
+    await expect(page).toHaveURL(/\/admin\/catalog$/);
+
+    await page.goto(`/admin/catalog/${managedProductId}/edit`);
+    const createVariantForm = page
+      .locator('form.admin-panel')
+      .filter({ hasText: 'Nouvelle variante (brouillon)' });
+    await expect(createVariantForm).toBeVisible();
+    await createVariantForm.locator('input[name="nameFr"]').fill('Citron électrique E2E');
+    await createVariantForm.locator('input[name="nameAr"]').fill('ليمون كهربائي E2E');
+    await createVariantForm.locator('input[name="sku"]').fill('E2E-ADMIN-CITRON-V1');
+    await createVariantForm.locator('input[name="color"]').fill('Jaune');
+    await createVariantForm.locator('input[name="costMillimes"]').fill('6000');
+    await createVariantForm.locator('input[name="priceMillimes"]').fill('13000');
+    await createVariantForm.locator('input[name="lowStockThreshold"]').fill('1');
+    const variantCreateResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname ===
+          `/api/v1/admin/products/${managedProductId}/variants` &&
+        candidate.request().method() === 'POST',
+    );
+    await createVariantForm.getByRole('button', { name: 'Créer la variante' }).click();
+    const variantHttp = await variantCreateResponse;
+    expect(variantHttp.status()).toBe(201);
+    const variant = ((await variantHttp.json()) as { data: AdminManagedVariant }).data;
+    managedVariantId = variant.id;
+    expect(managedVariantId).toBeTruthy();
+    expect(variant).toMatchObject({
+      nameFr: 'Citron électrique E2E',
+      sku: 'E2E-ADMIN-CITRON-V1',
+      color: 'Jaune',
+      priceMillimes: 13_000,
+      publicationStatus: 'DRAFT',
+    });
+    expect(Number.isSafeInteger(variant.priceMillimes) && variant.priceMillimes > 0).toBe(true);
+
+    let variantForm = page.locator('form.admin-panel').filter({ hasText: 'E2E-ADMIN-CITRON-V1' });
+    await expect(variantForm).toBeVisible();
+    const uploadForm = page.locator('.admin-media-upload');
+    await expect(uploadForm).toBeVisible();
+    const mediaListPath = `/api/v1/admin/products/${managedProductId}/images`;
+    const imageCard = (altText: string) =>
+      page.locator('.admin-media-card').filter({
+        has: page.getByRole('img', { name: altText, exact: true }),
+      });
+    const waitForMediaRefresh = () =>
+      page.waitForResponse(
+        (candidate) =>
+          new URL(candidate.url()).pathname === mediaListPath &&
+          candidate.request().method() === 'GET' &&
+          candidate.status() === 200,
+      );
+    const uploadManagedImage = async (
+      fixturePath: string,
+      altTextFr: string,
+      altTextAr: string,
+      isPrimary: boolean,
+    ) => {
+      await uploadForm.locator('input[name="file"]').setInputFiles(fixturePath);
+      await uploadForm.locator('select[name="variantId"]').selectOption('');
+      await uploadForm.locator('input[name="altTextFr"]').fill(altTextFr);
+      await uploadForm.locator('input[name="altTextAr"]').fill(altTextAr);
+      const primary = uploadForm.locator('input[name="isPrimary"]');
+      if (isPrimary) await primary.check();
+      else await primary.uncheck();
+      const response = page.waitForResponse(
+        (candidate) =>
+          new URL(candidate.url()).pathname === mediaListPath &&
+          candidate.request().method() === 'POST',
+      );
+      const refresh = waitForMediaRefresh();
+      const uploadButton = uploadForm.getByRole('button', { name: /Téléverser/ });
+      await uploadButton.click();
+      const [uploaded] = await Promise.all([response, refresh]);
+      expect(uploaded.status()).toBe(201);
+      const image = ((await uploaded.json()) as { data: AdminProductImage }).data;
+      await expect(imageCard(altTextFr)).toHaveCount(1);
+      await expectLoadedImage(imageCard(altTextFr).locator('img'));
+      await expect(uploadButton).toBeEnabled();
+      return image;
+    };
+    const productImage = await uploadManagedImage(
+      mediaFixturePaths[0],
+      'Produit administré E2E',
+      'منتج إدارة E2E',
+      true,
+    );
+    const galleryImage = await uploadManagedImage(
+      mediaFixturePaths[1],
+      'Galerie administrée E2E',
+      'معرض إدارة E2E',
+      false,
+    );
+    expect(productImage).toMatchObject({
+      productId: managedProductId,
+      variantId: null,
+      isPrimary: true,
+      moderationStatus: 'APPROVED',
+    });
+    expect(galleryImage).toMatchObject({
+      productId: managedProductId,
+      variantId: null,
+      isPrimary: false,
+      moderationStatus: 'APPROVED',
+    });
+
+    await variantForm.getByRole('link', { name: 'Gérer le stock' }).click();
+    await expect(page).toHaveURL(new RegExp(`/admin/inventory/${managedVariantId}$`));
+    const receiptPanel = page
+      .locator('section.admin-panel')
+      .filter({ hasText: 'Réception de lot' });
+    const receiptForm = receiptPanel.locator('form');
+    const fulfillmentOption = receiptForm
+      .locator('select[name="locationId"] option')
+      .filter({ hasText: 'E2E-FULFILLMENT' });
+    await expect(fulfillmentOption).toHaveCount(1);
+    const locationId = await fulfillmentOption.getAttribute('value');
+    if (!locationId) throw new Error('The fulfillment location was not available in the UI');
+    await receiptForm.locator('select[name="locationId"]').selectOption(locationId);
+    await receiptForm.locator('input[name="batchNumber"]').fill('E2E-MANAGED-BATCH-RECEIPT');
+    await receiptForm.locator('input[name="quantity"]').fill('2');
+    await receiptForm.locator('input[name="expiryDate"]').fill('2030-12-31');
+    await receiptForm.locator('input[name="manufacturedAt"]').fill('2026-01-01');
+    await receiptForm
+      .locator('input[name="supplierReference"]')
+      .fill('PLAYWRIGHT-MANAGED-RECEIPT-001');
+    await receiptForm
+      .locator('input[name="note"]')
+      .fill('Managed product operational browser receipt');
+    const receiptResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === '/api/v1/admin/inventory/batches/receipts' &&
+        candidate.request().method() === 'POST',
+    );
+    await receiptForm.getByRole('button', { name: 'Enregistrer la réception' }).click();
+    const receiptHttp = await receiptResponse;
+    expect(receiptHttp.status()).toBe(201);
+    const received = (
+      (await receiptHttp.json()) as {
+        data: {
+          batch: { id: string };
+          inventoryItemId: string;
+          movementId: string;
+          quantityReceived: number;
+          replayed: boolean;
+        };
+      }
+    ).data;
+    expect(received).toMatchObject({ quantityReceived: 2, replayed: false });
+    expect(received.batch.id).toBeTruthy();
+    expect(received.inventoryItemId).toBeTruthy();
+    expect(received.movementId).toBeTruthy();
+    await expect(page.locator('.form-success[role="status"]')).toContainText(
+      'La réception et son mouvement de stock ont été enregistrés.',
+    );
+    const receiptRequest = receiptHttp.request();
+    const receiptKey = receiptRequest.headers()['idempotency-key'];
+    if (!receiptKey) throw new Error('The inventory receipt idempotency key was not sent');
+    expect(receiptKey).toMatch(/^admin-web-[0-9a-f-]{36}$/);
+    const receiptBody: unknown = receiptRequest.postDataJSON();
+    expect(receiptBody).toMatchObject({
+      variantId: managedVariantId,
+      locationId,
+      batchNumber: 'E2E-MANAGED-BATCH-RECEIPT',
+      quantity: 2,
+    });
+    const replayed = await adminApi<{ quantityReceived: number; replayed: boolean }>(
+      context,
+      'POST',
+      '/admin/inventory/batches/receipts',
+      receiptBody,
+      { 'Idempotency-Key': receiptKey },
+    );
+    expect(replayed).toMatchObject({ quantityReceived: 2, replayed: true });
+
+    await page.goto(`/admin/catalog/${managedProductId}/edit`);
+    variantForm = page.locator('form.admin-panel').filter({ hasText: 'E2E-ADMIN-CITRON-V1' });
+    await expect(variantForm).toBeVisible();
+    await variantForm.locator('input[name="color"]').fill('Jaune électrique');
+    await variantForm.locator('select[name="publicationStatus"]').selectOption('PUBLISHED');
+    const variantPublishResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname ===
+          `/api/v1/admin/products/${managedProductId}/variants/${managedVariantId}` &&
+        candidate.request().method() === 'PATCH',
+    );
+    await variantForm.getByRole('button', { name: 'Mettre à jour la variante' }).click();
+    const publishedVariantHttp = await variantPublishResponse;
+    expect(publishedVariantHttp.status()).toBe(200);
+    const publishedVariant = (
+      (await publishedVariantHttp.json()) as {
+        data: AdminManagedVariant;
+      }
+    ).data;
+    expect(publishedVariant.id).toBe(managedVariantId);
+    expect(publishedVariant).toMatchObject({
+      color: 'Jaune électrique',
+      publicationStatus: 'PUBLISHED',
+    });
+
+    const publishProductForm = page.locator('.admin-editor > form');
+    await publishProductForm.locator('select[name="publicationStatus"]').selectOption('PUBLISHED');
+    await publishProductForm.locator('input[name="featured"]').check();
+    const productPublishResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname === `/api/v1/admin/products/${managedProductId}` &&
+        candidate.request().method() === 'PATCH',
+    );
+    await publishProductForm.getByRole('button', { name: 'Enregistrer le produit' }).click();
+    const publishedProductHttp = await productPublishResponse;
+    expect(publishedProductHttp.status()).toBe(200);
+    const publishedProduct = (
+      (await publishedProductHttp.json()) as {
+        data: AdminManagedProduct;
+      }
+    ).data;
+    expect(publishedProduct.id).toBe(managedProductId);
+    expect(publishedProduct).toMatchObject({ publicationStatus: 'PUBLISHED', featured: true });
+    await expect(page).toHaveURL(/\/admin\/catalog$/);
+
+    const persistedProduct = await adminApi<AdminManagedProduct>(
+      context,
+      'GET',
+      `/admin/products/${managedProductId}`,
+    );
+    const persistedVariants = await adminApi<PageResult<AdminManagedVariant>>(
+      context,
+      'GET',
+      `/admin/products/${managedProductId}/variants?page=1&pageSize=50`,
+    );
+    expect(persistedProduct).toMatchObject({ publicationStatus: 'PUBLISHED', featured: true });
+    expect(persistedVariants.items.find(({ id }) => id === managedVariantId)).toMatchObject({
+      color: 'Jaune électrique',
+      publicationStatus: 'PUBLISHED',
+    });
+    await expect(page.getByText('Produit E2E administré modifié', { exact: true })).toBeVisible();
+  });
 
   await test.step('customer registration and separate customer login', async () => {
     await page.goto('/register');
@@ -304,7 +1007,7 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     await expect(page).toHaveURL(/\/account$/);
     await expect(page.getByRole('heading', { name: 'Informations personnelles' })).toBeVisible();
 
-    await context.clearCookies();
+    await context.clearCookies({ name: /^(?:__Host-)?vape_customer_/ });
     await page.goto('/login');
     await confirmAge(page);
     await page.locator('input[name="emailOrPhone"]').fill(customerEmail);
@@ -320,7 +1023,10 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
   });
 
   await test.step('French search/filter, Arabic RTL, and mobile navigation', async () => {
+    await page.goto('/');
+    await expect(page.getByText('Produit E2E administré modifié', { exact: true })).toBeVisible();
     await page.goto('/catalog');
+    await expect(page.getByText('Produit E2E administré modifié', { exact: true })).toBeVisible();
     await expect(page.getByText('PuffJet Menthe Opérationnelle', { exact: true })).toBeVisible();
     await page.locator('.catalog-filters input[name="q"]').fill('Menthe');
     await page.locator('select[name="brand"]').selectOption('puffjet-e2e');
@@ -357,11 +1063,15 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     await page.setViewportSize({ width: 1280, height: 900 });
   });
 
-  await test.step('cart add, quantity edit, and keyboard checkout navigation', async () => {
-    await page.goto('/products/puffjet-menthe-operationnelle');
+  await test.step('available variant selection, cart edit, and keyboard checkout navigation', async () => {
+    await page.goto('/products/admin-created-e2e-product');
     await expect(
-      page.getByRole('heading', { name: 'PuffJet Menthe Opérationnelle' }),
+      page.getByRole('heading', { name: 'Produit E2E administré modifié' }),
     ).toBeVisible();
+    const managedVariant = page.getByRole('radio', { name: /Citron électrique E2E/ });
+    await expect(managedVariant).toBeEnabled();
+    await managedVariant.check();
+    await expect(managedVariant).toBeChecked();
     const addResponse = page.waitForResponse(
       (candidate) =>
         new URL(candidate.url()).pathname === '/api/v1/cart/items' &&
@@ -407,7 +1117,7 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
           new URL(candidate.url()).pathname,
         ) && candidate.request().method() === 'GET',
     );
-    await page.locator('select[name="governorateId"]').selectOption({ label: 'Tunis' });
+    await page.locator('select[name="governorateId"]').selectOption({ label: 'Bizerte' });
     expect((await delegationResponse).status()).toBe(200);
 
     const localityResponse = page.waitForResponse(
@@ -416,18 +1126,42 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
           new URL(candidate.url()).pathname,
         ) && candidate.request().method() === 'GET',
     );
-    await page.locator('select[name="delegationId"]').selectOption({ label: 'Délégation E2E' });
+    await page.locator('select[name="delegationId"]').selectOption({ label: 'Bizerte Nord' });
     expect((await localityResponse).status()).toBe(200);
+
+    await expect(
+      page.locator('select[name="localityId"] option', { hasText: 'El corniche' }),
+    ).toHaveCount(0);
+    const unsupportedMethodsResponse = await context.request.get(
+      `${apiUrl}/api/v1/delivery/methods?localityId=${encodeURIComponent(unsupportedBizerteLocalityId)}`,
+      { headers: { Accept: 'application/json', 'Accept-Language': 'fr' } },
+    );
+    expect(unsupportedMethodsResponse.status()).toBe(200);
+    expect((await unsupportedMethodsResponse.json()) as { data: DeliveryMethod[] }).toEqual({
+      data: [],
+    });
 
     const methodsResponse = page.waitForResponse(
       (candidate) =>
         new URL(candidate.url()).pathname === '/api/v1/delivery/methods' &&
         new URL(candidate.url()).searchParams.has('localityId'),
     );
-    await page.locator('select[name="localityId"]').selectOption({ label: 'Localité E2E' });
-    expect((await methodsResponse).status()).toBe(200);
-    await page.locator('input[name="postalCode"]').fill('1001');
-    await page.locator('input[name="street"]').fill('1 rue du Test Opérationnel');
+    await page.locator('select[name="localityId"]').selectOption({ label: 'La medina' });
+    const methodsHttp = await methodsResponse;
+    expect(methodsHttp.status()).toBe(200);
+    const methods = ((await methodsHttp.json()) as { data: DeliveryMethod[] }).data;
+    expect(methods).toEqual([
+      expect.objectContaining({
+        type: 'COURIER',
+        label: 'Bizerte Express E2E',
+        estimatedMinMinutes: 30,
+        estimatedMaxMinutes: 50,
+        paymentMethod: 'CASH_ON_DELIVERY',
+        phoneConfirmationRequired: false,
+      }),
+    ]);
+    await page.locator('input[name="postalCode"]').fill('7000');
+    await page.locator('input[name="street"]').fill('Rue Habib Bougatfa, La Médina, Bizerte');
 
     const methodSelect = page.locator('select[name="deliveryMethodId"]');
     await expect(methodSelect.locator('option')).toHaveCount(2);
@@ -439,7 +1173,19 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
         candidate.request().method() === 'POST',
     );
     await methodSelect.selectOption(courierValue);
-    expect((await quoteResponse).status()).toBe(201);
+    const quoteHttp = await quoteResponse;
+    expect(quoteHttp.status()).toBe(201);
+    expect((await quoteHttp.json()) as { data: { fulfillment: unknown } }).toMatchObject({
+      data: {
+        fulfillment: {
+          type: 'COURIER',
+          estimatedMinMinutes: 30,
+          estimatedMaxMinutes: 50,
+          paymentMethod: 'CASH_ON_DELIVERY',
+          phoneConfirmationRequired: false,
+        },
+      },
+    });
 
     await page.locator('input[name="adultConfirmation"]').check();
     await page.locator('input[name="termsAccepted"]').check();
@@ -461,10 +1207,19 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     expect(checkout).toMatchObject({
       status: 'PENDING_CONFIRMATION',
       paymentStatus: 'CASH_EXPECTED',
-      subtotalMillimes: 10_000,
-      deliveryTotalMillimes: 7_000,
-      taxTotalMillimes: 1_900,
-      grandTotalMillimes: 18_900,
+      subtotalMillimes: 13_000,
+      deliveryTotalMillimes: 8_000,
+      taxTotalMillimes: 0,
+      grandTotalMillimes: 21_000,
+      fulfillment: {
+        type: 'COURIER',
+        estimatedMinDays: null,
+        estimatedMaxDays: null,
+        estimatedMinMinutes: 30,
+        estimatedMaxMinutes: 50,
+        paymentMethod: 'CASH_ON_DELIVERY',
+        phoneConfirmationRequired: false,
+      },
     });
     await expect(page).toHaveURL(new RegExp(`/order-confirmation/${checkout.orderNumber}$`));
 
@@ -486,8 +1241,7 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     await expect(page.getByText(checkout.orderNumber, { exact: true })).toBeVisible();
   });
 
-  await test.step('super-administrator password, TOTP, and realm-separated session', async () => {
-    await loginAdmin(page, adminEmail, adminPassword);
+  await test.step('customer and administrator sessions remain realm-separated', async () => {
     const [customerSession, adminSession] = await Promise.all([
       context.request.get(`${apiUrl}/api/v1/auth/customer/session`, {
         headers: { 'X-Client-Context': 'customer' },
@@ -576,6 +1330,19 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
       altTextAr: 'صورة E2E الرئيسية',
       isPrimary: true,
     });
+    const baselineCard = imageCard('Catalogue E2E baseline');
+    await expect(baselineCard).toHaveCount(1);
+    page.once('dialog', (dialog) => void dialog.accept());
+    const baselineDeletionResponse = page.waitForResponse(
+      (candidate) =>
+        new URL(candidate.url()).pathname.startsWith(`${mediaListPath}/`) &&
+        candidate.request().method() === 'DELETE',
+    );
+    const baselineDeletionRefresh = waitForMediaRefresh();
+    await baselineCard.getByRole('button', { name: 'Supprimer' }).click();
+    expect((await baselineDeletionResponse).status()).toBe(200);
+    await baselineDeletionRefresh;
+    await expect(baselineCard).toHaveCount(0);
     const galleryImage = await uploadImage({
       fixturePath: mediaFixturePaths[1],
       altTextFr: 'Galerie produit E2E',
@@ -1005,108 +1772,6 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     const importedStorefrontImage = page.locator('.product-gallery__main');
     await expect(importedStorefrontImage).toHaveAttribute('alt', genericMediaAlt);
     await expectLoadedImage(importedStorefrontImage);
-  });
-
-  await test.step('administrator creates and edits a product', async () => {
-    const [categories, brands] = await Promise.all([
-      adminApi<PageResult<{ id: string }>>(
-        context,
-        'GET',
-        '/admin/categories?page=1&limit=50&sort=name_asc',
-      ),
-      adminApi<PageResult<{ id: string }>>(
-        context,
-        'GET',
-        '/admin/brands?page=1&limit=50&sort=name_asc',
-      ),
-    ]);
-    const categoryId = categories.items[0]?.id;
-    const brandId = brands.items[0]?.id;
-    expect(categoryId).toBeTruthy();
-    expect(brandId).toBeTruthy();
-    const created = await adminApi<{ id: string; version: number; nameFr: string }>(
-      context,
-      'POST',
-      '/admin/products',
-      {
-        categoryId,
-        brandId,
-        nameFr: 'Produit E2E administré',
-        nameAr: 'منتج إدارة E2E',
-        slug: 'admin-created-e2e-product',
-        productType: 'DISPOSABLE',
-        flavor: 'Agrumes E2E',
-        sku: 'E2E-ADMIN-PRODUCT',
-        shortDescriptionFr: 'Créé par le workflow Playwright réel.',
-        shortDescriptionAr: 'تم إنشاؤه من خلال اختبار Playwright الحقيقي.',
-        containsNicotine: true,
-        basePriceMillimes: 12_000,
-        warningFr: 'Réservé aux adultes.',
-        warningAr: 'مخصص للبالغين.',
-        minimumAge: 18,
-        featured: false,
-      },
-    );
-    expect(created.nameFr).toBe('Produit E2E administré');
-    const updated = await adminApi<{ id: string; version: number; nameFr: string; flavor: string }>(
-      context,
-      'PATCH',
-      `/admin/products/${created.id}`,
-      {
-        version: created.version,
-        nameFr: 'Produit E2E administré modifié',
-        flavor: 'Citron E2E',
-      },
-    );
-    expect(updated).toMatchObject({
-      id: created.id,
-      nameFr: 'Produit E2E administré modifié',
-      flavor: 'Citron E2E',
-    });
-    await page.goto('/admin/catalog');
-    await expect(page.getByText('Produit E2E administré modifié', { exact: true })).toBeVisible();
-  });
-
-  await test.step('inventory receipt is durable and idempotent', async () => {
-    const [inventory, locations] = await Promise.all([
-      adminApi<PageResult<{ id: string; sku: string }>>(
-        context,
-        'GET',
-        '/admin/inventory?page=1&limit=20&q=E2E-PUFFJET-MINT-V1',
-      ),
-      adminApi<Array<{ id: string; code: string }>>(context, 'GET', '/admin/inventory/locations'),
-    ]);
-    const variantId = inventory.items.find(({ sku }) => sku === 'E2E-PUFFJET-MINT-V1')?.id;
-    const locationId = locations.find(({ code }) => code === 'E2E-FULFILLMENT')?.id;
-    expect(variantId).toBeTruthy();
-    expect(locationId).toBeTruthy();
-    const receiptBody = {
-      variantId,
-      locationId,
-      batchNumber: 'E2E-BATCH-RECEIPT',
-      supplierReference: 'PLAYWRIGHT-RECEIPT-001',
-      manufacturedAt: '2026-01-01',
-      expiryDate: '2030-12-31',
-      quantity: 2,
-      note: 'Real operational browser receipt',
-    };
-    const idempotencyKey = randomUUID();
-    const received = await adminApi<{ quantityReceived: number; replayed: boolean }>(
-      context,
-      'POST',
-      '/admin/inventory/batches/receipts',
-      receiptBody,
-      { 'Idempotency-Key': idempotencyKey },
-    );
-    expect(received).toMatchObject({ quantityReceived: 2, replayed: false });
-    const replayed = await adminApi<{ quantityReceived: number; replayed: boolean }>(
-      context,
-      'POST',
-      '/admin/inventory/batches/receipts',
-      receiptBody,
-      { 'Idempotency-Key': idempotencyKey },
-    );
-    expect(replayed).toMatchObject({ quantityReceived: 2, replayed: true });
   });
 
   await test.step('order confirmation, delivery assignment, and COD collection', async () => {

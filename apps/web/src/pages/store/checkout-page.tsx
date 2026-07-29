@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Banknote, LockKeyhole, MapPin, ShieldCheck } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
@@ -10,9 +10,11 @@ import { z } from 'zod';
 import { storefrontClient } from '../../api/storefront-client';
 import type { CheckoutPayload } from '../../api/types';
 import { useStorefrontStatus } from '../../components/compliance/storefront-status-context';
+import { DeliveryMetadata } from '../../components/storefront/delivery-metadata';
 import { Button } from '../../components/ui/button';
 import { CheckboxField, FormField, SelectField } from '../../components/ui/form-field';
 import { Price } from '../../components/ui/price';
+import { checkoutOrderErrorFeedback, checkoutQuoteErrorKey } from './checkout-error-feedback';
 
 function optionalText() {
   return z.string().trim().optional();
@@ -108,6 +110,7 @@ export function CheckoutPage() {
     queryFn: () => storefrontClient.localities(delegationId),
     enabled: Boolean(delegationId),
   });
+  const selectedLocality = localities.data?.find((item) => item.id === localityId);
   const cart = useQuery({ queryKey: ['cart'], queryFn: storefrontClient.cart });
   const deliveryMethods = useQuery({
     queryKey: ['delivery', 'methods', localityId],
@@ -134,6 +137,8 @@ export function CheckoutPage() {
       (selectedMethod?.type !== 'COURIER' || Boolean(localityId)),
     retry: false,
   });
+  const deliveryMetadata =
+    quote.data?.fulfillment.type === 'COURIER' ? quote.data.fulfillment : selectedMethod;
   const checkoutMutation = useMutation({
     mutationFn: ({ payload, key }: { payload: CheckoutPayload; key: string }) =>
       storefrontClient.checkout(payload, key),
@@ -146,6 +151,14 @@ export function CheckoutPage() {
       });
     },
   });
+  const checkoutErrorRef = useRef<HTMLDivElement>(null);
+  const orderErrorFeedback = checkoutMutation.isError
+    ? checkoutOrderErrorFeedback(checkoutMutation.error)
+    : null;
+
+  useEffect(() => {
+    if (checkoutMutation.isError) checkoutErrorRef.current?.focus();
+  }, [checkoutMutation.isError]);
 
   const placeOrder = handleSubmit((values) => {
     if (!status.checkoutEnabled) return;
@@ -155,7 +168,6 @@ export function CheckoutPage() {
       if (!parsed.governorateId) setError('governorateId', { message: t('validation.required') });
       if (!parsed.delegationId) setError('delegationId', { message: t('validation.required') });
       if (!parsed.localityId) setError('localityId', { message: t('validation.required') });
-      if (!parsed.postalCode) setError('postalCode', { message: t('validation.required') });
       if (!parsed.street || parsed.street.length < 3) {
         setError('street', { message: t('validation.required') });
       }
@@ -163,7 +175,6 @@ export function CheckoutPage() {
         !parsed.governorateId ||
         !parsed.delegationId ||
         !parsed.localityId ||
-        !parsed.postalCode ||
         !parsed.street ||
         parsed.street.length < 3
       ) {
@@ -306,7 +317,16 @@ export function CheckoutPage() {
                 disabled={!delegationId}
                 error={errors.localityId?.message}
                 {...register('localityId', {
-                  onChange: () => setValue('deliveryMethodId', ''),
+                  onChange: (event: ChangeEvent<HTMLSelectElement>) => {
+                    const nextLocality = localities.data?.find(
+                      (item) => item.id === event.target.value,
+                    );
+                    setValue('postalCode', nextLocality?.postalCode ?? '', {
+                      shouldDirty: true,
+                      shouldValidate: true,
+                    });
+                    setValue('deliveryMethodId', '');
+                  },
                 })}
               >
                 <option value="">—</option>
@@ -319,10 +339,16 @@ export function CheckoutPage() {
                   ))}
               </SelectField>
               <FormField
-                label={t('checkout.postalCode')}
+                label={t('checkout.postalCodeOptional')}
                 inputMode="numeric"
                 autoComplete="postal-code"
                 maxLength={4}
+                readOnly
+                hint={t(
+                  selectedLocality?.postalCode
+                    ? 'checkout.postalCodeConfigured'
+                    : 'checkout.postalCodeNotRequired',
+                )}
                 error={errors.postalCode?.message}
                 {...register('postalCode')}
               />
@@ -363,6 +389,7 @@ export function CheckoutPage() {
                 ))}
               </SelectField>
             </div>
+            <DeliveryMetadata metadata={deliveryMetadata} />
           </fieldset>
           {requirements.age || requirements.terms || requirements.privacy ? (
             <fieldset>
@@ -437,16 +464,28 @@ export function CheckoutPage() {
           ) : null}
           {quote.isError ? (
             <p className="form-banner form-banner--error" role="alert">
-              {t('checkout.quoteFailed')}
+              {t(checkoutQuoteErrorKey(quote.error))}
             </p>
           ) : null}
-          {checkoutMutation.isError ? (
-            <p className="form-banner form-banner--error" role="alert">
-              {t('checkout.orderFailed')}
-            </p>
+          {orderErrorFeedback ? (
+            <div
+              ref={checkoutErrorRef}
+              className="form-banner form-banner--error checkout-order-feedback"
+              role="alert"
+              tabIndex={-1}
+            >
+              <span>{t(orderErrorFeedback.messageKey)}</span>
+              {orderErrorFeedback.requestId ? (
+                <small>
+                  {t('checkout.requestReference', {
+                    requestId: orderErrorFeedback.requestId,
+                  })}
+                </small>
+              ) : null}
+            </div>
           ) : null}
           <Button type="submit" disabled={!allowed} loading={checkoutMutation.isPending}>
-            {t('checkout.placeOrder')}
+            {t(orderErrorFeedback ? 'checkout.retryOrder' : 'checkout.placeOrder')}
           </Button>
         </aside>
       </form>

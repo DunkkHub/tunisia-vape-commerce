@@ -58,9 +58,11 @@ Only hashes of session, verification, reset, recovery, and CSRF tokens are store
 
 `Flavor` is a relational bilingual taxonomy keyed by canonical name and category. A variant may reference one flavor and records normalized nicotine strength separately; device color remains a different field. Product family/model, puff count, product type, flavor, nicotine strength, and bounded price filters are therefore queryable without parsing display names.
 
-Imported products set `requiresPricing`, `requiresStock`, and `needsMediaReview`. New variants remain `DRAFT`; their selling-price placeholder is non-public and their unknown supplier `costMillimes` is `NULL`. Imports create no supplier, inventory item, batch, or stock movement and cannot publish a variant. Normal publication checks require valid identity, positive real price, available unexpired inventory, approved media, and active fulfillment pricing before an imported product can become public.
+Imported products set `requiresPricing`, `requiresStock`, and `needsMediaReview`. New variants remain `DRAFT`; their selling-price placeholder is non-public and their unknown supplier `costMillimes` is `NULL`. Imports create no supplier, inventory item, batch, or stock movement and cannot publish a variant. Normal publication checks require published eligible taxonomy, valid identity, positive real price, reservation-adjusted available inventory, approved media, at least one sellable published variant, and active fulfillment pricing before an imported product can become public.
 
-The authoritative draft-to-published transition locks the owning product and, where applicable, variant before repeating the catalog, media, live inventory/reservation, and delivery-policy checks in a serializable transaction. A conflicting dependency update is observed or rejected; a stale preflight result is never sufficient to publish.
+The authoritative draft-to-published transitions use serializable transactions. Variant publication locks both its product and variant before repeating product-lifecycle, SKU, price, media, live inventory/reservation, media-review, and delivery-policy checks. Product publication locks the product and additionally repeats published category/brand and sellable published-variant checks. Demoting, suspending, or archiving a published variant locks the product and expected variant version and rejects the mutation when a published owner would have no other positive-priced, published, nonarchived variant. Draft-product cleanup remains allowed; this focused invariant does not turn later zero stock into an automatic unpublication. A conflicting dependency update is observed or rejected; a stale preflight result is never sufficient to publish.
+
+Public catalog queries use one centralized eligibility predicate for published, nonarchived, unrestricted product/taxonomy state, a positive-priced published variant, and approved media owned by the product or an eligible published variant. This predicate also prevents a product whose last eligible variant was later suspended or archived from remaining publicly visible, even though product and variant lifecycle records stay independent. An image owned only by a draft variant is not public fallback. Available stock remains advisory after publication and may fall to zero without silently changing publication state; cart, quote, and order validation remain authoritative and fail closed when a requested quantity is unavailable.
 
 Product-image and source-record ownership use database `CHECK` constraints for exactly one owner. Their owner foreign keys use `RESTRICT` rather than cascading deletion because MySQL does not permit the required checked cascade combination and provenance must not disappear with an ordinary catalog mutation. Normal catalog lifecycle remains soft-delete/archive.
 
@@ -103,9 +105,17 @@ An order keeps current workflow fields and immutable commercial snapshots:
 
 Product, variant, promotion, coupon, and geography foreign keys are optional or use restrictive deletion behavior where historical evidence must survive. Snapshot text and amounts are never regenerated from current catalog data. Normal application APIs must not update or delete order items, address snapshots, consent snapshots, discounts, status histories, delivery events, cash reconciliation events, audit logs, or stock movements. Corrections are compensating records with an audit trail.
 
+## Authoritative Tunisia geography snapshot
+
+`prisma/data/tunisia-geography-2024.json` is schema version 1 and is the versioned structural source for the active bilingual hierarchy. It records Institut National de la Statistique (Tunisia), `RGPH 2024 - population by sector, age and sex`, edition `2025-05-17`, retrieval date `2026-07-27`, source page/download/license URLs, attribution, and source SHA-256 `70f8f9f872862d6947d08fc1b2775c66cf6b4d114a55f68092e7a4ce70d5d9ae`. The snapshot contains exactly 24 governorates, 279 delegations, and 2,082 localities; Bizerte contains 14 delegations and 101 localities. Repository governorate code `23` maps to the source's official Bizerte code `17`.
+
+The structural seed validates the snapshot schema version, exact counts, array sizes, code/name uniqueness, and parent references before writing. It additionally validates the exact governorate and Bizerte delegation sets, then upserts governorates, delegations, and localities by stable keys in bounded transactions. A repeated seed preserves stable identifiers and counts. The embedded hash is provenance metadata for the downloaded source; the seed validates the committed normalized snapshot and does not redownload or hash the external workbook at runtime.
+
 ## Deterministic delivery pricing
 
 Before pricing, reject inactive, unsupported, or temporarily suspended zones/localities. Check blackout dates, available days, time-window capacity, minimum order, maximum COD, and pickup availability. If an area has no valid rule, block checkout unless the explicitly disabled-by-default manual quote workflow is authorized.
+
+`DeliveryZone` may store a complete day estimate pair in the range 0–365 or a complete minute estimate pair in the range 1–10,080, but never both units. Minimum must not exceed maximum. Optional `paymentMethod`, `assignmentMode`, and `driverCommunication` values are limited to the modeled COD/manual/WhatsApp-or-phone vocabulary. These are deterministic operational metadata, not provider credentials or evidence of an external integration. The internal order fulfillment snapshot preserves configured operational metadata; customer responses expose only the safe timing, payment, confirmation, fee, and method fields.
 
 For active rates at checkout time, resolve one base geographic fee in this specificity order:
 
@@ -115,7 +125,7 @@ For active rates at checkout time, resolve one base geographic fee in this speci
 4. delivery zone;
 5. global base rate.
 
-Within equal specificity, the greater `priority` wins; a remaining tie is a configuration error and blocks checkout. Apply at most one matching rate for each independently configured surcharge class (remote, weight, oversize, express), again using priority. Apply a valid free-delivery threshold last, without bypassing minimum-order or maximum-COD rules. Persist the selected IDs and full rule/result snapshot on the order. Never accept a fee calculated by the browser.
+Within equal specificity, the greater `priority` wins; a remaining tie is a configuration error and blocks checkout. Apply at most one matching rate for each independently configured surcharge class (remote, weight, oversize, express), again using priority. Apply a valid free-delivery threshold last, without bypassing minimum-order or maximum-COD rules. A zone cannot leave its explicitly-free state while any active zero-fee rate remains, and activation revalidates that relationship. Persist the selected IDs and full rule/result snapshot on the order. Never accept a fee calculated by the browser.
 
 ## COD ledger meaning
 
@@ -259,18 +269,20 @@ Never run `prisma migrate dev`, `prisma db push`, or automatic destructive reset
 
 `20260721023000_unverified_operator_source_urls` makes `CatalogSourceRecord.verifiedAt` nullable. Operator-uploaded URLs are marked `OPERATOR_SUPPLIED_UNVERIFIED` and receive no verification timestamp; official Wotofo records retain a verified timestamp and explicit `OFFICIAL_SOURCE_VERIFIED` metadata.
 
+`20260727090000_delivery_zone_operational_metadata` adds minute ETA fields and the optional COD payment, manual assignment, and WhatsApp/phone communication enums to `DeliveryZone`. Database checks require a complete 1–10,080-minute pair, ordered minimum/maximum values, and mutual exclusion between day and minute estimates. It also constrains `DeliveryRate.feeMillimes` to 0–1,000,000; the service accepts zero only when the owning zone explicitly configures a zero free-delivery threshold. The migration adds metadata and constraints without inventing or activating a delivery profile.
+
 ## Structural seed safety
 
 `prisma/seed.ts` is idempotent and contains only:
 
 - nine system roles and granular permissions with role-permission links;
-- all 24 Tunisian governorates;
+- the validated INS 2024 hierarchy: 24 governorates, 279 delegations, and 2,082 localities, including Bizerte's 14 delegations and 101 localities;
 - operational settings with `checkout.enabled=true`, `maintenance.mode=false`, and `prelaunch.mode=false`;
 - `minimum_purchase_age=18` and the six configurable age/consent/delivery controls, all enabled by default;
 - disabled-by-default sensitive feature flags;
 - the order-number sequence counter.
 
-The six controls are `age_gate.entry.enabled`, `age_gate.checkout.enabled`, `consent.terms.required`, `consent.privacy.required`, `consent.recording.enabled`, and `delivery.age_verification_required`. It creates no user, administrator, customer, product, variant, catalog import batch, source record, image, stock, delivery rate, pickup, provider credential, or published document. It does not seed `legal_review.completed`; a legacy row has no checkout effect. Empty store identity/contact settings and missing delivery configuration continue to block checkout. Never add a default password or production administrator to this seed.
+The geography rows are batched idempotent upserts using stable parent/code keys; rerunning the seed updates structural labels without duplicating the hierarchy. The six controls are `age_gate.entry.enabled`, `age_gate.checkout.enabled`, `consent.terms.required`, `consent.privacy.required`, `consent.recording.enabled`, and `delivery.age_verification_required`. It creates no user, administrator, customer, product, variant, catalog import batch, source record, image, stock, delivery zone, delivery rate, pickup, provider credential, or published document. It does not seed `legal_review.completed`; a legacy row has no checkout effect. Empty store identity/contact settings and missing delivery configuration continue to block checkout. Never add a default password or production administrator to this seed.
 
 ## Backup and restore implementation status
 
@@ -288,7 +300,13 @@ At minimum, integration tests against real MySQL must prove:
 - idempotent retries produce one order and reject a changed payload;
 - cancelled/expired reservations become available exactly once;
 - archived/soft-deleted products remain visible through order snapshots;
+- repeat structural seeding preserves the exact 24/279/2,082 hierarchy and stable identifiers, including Bizerte's 14/101 subset;
 - invalid delivery areas and absent rates block checkout;
+- delivery ETA pairs reject partial, out-of-range, inverted, or mixed day/minute configuration;
+- `BIZERTE_EXPRESS` rejects non-Bizerte or whole-governorate coverage and cannot activate without its exact 30–50-minute COD/manual/WhatsApp metadata and a current zone base rate;
+- public delivery, quote, and order DTOs omit assignment, driver-communication, manual-review, and provider-internal fields;
+- product and variant publication revalidate their documented owner-specific dependencies under lock, and public catalog reads apply the centralized published eligibility policy;
+- a published product cannot lose its last positive-priced published variant through variant demotion, suspension, or archival, while the same cleanup remains allowed for a draft owner;
 - impossible order/delivery transitions fail without a history mutation;
 - failed delivery age verification cannot become delivered;
 - returned stock is not restored before inspection;

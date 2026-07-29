@@ -1,5 +1,11 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
-import { DeliveryRateType, Weekday } from '@prisma/client';
+import {
+  DeliveryAssignmentMode,
+  DeliveryCommunicationChannel,
+  DeliveryPaymentMethod,
+  DeliveryRateType,
+  Weekday,
+} from '@prisma/client';
 import { Transform, Type, type TransformFnParams } from 'class-transformer';
 import {
   Equals,
@@ -128,31 +134,65 @@ export class CreateDeliveryZoneDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(1_000_000)
   minOrderMillimes?: number | null;
 
   @ApiPropertyOptional({ nullable: true, minimum: 0 })
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(1_000_000)
   maxCodMillimes?: number | null;
 
   @ApiPropertyOptional({ nullable: true, minimum: 0 })
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(1_000_000)
   freeDeliveryThresholdMillimes?: number | null;
 
   @ApiPropertyOptional({ nullable: true, minimum: 0 })
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(365)
   estimatedMinDays?: number | null;
 
   @ApiPropertyOptional({ nullable: true, minimum: 0 })
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(365)
   estimatedMaxDays?: number | null;
+
+  @ApiPropertyOptional({ nullable: true, minimum: 1, maximum: 10_080 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10_080)
+  estimatedMinMinutes?: number | null;
+
+  @ApiPropertyOptional({ nullable: true, minimum: 1, maximum: 10_080 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10_080)
+  estimatedMaxMinutes?: number | null;
+
+  @ApiPropertyOptional({ nullable: true, enum: DeliveryPaymentMethod })
+  @IsOptional()
+  @IsEnum(DeliveryPaymentMethod)
+  paymentMethod?: DeliveryPaymentMethod | null;
+
+  @ApiPropertyOptional({ nullable: true, enum: DeliveryAssignmentMode })
+  @IsOptional()
+  @IsEnum(DeliveryAssignmentMode)
+  assignmentMode?: DeliveryAssignmentMode | null;
+
+  @ApiPropertyOptional({ nullable: true, enum: DeliveryCommunicationChannel })
+  @IsOptional()
+  @IsEnum(DeliveryCommunicationChannel)
+  driverCommunication?: DeliveryCommunicationChannel | null;
 
   @ApiPropertyOptional({ default: false })
   @IsOptional()
@@ -233,9 +273,10 @@ export class CreateDeliveryRateDto {
   @Matches(ID_PATTERN)
   localityId?: string | null;
 
-  @ApiProperty({ minimum: 0, description: 'Integer Tunisian millimes.' })
+  @ApiProperty({ minimum: 0, maximum: 1_000_000, description: 'Integer Tunisian millimes.' })
   @IsInt()
   @Min(0)
+  @Max(1_000_000)
   feeMillimes!: number;
 
   @ApiPropertyOptional({ default: 0 })
@@ -425,8 +466,25 @@ export class DeliveryZoneConfigDto {
   @ApiProperty() priority!: number;
   @ApiProperty() active!: boolean;
   @ApiProperty() supported!: boolean;
+  @ApiProperty() temporarilySuspended!: boolean;
+  @ApiProperty() phoneConfirmationRequired!: boolean;
+  @ApiProperty() manualReviewRequired!: boolean;
+  @ApiPropertyOptional({ nullable: true }) minOrderMillimes!: number | null;
+  @ApiPropertyOptional({ nullable: true }) maxCodMillimes!: number | null;
+  @ApiPropertyOptional({ nullable: true }) freeDeliveryThresholdMillimes!: number | null;
+  @ApiPropertyOptional({ nullable: true }) estimatedMinDays!: number | null;
+  @ApiPropertyOptional({ nullable: true }) estimatedMaxDays!: number | null;
+  @ApiPropertyOptional({ nullable: true }) estimatedMinMinutes!: number | null;
+  @ApiPropertyOptional({ nullable: true }) estimatedMaxMinutes!: number | null;
+  @ApiPropertyOptional({ nullable: true, enum: DeliveryPaymentMethod })
+  paymentMethod!: DeliveryPaymentMethod | null;
+  @ApiPropertyOptional({ nullable: true, enum: DeliveryAssignmentMode })
+  assignmentMode!: DeliveryAssignmentMode | null;
+  @ApiPropertyOptional({ nullable: true, enum: DeliveryCommunicationChannel })
+  driverCommunication!: DeliveryCommunicationChannel | null;
   @ApiProperty() localityCount!: number;
   @ApiProperty() activeRateCount!: number;
+  @ApiProperty({ format: 'date-time' }) createdAt!: string;
   @ApiProperty({ format: 'date-time' }) updatedAt!: string;
 }
 
@@ -434,10 +492,14 @@ export class DeliveryRateConfigDto {
   @ApiProperty() id!: string;
   @ApiProperty({ enum: DeliveryRateType }) type!: DeliveryRateType;
   @ApiProperty() name!: string;
+  @ApiPropertyOptional({ nullable: true }) deliveryZoneId!: string | null;
   @ApiProperty() feeMillimes!: number;
   @ApiProperty() priority!: number;
+  @ApiProperty() express!: boolean;
   @ApiProperty() active!: boolean;
   @ApiProperty() version!: number;
+  @ApiPropertyOptional({ nullable: true, format: 'date-time' }) validFrom!: string | null;
+  @ApiPropertyOptional({ nullable: true, format: 'date-time' }) validUntil!: string | null;
 }
 
 export class PickupLocationConfigDto {

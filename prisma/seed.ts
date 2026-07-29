@@ -1,6 +1,39 @@
 import { FeatureFlagEnvironment, PrismaClient, SettingValueType } from '@prisma/client';
+import rawGeographySnapshot from './data/tunisia-geography-2024.json';
 
 const prisma = new PrismaClient();
+
+interface GeographySnapshot {
+  schemaVersion: number;
+  counts: {
+    governorates: number;
+    delegations: number;
+    localities: number;
+    bizerteDelegations: number;
+    bizerteLocalities: number;
+  };
+  governorates: Array<{
+    code: string;
+    officialCode: string;
+    nameFr: string;
+    nameAr: string;
+  }>;
+  delegations: Array<{
+    code: string;
+    governorateCode: string;
+    nameFr: string;
+    nameAr: string;
+  }>;
+  localities: Array<{
+    code: string;
+    delegationCode: string;
+    nameFr: string;
+    nameAr: string;
+  }>;
+}
+
+const geographySnapshot: GeographySnapshot = rawGeographySnapshot;
+const geographyBatchSize = 40;
 
 const permissions = [
   'products.read',
@@ -449,6 +482,190 @@ async function seedGovernorates(): Promise<void> {
   }
 }
 
+function normalizedGeographyName(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .trim()
+    .toLocaleLowerCase('fr')
+    .replace(/\s+/g, ' ');
+}
+
+function validateGeographySnapshot(): void {
+  const expectedCounts = {
+    governorates: 24,
+    delegations: 279,
+    localities: 2_082,
+    bizerteDelegations: 14,
+    bizerteLocalities: 101,
+  } as const;
+
+  if (geographySnapshot.schemaVersion !== 1) {
+    throw new Error(`Unsupported Tunisia geography schema: ${geographySnapshot.schemaVersion}.`);
+  }
+
+  for (const [key, expected] of Object.entries(expectedCounts)) {
+    const declared = geographySnapshot.counts[key as keyof typeof expectedCounts];
+    if (declared !== expected) {
+      throw new Error(`Unexpected Tunisia geography count for ${key}: ${declared}.`);
+    }
+  }
+  if (
+    geographySnapshot.governorates.length !== expectedCounts.governorates ||
+    geographySnapshot.delegations.length !== expectedCounts.delegations ||
+    geographySnapshot.localities.length !== expectedCounts.localities
+  ) {
+    throw new Error('Tunisia geography rows do not match their declared counts.');
+  }
+
+  const expectedGovernorateCodes = new Set(governorates.map(({ code }) => code));
+  const governorateCodes = new Set<string>();
+  const officialGovernorateCodes = new Set<string>();
+  for (const governorate of geographySnapshot.governorates) {
+    if (
+      !/^\d{2}$/.test(governorate.code) ||
+      !/^\d{2}$/.test(governorate.officialCode) ||
+      !governorate.nameFr.trim() ||
+      !governorate.nameAr.trim() ||
+      governorateCodes.has(governorate.code) ||
+      officialGovernorateCodes.has(governorate.officialCode)
+    ) {
+      throw new Error(`Invalid or duplicate governorate row: ${governorate.code}.`);
+    }
+    governorateCodes.add(governorate.code);
+    officialGovernorateCodes.add(governorate.officialCode);
+  }
+  if (
+    governorateCodes.size !== expectedGovernorateCodes.size ||
+    [...expectedGovernorateCodes].some((code) => !governorateCodes.has(code))
+  ) {
+    throw new Error('Tunisia geography governorate codes do not match the structural seed.');
+  }
+
+  const delegationCodes = new Set<string>();
+  const delegationNames = new Set<string>();
+  for (const delegation of geographySnapshot.delegations) {
+    const nameKey = `${delegation.governorateCode}:${normalizedGeographyName(delegation.nameFr)}`;
+    if (
+      !/^\d{4}$/.test(delegation.code) ||
+      !governorateCodes.has(delegation.governorateCode) ||
+      !delegation.nameFr.trim() ||
+      !delegation.nameAr.trim() ||
+      delegationCodes.has(delegation.code) ||
+      delegationNames.has(nameKey)
+    ) {
+      throw new Error(`Invalid or duplicate delegation row: ${delegation.code}.`);
+    }
+    delegationCodes.add(delegation.code);
+    delegationNames.add(nameKey);
+  }
+
+  const localityCodes = new Set<string>();
+  for (const locality of geographySnapshot.localities) {
+    if (
+      !/^\d{6}$/.test(locality.code) ||
+      !delegationCodes.has(locality.delegationCode) ||
+      !locality.nameFr.trim() ||
+      !locality.nameAr.trim() ||
+      localityCodes.has(locality.code)
+    ) {
+      throw new Error(`Invalid or duplicate locality row: ${locality.code}.`);
+    }
+    localityCodes.add(locality.code);
+  }
+
+  const requiredBizerteDelegations = new Set(
+    Array.from({ length: 14 }, (_, index) => (1_751 + index).toString()),
+  );
+  const bizerteDelegations = geographySnapshot.delegations.filter(
+    ({ governorateCode }) => governorateCode === '23',
+  );
+  const bizerteDelegationCodes = new Set(bizerteDelegations.map(({ code }) => code));
+  const bizerteLocalityCount = geographySnapshot.localities.filter(({ delegationCode }) =>
+    bizerteDelegationCodes.has(delegationCode),
+  ).length;
+  if (
+    bizerteDelegations.length !== expectedCounts.bizerteDelegations ||
+    [...requiredBizerteDelegations].some((code) => !bizerteDelegationCodes.has(code)) ||
+    bizerteLocalityCount !== expectedCounts.bizerteLocalities
+  ) {
+    throw new Error('The Tunisia geography snapshot has incomplete Bizerte coverage.');
+  }
+}
+
+async function seedGeography(): Promise<{ delegations: number; localities: number }> {
+  validateGeographySnapshot();
+  await seedGovernorates();
+
+  const governorateRows = await prisma.governorate.findMany({
+    where: { code: { in: geographySnapshot.governorates.map(({ code }) => code) } },
+    select: { id: true, code: true },
+  });
+  const governorateIds = new Map(governorateRows.map(({ code, id }) => [code, id]));
+  if (governorateIds.size !== geographySnapshot.governorates.length) {
+    throw new Error('A seeded Tunisia governorate could not be reloaded.');
+  }
+
+  const delegationIds = new Map<string, string>();
+  for (let index = 0; index < geographySnapshot.delegations.length; index += geographyBatchSize) {
+    const batch = geographySnapshot.delegations.slice(index, index + geographyBatchSize);
+    const results = await prisma.$transaction(
+      batch.map((delegation) => {
+        const governorateId = governorateIds.get(delegation.governorateCode);
+        if (!governorateId) {
+          throw new Error(`Missing governorate for delegation ${delegation.code}.`);
+        }
+        return prisma.delegation.upsert({
+          where: { governorateId_code: { governorateId, code: delegation.code } },
+          update: { nameFr: delegation.nameFr, nameAr: delegation.nameAr },
+          create: {
+            governorateId,
+            code: delegation.code,
+            nameFr: delegation.nameFr,
+            nameAr: delegation.nameAr,
+            active: true,
+          },
+          select: { id: true, code: true },
+        });
+      }),
+    );
+    for (const delegation of results) {
+      delegationIds.set(delegation.code, delegation.id);
+    }
+  }
+  if (delegationIds.size !== geographySnapshot.delegations.length) {
+    throw new Error('A seeded Tunisia delegation could not be reloaded.');
+  }
+
+  for (let index = 0; index < geographySnapshot.localities.length; index += geographyBatchSize) {
+    const batch = geographySnapshot.localities.slice(index, index + geographyBatchSize);
+    await prisma.$transaction(
+      batch.map((locality) => {
+        const delegationId = delegationIds.get(locality.delegationCode);
+        if (!delegationId) {
+          throw new Error(`Missing delegation for locality ${locality.code}.`);
+        }
+        return prisma.locality.upsert({
+          where: { delegationId_code: { delegationId, code: locality.code } },
+          update: { nameFr: locality.nameFr, nameAr: locality.nameAr },
+          create: {
+            delegationId,
+            code: locality.code,
+            nameFr: locality.nameFr,
+            nameAr: locality.nameAr,
+            active: true,
+          },
+        });
+      }),
+    );
+  }
+
+  return {
+    delegations: geographySnapshot.delegations.length,
+    localities: geographySnapshot.localities.length,
+  };
+}
+
 async function seedSettings(): Promise<void> {
   for (const setting of storeSettings) {
     await prisma.storeSetting.upsert({
@@ -491,7 +708,7 @@ async function seedSettings(): Promise<void> {
 
 async function main(): Promise<void> {
   await seedRbac();
-  await seedGovernorates();
+  const geographyCounts = await seedGeography();
   await seedSettings();
   await prisma.sequenceCounter.upsert({
     where: { key: 'order-number' },
@@ -506,7 +723,7 @@ async function main(): Promise<void> {
   ]);
 
   console.info(
-    `Structural seed complete: ${roleCount} roles, ${permissionCount} permissions, ${governorateCount} governorates. No users, administrators, or products were created.`,
+    `Structural seed complete: ${roleCount} roles, ${permissionCount} permissions, ${governorateCount} governorates, ${geographyCounts.delegations} delegations, and ${geographyCounts.localities} localities. No users, administrators, products, delivery zones, or rates were created.`,
   );
 }
 

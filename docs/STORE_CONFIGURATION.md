@@ -20,7 +20,7 @@ Store settings are authoritative database records. Environment variables may imp
 | `minimum_purchase_age`         | `18`        | Used when at least one configured age control requires it           |
 | store identity/contact         | empty       | Intentionally produces `STORE_INFORMATION_MISSING`                  |
 | delivery method                | none        | Intentionally produces `DELIVERY_METHOD_MISSING`                    |
-| latest expected migration      | configured  | `20260721023000_unverified_operator_source_urls`                    |
+| latest expected migration      | configured  | `20260727090000_delivery_zone_operational_metadata`                 |
 
 A fresh seed is therefore operationally blocked even though checkout and launch switches are open. This is intentional: buyers must provide real store information and delivery pricing.
 

@@ -87,6 +87,24 @@ export class DeliveryMethodOptionDto {
 
   @ApiProperty({ nullable: true })
   maximumCodMillimes!: number | null;
+
+  @ApiProperty({ type: Number, nullable: true })
+  estimatedMinDays!: number | null;
+
+  @ApiProperty({ type: Number, nullable: true })
+  estimatedMaxDays!: number | null;
+
+  @ApiProperty({ type: Number, nullable: true })
+  estimatedMinMinutes!: number | null;
+
+  @ApiProperty({ type: Number, nullable: true })
+  estimatedMaxMinutes!: number | null;
+
+  @ApiProperty({ enum: ['CASH_ON_DELIVERY'], nullable: true })
+  paymentMethod!: 'CASH_ON_DELIVERY' | null;
+
+  @ApiProperty()
+  phoneConfirmationRequired!: boolean;
 }
 
 export class DeliveryMethodsResponseDto {

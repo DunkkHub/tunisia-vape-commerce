@@ -88,6 +88,35 @@ const publicVariantFilter = (): Prisma.ProductVariantWhereInput => ({
   deletedAt: null,
 });
 
+export const publicSellableVariantWhere = (): Prisma.ProductVariantWhereInput => ({
+  ...publicVariantFilter(),
+  priceMillimes: { gt: 0 },
+  OR: [{ promotionalPriceMillimes: null }, { promotionalPriceMillimes: { gt: 0 } }],
+});
+
+const approvedPublicImageFilter = (): Prisma.ProductImageWhereInput => ({
+  deletedAt: null,
+  moderationStatus: 'APPROVED',
+});
+
+const hasSellablePublicVariant = (): Prisma.ProductWhereInput => ({
+  variants: { some: publicSellableVariantWhere() },
+});
+
+const hasApprovedPublicImage = (): Prisma.ProductWhereInput => ({
+  OR: [
+    { images: { some: approvedPublicImageFilter() } },
+    {
+      variants: {
+        some: {
+          ...publicSellableVariantWhere(),
+          images: { some: approvedPublicImageFilter() },
+        },
+      },
+    },
+  ],
+});
+
 export const buildPublicProductWhere = (
   filters: Pick<
     NormalizedCatalogFilter,
@@ -123,7 +152,10 @@ export const buildPublicProductWhere = (
   };
   if (filters.brand) publishedBrand.slug = filters.brand;
 
-  const clauses: Prisma.ProductWhereInput[] = [hasNonNegativePublicPrice()];
+  const clauses: Prisma.ProductWhereInput[] = [
+    hasSellablePublicVariant(),
+    hasApprovedPublicImage(),
+  ];
   clauses.push(
     filters.brand
       ? { brand: { is: publishedBrand } }
@@ -232,18 +264,18 @@ const productBaseEffectivePrice = (
     {
       AND: [
         { promotionalPriceMillimes: { not: null } },
-        { promotionalPriceMillimes: { gte: 0 } },
+        { promotionalPriceMillimes: { gt: 0 } },
         { promotionalPriceMillimes: { lte: fields.productBasePrice } },
         { promotionalPriceMillimes: { [comparator]: amount } },
       ],
     },
     {
       AND: [
-        { basePriceMillimes: { gte: 0, [comparator]: amount } },
+        { basePriceMillimes: { gt: 0, [comparator]: amount } },
         {
           OR: [
             { promotionalPriceMillimes: null },
-            { promotionalPriceMillimes: { lt: 0 } },
+            { promotionalPriceMillimes: { lte: 0 } },
             { promotionalPriceMillimes: { gt: fields.productBasePrice } },
           ],
         },
@@ -264,18 +296,18 @@ const publicVariantEffectivePrice = (
     {
       AND: [
         { promotionalPriceMillimes: { not: null } },
-        { promotionalPriceMillimes: { gte: 0 } },
+        { promotionalPriceMillimes: { gt: 0 } },
         { promotionalPriceMillimes: { lte: fields.variantListPrice } },
         { promotionalPriceMillimes: { [comparator]: amount } },
       ],
     },
     {
       AND: [
-        { priceMillimes: { gte: 0, [comparator]: amount } },
+        { priceMillimes: { gt: 0, [comparator]: amount } },
         {
           OR: [
             { promotionalPriceMillimes: null },
-            { promotionalPriceMillimes: { lt: 0 } },
+            { promotionalPriceMillimes: { lte: 0 } },
             { promotionalPriceMillimes: { gt: fields.variantListPrice } },
           ],
         },
@@ -294,22 +326,6 @@ const effectivePriceBelowOrEqual = (
   ],
 });
 
-const hasNonNegativePublicPrice = (): Prisma.ProductWhereInput => ({
-  OR: [
-    { basePriceMillimes: { gte: 0 } },
-    {
-      variants: {
-        some: {
-          publicationStatus: 'PUBLISHED',
-          archivedAt: null,
-          deletedAt: null,
-          priceMillimes: { gte: 0 },
-        },
-      },
-    },
-  ],
-});
-
 /**
  * A product's public price is the lowest valid effective base/variant price. Therefore a lower
  * bound excludes any candidate below it, while an upper bound requires at least one candidate at
@@ -320,7 +336,7 @@ export const buildEffectiveProductPriceWhere = (
   filters: Pick<NormalizedCatalogFilter, 'maxPriceMillimes' | 'minPriceMillimes'>,
   fields: CatalogPriceFieldReferences,
 ): Prisma.ProductWhereInput => {
-  const clauses: Prisma.ProductWhereInput[] = [hasNonNegativePublicPrice()];
+  const clauses: Prisma.ProductWhereInput[] = [hasSellablePublicVariant()];
   if (filters.minPriceMillimes !== undefined && filters.minPriceMillimes > 0) {
     const belowMinimum: Prisma.ProductWhereInput = {
       OR: [

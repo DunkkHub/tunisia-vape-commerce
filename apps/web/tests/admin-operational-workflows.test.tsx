@@ -111,6 +111,7 @@ describe('fresh-store product taxonomy', () => {
 
     renderRoute('/admin/catalog/new');
 
+    await user.click(await screen.findByRole('heading', { name: 'Préparer le catalogue' }));
     const foundation = await screen.findByRole('region', { name: 'Préparer le catalogue' });
     const categoryButton = within(foundation).getByRole('button', {
       name: 'Créer et publier la catégorie',
@@ -324,6 +325,7 @@ describe('inventory operational controls', () => {
     expect(
       await screen.findByRole('heading', { name: 'PUFFJET Max / Menthe glacée' }),
     ).toBeVisible();
+    await user.click(screen.getByRole('tab', { name: /^Gérer les lots/ }));
     expect(
       await screen.findByRole('button', { name: 'Un second administrateur doit décider' }),
     ).toBeDisabled();
@@ -337,6 +339,7 @@ describe('inventory operational controls', () => {
       expect(requestBody(call?.[1])).toEqual({ decision: 'APPROVE' });
     });
 
+    await user.click(screen.getByRole('tab', { name: /^Réceptionner/ }));
     const receiptButton = screen.getByRole('button', { name: 'Enregistrer la réception' });
     const receiptForm = receiptButton.closest('form');
     if (!receiptForm) throw new Error('Expected the batch receipt form.');
@@ -347,6 +350,18 @@ describe('inventory operational controls', () => {
     await user.type(within(receiptForm).getByLabelText('Numéro de lot'), 'LOT-NEW');
     await user.type(within(receiptForm).getByLabelText('Quantité'), '24');
     await user.type(within(receiptForm).getByLabelText('Date d’expiration'), '2027-12-31');
+    expect(
+      within(receiptForm).queryByLabelText('Identifiant fournisseur facultatif'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(receiptForm).getByText(
+        'Aucun fournisseur n’est requis. Saisissez uniquement une référence externe si vous en avez une.',
+      ),
+    ).toBeVisible();
+    await user.type(
+      within(receiptForm).getByLabelText('Référence facture ou bon de livraison (facultative)'),
+      'BL-WOTO-001',
+    );
     await user.click(receiptButton);
 
     await waitFor(() => {
@@ -359,6 +374,7 @@ describe('inventory operational controls', () => {
         batchNumber: 'LOT-NEW',
         expiryDate: '2027-12-31',
         quantity: 24,
+        supplierReference: 'BL-WOTO-001',
       });
       expect(new Headers(call?.[1]?.headers).get('Idempotency-Key')).toMatch(/^admin-web-/);
     });
@@ -366,6 +382,7 @@ describe('inventory operational controls', () => {
       await screen.findByText('La réception et son mouvement de stock ont été enregistrés.'),
     ).toBeVisible();
 
+    await user.click(screen.getByRole('tab', { name: /^Gérer les lots/ }));
     await user.click(screen.getByRole('button', { name: 'Demander un ajustement' }));
     const adjustmentButton = screen.getByRole('button', { name: 'Soumettre à approbation' });
     const adjustmentForm = adjustmentButton.closest('form');
@@ -416,6 +433,128 @@ describe('inventory operational controls', () => {
     expect(
       await screen.findByText('Le transfert et ses deux mouvements ont été enregistrés.'),
     ).toBeVisible();
+  });
+
+  it('explains the missing location prerequisite and treats an unchanged threshold as a no-op', async () => {
+    const emptyVariant = {
+      ...inventoryVariant,
+      lowStockThreshold: 23,
+      onHandQuantity: 0,
+      reservedQuantity: 0,
+      availableQuantity: 0,
+      committedQuantity: 0,
+      items: [],
+    };
+    const activeLocations: Array<{
+      id: string;
+      code: string;
+      name: string;
+      address: string | null;
+      active: boolean;
+      fulfillsOrders: boolean;
+      updatedAt: string;
+    }> = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = requestUrl(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/auth/admin/session')) return Promise.resolve(json({ user: adminUser }));
+      if (url.endsWith('/admin/inventory/variants/variant-1')) {
+        return Promise.resolve(json(emptyVariant));
+      }
+      if (url.endsWith('/admin/inventory/locations') && method === 'POST') {
+        const created = {
+          id: 'location-bizerte',
+          code: 'BIZERTE',
+          name: 'WOTO',
+          address: 'BHIRA',
+          active: true,
+          fulfillsOrders: true,
+          updatedAt: '2026-07-24T00:00:00.000Z',
+        };
+        activeLocations.push(created);
+        return Promise.resolve(json(created, 201));
+      }
+      if (url.endsWith('/admin/inventory/locations')) {
+        return Promise.resolve(json(activeLocations));
+      }
+      if (url.endsWith('/admin/inventory/items') && method === 'POST') {
+        return Promise.resolve(json({ id: 'item-bizerte' }, 201));
+      }
+      if (url.includes('/admin/inventory/adjustments?')) return Promise.resolve(json(page([])));
+      if (url.includes('/admin/inventory/transfers?')) return Promise.resolve(json(page([])));
+      return Promise.resolve(json({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderRoute('/admin/inventory/variant-1');
+
+    expect(
+      await screen.findByText(
+        'Créez d’abord un emplacement actif. Vous pourrez ensuite enregistrer une réception de lot ou créer un contenant vide.',
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Créer un contenant vide' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enregistrer la réception' })).toBeDisabled();
+
+    const locationButton = screen.getByRole('button', { name: 'Créer l’emplacement' });
+    const locationForm = locationButton.closest('form');
+    if (!locationForm) throw new Error('Expected the inventory location form.');
+    await user.type(
+      within(locationForm).getByLabelText('Code emplacement (majuscules)'),
+      'bizerte',
+    );
+    await user.type(within(locationForm).getByLabelText('Nom de l’emplacement'), 'WOTO');
+    await user.type(within(locationForm).getByLabelText('Adresse facultative'), 'BHIRA');
+    await user.click(locationButton);
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          requestUrl(input).endsWith('/admin/inventory/locations') && init?.method === 'POST',
+      );
+      expect(requestBody(call?.[1])).toEqual({
+        code: 'BIZERTE',
+        name: 'WOTO',
+        address: 'BHIRA',
+      });
+      expect(new Headers(call?.[1]?.headers).get('X-CSRF-Token')).toBe('test-admin-csrf');
+    });
+    expect(await screen.findByText('L’emplacement de stock a été créé.')).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Créer un contenant vide' })).toBeEnabled(),
+    );
+
+    const bucketButton = screen.getByRole('button', { name: 'Créer un contenant vide' });
+    const bucketForm = bucketButton.closest('form');
+    if (!bucketForm) throw new Error('Expected the inventory bucket form.');
+    await user.selectOptions(
+      within(bucketForm).getByLabelText('Emplacement actif'),
+      'location-bizerte',
+    );
+    await user.click(bucketButton);
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          requestUrl(input).endsWith('/admin/inventory/items') && init?.method === 'POST',
+      );
+      expect(requestBody(call?.[1])).toEqual({
+        variantId: 'variant-1',
+        locationId: 'location-bizerte',
+        initialQuantity: 0,
+      });
+      expect(new Headers(call?.[1]?.headers).get('X-CSRF-Token')).toBe('test-admin-csrf');
+    });
+    expect(await screen.findByText('Le contenant vide a été créé.')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Mettre à jour' }));
+    expect(await screen.findByText('Le seuil est déjà enregistré à cette valeur.')).toBeVisible();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          requestUrl(input).includes('/low-stock-threshold') && init?.method === 'PATCH',
+      ),
+    ).toBe(false);
   });
 });
 
@@ -569,6 +708,7 @@ describe('COD discrepancy dual control', () => {
 
     renderRoute('/admin/cash');
 
+    await user.click(await screen.findByRole('tab', { name: /^Remises livreur/ }));
     await user.click(await screen.findByRole('button', { name: 'Ouvrir l’écart' }));
     expect(
       await screen.findByRole('heading', { name: 'Résolution à double contrôle' }),

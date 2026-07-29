@@ -13,6 +13,7 @@ import type {
   Pagination,
 } from '../../api/types';
 import { useAdminAuth } from '../../auth/admin-auth-context';
+import { AdminDisclosure } from '../../components/admin/admin-workspace';
 import { Button } from '../../components/ui/button';
 import { CheckboxField, FormField } from '../../components/ui/form-field';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
@@ -313,64 +314,81 @@ export function AdminAdministratorsPage() {
         </Button>
       </header>
 
-      <section className="admin-access-create" aria-labelledby="create-administrator-title">
-        <div>
-          <UserPlus aria-hidden="true" />
+      <AdminDisclosure
+        title={t('admin.access.createAdministrator')}
+        description={t('admin.ui.createAdministratorHint')}
+      >
+        <section className="admin-access-create" aria-label={t('admin.access.createAdministrator')}>
           <div>
-            <h2 id="create-administrator-title">{t('admin.access.createAdministrator')}</h2>
-            <p>{t('admin.access.createAdministratorHint')}</p>
+            <UserPlus aria-hidden="true" />
+            <div>
+              <span className="admin-access-create__title">
+                {t('admin.access.createAdministrator')}
+              </span>
+              <p>{t('admin.access.createAdministratorHint')}</p>
+            </div>
           </div>
-        </div>
-        <form onSubmit={(event) => void submitCreate(event)}>
-          <div className="admin-form-grid">
-            <FormField
-              name="displayName"
-              label={t('admin.access.displayName')}
-              minLength={2}
-              maxLength={200}
-              required
-            />
-            <FormField
-              name="email"
-              type="email"
-              label={t('auth.email')}
-              maxLength={254}
-              autoComplete="off"
-              required
-            />
-            <FormField name="employeeCode" label={t('admin.access.employeeCode')} maxLength={50} />
-            <FormField name="jobTitle" label={t('admin.access.jobTitle')} maxLength={120} />
-            <FormField
-              name="password"
-              type="password"
-              className="field--wide"
-              label={t('auth.password')}
-              minLength={14}
-              maxLength={128}
-              autoComplete="new-password"
-              hint={t('admin.access.passwordHint')}
-              required
-            />
-          </div>
-          <CheckboxField name="confirmed" required label={t('admin.access.createConfirmation')} />
-          {createError ? (
-            <p className="admin-action-error" role="alert">
-              {createError.message}
-            </p>
-          ) : null}
-          {created ? (
-            <p className="admin-action-success" role="status">
-              {t('admin.access.createdSuccess')}
-            </p>
-          ) : null}
-          <Button type="submit" variant="admin" loading={create.isPending}>
-            <ShieldCheck aria-hidden="true" size={18} />
-            {t('admin.access.createAdministrator')}
-          </Button>
-        </form>
-      </section>
+          <form onSubmit={(event) => void submitCreate(event)}>
+            <div className="admin-form-grid">
+              <FormField
+                name="displayName"
+                label={t('admin.access.displayName')}
+                minLength={2}
+                maxLength={200}
+                required
+              />
+              <FormField
+                name="email"
+                type="email"
+                label={t('auth.email')}
+                maxLength={254}
+                autoComplete="off"
+                required
+              />
+              <FormField
+                name="employeeCode"
+                label={t('admin.access.employeeCode')}
+                maxLength={50}
+              />
+              <FormField name="jobTitle" label={t('admin.access.jobTitle')} maxLength={120} />
+              <FormField
+                name="password"
+                type="password"
+                className="field--wide"
+                label={t('auth.password')}
+                minLength={14}
+                maxLength={128}
+                autoComplete="new-password"
+                hint={t('admin.access.passwordHint')}
+                required
+              />
+            </div>
+            <CheckboxField name="confirmed" required label={t('admin.access.createConfirmation')} />
+            {createError ? (
+              <p className="admin-action-error" role="alert">
+                {createError.message}
+              </p>
+            ) : null}
+            {created ? (
+              <p className="admin-action-success" role="status">
+                {t('admin.access.createdSuccess')}
+              </p>
+            ) : null}
+            <Button type="submit" variant="admin" loading={create.isPending}>
+              <ShieldCheck aria-hidden="true" size={18} />
+              {t('admin.access.createAdministrator')}
+            </Button>
+          </form>
+        </section>
+      </AdminDisclosure>
 
-      <SearchBar id="administrators-search" value={search.query} onSubmit={search.submitSearch} />
+      <section className="admin-list-workspace" aria-labelledby="administrators-list-title">
+        <div className="admin-list-workspace__heading">
+          <h2 id="administrators-list-title">{t('admin.ui.listAdministrators')}</h2>
+          <p>{t('admin.ui.listAdministratorsHint')}</p>
+        </div>
+        <SearchBar id="administrators-search" value={search.query} onSubmit={search.submitSearch} />
+      </section>
       <QueryBody
         pending={list.isPending}
         error={list.error}
@@ -524,7 +542,13 @@ export function AdminCustomersPage() {
           <RefreshCw aria-hidden="true" size={18} />
         </Button>
       </header>
-      <SearchBar id="customers-search" value={search.query} onSubmit={search.submitSearch} />
+      <section className="admin-list-workspace" aria-labelledby="customers-list-tools">
+        <div className="admin-list-workspace__heading">
+          <h2 id="customers-list-tools">{t('admin.ui.filtersTitle')}</h2>
+          <p>{t('admin.ui.filtersHint')}</p>
+        </div>
+        <SearchBar id="customers-search" value={search.query} onSubmit={search.submitSearch} />
+      </section>
       <QueryBody
         pending={list.isPending}
         error={list.error}
