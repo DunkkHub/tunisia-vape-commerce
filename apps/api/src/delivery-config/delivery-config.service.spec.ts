@@ -1,5 +1,10 @@
 import { ConflictException } from '@nestjs/common';
-import { DeliveryRateType } from '@prisma/client';
+import {
+  DeliveryAssignmentMode,
+  DeliveryCommunicationChannel,
+  DeliveryPaymentMethod,
+  DeliveryRateType,
+} from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaService } from '../database/prisma.service';
 import {
@@ -28,6 +33,11 @@ const zoneRecord = () => ({
   freeDeliveryThresholdMillimes: null,
   estimatedMinDays: 1,
   estimatedMaxDays: 2,
+  estimatedMinMinutes: null,
+  estimatedMaxMinutes: null,
+  paymentMethod: null,
+  assignmentMode: null,
+  driverCommunication: null,
   createdAt: new Date('2026-07-01T00:00:00.000Z'),
   updatedAt,
   _count: { localities: 1, rates: 0 },
@@ -103,6 +113,159 @@ describe('administrator delivery configuration invariants', () => {
     expect(transaction.deliveryZone.updateMany).not.toHaveBeenCalled();
   });
 
+  it('does not activate a non-free delivery zone while an active zero-fee rate exists', async () => {
+    const transaction = {
+      deliveryZone: {
+        findUnique: vi.fn().mockResolvedValue(zoneRecord()),
+        updateMany: vi.fn(),
+      },
+      deliveryZoneLocality: { count: vi.fn() },
+      deliveryRate: { count: vi.fn().mockResolvedValue(1) },
+    };
+    const service = new DeliveryZonesConfigService({
+      $transaction: vi.fn((callback: (value: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService);
+
+    const error = await service
+      .setActive('zone-1', updatedAt.toISOString(), true, context)
+      .catch((caught: unknown) => caught);
+
+    expect(responseCode(error)).toBe('DELIVERY_RATE_FREE_CONFIGURATION_REQUIRED');
+    expect(transaction.deliveryZoneLocality.count).not.toHaveBeenCalled();
+    expect(transaction.deliveryZone.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rolls back removal of an explicit free-zone setting while an active zero-fee rate exists', async () => {
+    const current = { ...zoneRecord(), freeDeliveryThresholdMillimes: 0 };
+    const changed = { ...current, freeDeliveryThresholdMillimes: null };
+    const transaction = {
+      deliveryZone: {
+        findUnique: vi.fn().mockResolvedValueOnce(current).mockResolvedValueOnce(changed),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      deliveryRate: { count: vi.fn().mockResolvedValue(1) },
+      auditLog: { create: vi.fn() },
+    };
+    const service = new DeliveryZonesConfigService({
+      $transaction: vi.fn((callback: (value: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService);
+
+    const error = await service
+      .update(
+        'zone-1',
+        {
+          freeDeliveryThresholdMillimes: null,
+          expectedUpdatedAt: updatedAt.toISOString(),
+        },
+        context,
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(responseCode(error)).toBe('DELIVERY_RATE_FREE_CONFIGURATION_REQUIRED');
+    expect(transaction.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('requires the exact operational metadata before Bizerte Express can be activated', async () => {
+    const transaction = {
+      deliveryZone: {
+        findUnique: vi.fn().mockResolvedValue({ ...zoneRecord(), code: 'BIZERTE_EXPRESS' }),
+        updateMany: vi.fn(),
+      },
+      deliveryZoneLocality: { count: vi.fn() },
+      deliveryRate: { count: vi.fn() },
+    };
+    const service = new DeliveryZonesConfigService({
+      $transaction: vi.fn((callback: (value: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService);
+
+    const error = await service
+      .setActive('zone-1', updatedAt.toISOString(), true, context)
+      .catch((caught: unknown) => caught);
+
+    expect(responseCode(error)).toBe('BIZERTE_EXPRESS_CONFIGURATION_INVALID');
+    expect(transaction.deliveryZone.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('activates Bizerte Express only with exact metadata, explicit Bizerte links, and a base rate', async () => {
+    const bizerteExpress = {
+      ...zoneRecord(),
+      code: 'BIZERTE_EXPRESS',
+      estimatedMinDays: null,
+      estimatedMaxDays: null,
+      estimatedMinMinutes: 30,
+      estimatedMaxMinutes: 50,
+      paymentMethod: DeliveryPaymentMethod.CASH_ON_DELIVERY,
+      assignmentMode: DeliveryAssignmentMode.MANUAL,
+      driverCommunication: DeliveryCommunicationChannel.WHATSAPP,
+    };
+    const transaction = {
+      deliveryZone: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValueOnce(bizerteExpress)
+          .mockResolvedValueOnce({ ...bizerteExpress, active: true, supported: true }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      deliveryZoneLocality: {
+        count: vi.fn().mockResolvedValueOnce(2).mockResolvedValueOnce(0).mockResolvedValueOnce(2),
+      },
+      deliveryRate: { count: vi.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(1) },
+      auditLog: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const service = new DeliveryZonesConfigService({
+      $transaction: vi.fn((callback: (value: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService);
+
+    const result = await service.setActive('zone-1', updatedAt.toISOString(), true, context);
+
+    expect(result.data).toMatchObject({
+      code: 'BIZERTE_EXPRESS',
+      active: true,
+      estimatedMinMinutes: 30,
+      estimatedMaxMinutes: 50,
+      paymentMethod: DeliveryPaymentMethod.CASH_ON_DELIVERY,
+      assignmentMode: DeliveryAssignmentMode.MANUAL,
+      driverCommunication: DeliveryCommunicationChannel.WHATSAPP,
+    });
+  });
+
+  it('rejects whole-governorate linking for Bizerte Express', async () => {
+    const transaction = {
+      deliveryZone: {
+        findUnique: vi.fn().mockResolvedValue({ ...zoneRecord(), code: 'BIZERTE_EXPRESS' }),
+      },
+    };
+    const service = new DeliveryZonesConfigService({
+      $transaction: vi.fn((callback: (value: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService);
+
+    const error = await service
+      .linkGeography(
+        'zone-1',
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          confirmed: true,
+          scope: 'GOVERNORATE',
+          geographyId: 'bizerte',
+          active: true,
+        },
+        context,
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(responseCode(error)).toBe('BIZERTE_EXPRESS_EXPLICIT_COVERAGE_REQUIRED');
+  });
+
   it('rejects an equal-priority active rate covering the same scope and validity period', async () => {
     const record = rateRecord();
     const transaction = {
@@ -163,6 +326,74 @@ describe('administrator delivery configuration invariants', () => {
       feeMillimes: 7_000,
     });
     expect(response.data.deliveryZoneId).toBeNull();
+  });
+
+  it('patches an incorrect four-millime rate to exactly eight thousand millimes', async () => {
+    const current = { ...rateRecord(), feeMillimes: 4 };
+    const changed = { ...current, feeMillimes: 8_000, version: 2 };
+    const transaction = {
+      deliveryRate: {
+        findUnique: vi.fn().mockResolvedValueOnce(current).mockResolvedValueOnce(changed),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      deliveryZone: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'zone-1',
+          active: false,
+          freeDeliveryThresholdMillimes: null,
+        }),
+      },
+      auditLog: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const service = new DeliveryRatesConfigService({
+      $transaction: vi.fn((callback: (value: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService);
+
+    const result = await service.update(
+      'rate-1',
+      { feeMillimes: 8_000, expectedVersion: 1 },
+      context,
+    );
+
+    expect(transaction.deliveryRate.updateMany.mock.calls[0]?.[0]).toMatchObject({
+      where: { id: 'rate-1', version: 1 },
+      data: { feeMillimes: 8_000, version: { increment: 1 } },
+    });
+    expect(result.data.feeMillimes).toBe(8_000);
+    expect(result.data.version).toBe(2);
+  });
+
+  it('rejects a zero fee unless the selected zone is explicitly configured as free', async () => {
+    const transaction = {
+      deliveryZone: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ id: 'zone-1', freeDeliveryThresholdMillimes: null }),
+      },
+      deliveryRate: { create: vi.fn() },
+    };
+    const service = new DeliveryRatesConfigService({
+      $transaction: vi.fn((callback: (value: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaService);
+
+    const error = await service
+      .create(
+        {
+          type: DeliveryRateType.BASE,
+          name: 'Accidental free rate',
+          deliveryZoneId: 'zone-1',
+          feeMillimes: 0,
+        },
+        context,
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(responseCode(error)).toBe('DELIVERY_RATE_FREE_CONFIGURATION_REQUIRED');
+    expect(transaction.deliveryRate.create).not.toHaveBeenCalled();
   });
 
   it('rolls back deactivation of the last current base rate for an active zone', async () => {

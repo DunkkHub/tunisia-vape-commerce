@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, type ProductVariant } from '@prisma/client';
+import { Prisma, type ProductVariant, type PublicationStatus } from '@prisma/client';
 import type { Request } from 'express';
 import { CheckoutPolicyService } from '../checkout/checkout-policy.service';
 import { PrismaService } from '../database/prisma.service';
@@ -14,6 +14,7 @@ import {
   publicationInventoryWhere,
   publicationNotReady,
 } from './catalog-publication-readiness';
+import { publicSellableVariantWhere } from './catalog-policy';
 import type { CreateProductVariantDto, UpdateProductVariantDto } from './dto/admin-variant.dto';
 
 type CatalogDatabase = PrismaService | Prisma.TransactionClient;
@@ -188,6 +189,8 @@ export class AdminVariantsService {
     this.validatePrices(price, promotion);
     const sku = input.sku === undefined ? current.sku : input.sku.trim();
     const targetStatus = input.publicationStatus ?? current.publicationStatus;
+    const removesPublishedVariant =
+      current.publicationStatus === 'PUBLISHED' && targetStatus !== 'PUBLISHED';
     if (targetStatus === 'PUBLISHED') {
       if (current.publicationStatus === 'PUBLISHED') {
         this.validatePublishedUpdate(sku, price, promotion);
@@ -227,6 +230,19 @@ export class AdminVariantsService {
                 transaction,
               );
             }
+          } else if (removesPublishedVariant) {
+            const productStatus = await this.lockPublicationOwner(
+              transaction,
+              productId,
+              variantId,
+              input.version,
+            );
+            await this.ensurePublishedProductRetainsSellableVariant(
+              transaction,
+              productId,
+              variantId,
+              productStatus,
+            );
           }
 
           const updated = await transaction.productVariant.updateMany({
@@ -271,7 +287,9 @@ export class AdminVariantsService {
           });
           return changed;
         },
-        targetStatus === 'PUBLISHED' ? PUBLICATION_TRANSACTION_OPTIONS : undefined,
+        targetStatus === 'PUBLISHED' || removesPublishedVariant
+          ? PUBLICATION_TRANSACTION_OPTIONS
+          : undefined,
       );
       return response(variant);
     } catch (error) {
@@ -304,39 +322,62 @@ export class AdminVariantsService {
           : 'Only an archived variant can be restored.',
       });
     }
-    const changed = await this.prisma.$transaction(async (transaction) => {
-      const updated = await transaction.productVariant.updateMany({
-        where: { id: variantId, productId, version, deletedAt: null },
-        data: {
-          archivedAt: archive ? new Date() : null,
-          publicationStatus: 'DRAFT',
-          version: { increment: 1 },
+    const removesPublishedVariant = archive && current.publicationStatus === 'PUBLISHED';
+    try {
+      const changed = await this.prisma.$transaction(
+        async (transaction) => {
+          if (removesPublishedVariant) {
+            const productStatus = await this.lockPublicationOwner(
+              transaction,
+              productId,
+              variantId,
+              version,
+            );
+            await this.ensurePublishedProductRetainsSellableVariant(
+              transaction,
+              productId,
+              variantId,
+              productStatus,
+            );
+          }
+
+          const updated = await transaction.productVariant.updateMany({
+            where: { id: variantId, productId, version, deletedAt: null },
+            data: {
+              archivedAt: archive ? new Date() : null,
+              publicationStatus: 'DRAFT',
+              version: { increment: 1 },
+            },
+          });
+          if (updated.count !== 1) throw this.versionConflict();
+          const variant = await transaction.productVariant.findUnique({ where: { id: variantId } });
+          if (!variant) throw this.notFound();
+          await transaction.auditLog.create({
+            data: {
+              ...metadata(request),
+              action: archive ? 'catalog.variant.archive' : 'catalog.variant.restore',
+              resourceType: 'ProductVariant',
+              resourceId: variantId,
+              beforeSummary: {
+                archived: Boolean(current.archivedAt),
+                publicationStatus: current.publicationStatus,
+                version: current.version,
+              },
+              afterSummary: {
+                archived: Boolean(variant.archivedAt),
+                publicationStatus: variant.publicationStatus,
+                version: variant.version,
+              },
+            },
+          });
+          return variant;
         },
-      });
-      if (updated.count !== 1) throw this.versionConflict();
-      const variant = await transaction.productVariant.findUnique({ where: { id: variantId } });
-      if (!variant) throw this.notFound();
-      await transaction.auditLog.create({
-        data: {
-          ...metadata(request),
-          action: archive ? 'catalog.variant.archive' : 'catalog.variant.restore',
-          resourceType: 'ProductVariant',
-          resourceId: variantId,
-          beforeSummary: {
-            archived: Boolean(current.archivedAt),
-            publicationStatus: current.publicationStatus,
-            version: current.version,
-          },
-          afterSummary: {
-            archived: Boolean(variant.archivedAt),
-            publicationStatus: variant.publicationStatus,
-            version: variant.version,
-          },
-        },
-      });
-      return variant;
-    });
-    return response(changed);
+        removesPublishedVariant ? PUBLICATION_TRANSACTION_OPTIONS : undefined,
+      );
+      return response(changed);
+    } catch (error) {
+      this.rethrowUnique(error);
+    }
   }
 
   private async requireProduct(id: string) {
@@ -479,12 +520,14 @@ export class AdminVariantsService {
     productId: string,
     variantId: string,
     version: number,
-  ): Promise<void> {
-    const product = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-      SELECT id FROM Product
-      WHERE id = ${productId} AND deletedAt IS NULL
-      FOR UPDATE
-    `);
+  ): Promise<PublicationStatus> {
+    const product = await transaction.$queryRaw<Array<{ publicationStatus: PublicationStatus }>>(
+      Prisma.sql`
+        SELECT publicationStatus FROM Product
+        WHERE id = ${productId} AND deletedAt IS NULL
+        FOR UPDATE
+      `,
+    );
     if (product.length !== 1) throw this.notFound();
     const variant = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT id FROM ProductVariant
@@ -495,6 +538,26 @@ export class AdminVariantsService {
       FOR UPDATE
     `);
     if (variant.length !== 1) throw this.versionConflict();
+    return product[0]!.publicationStatus;
+  }
+
+  private async ensurePublishedProductRetainsSellableVariant(
+    transaction: Prisma.TransactionClient,
+    productId: string,
+    variantId: string,
+    productStatus: PublicationStatus,
+  ): Promise<void> {
+    if (productStatus !== 'PUBLISHED') return;
+    const remainingSellableVariants = await transaction.productVariant.count({
+      where: {
+        productId,
+        id: { not: variantId },
+        ...publicSellableVariantWhere(),
+      },
+    });
+    if (remainingSellableVariants === 0) {
+      throw publicationNotReady('product', ['SELLABLE_VARIANT_MISSING']);
+    }
   }
 
   private async deliveryPublicationBlocker(

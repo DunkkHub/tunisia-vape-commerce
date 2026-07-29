@@ -8,12 +8,13 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { Request } from 'express';
-import { buildPublicProductWhere } from '../catalog/catalog-policy';
+import { buildPublicProductWhere, publicSellableVariantWhere } from '../catalog/catalog-policy';
 import { addMillimes, calculateBasisPoints } from '../common/money/money';
 import { createOperationalAlertWithOutbox } from '../common/outbox/operational-alerts';
 import { CryptoService } from '../common/security/crypto.service';
 import { createOrderNotificationsWithOutbox } from '../common/outbox/order-notifications';
 import { PrismaService } from '../database/prisma.service';
+import { eligibleOrderInventoryWhere } from '../inventory/inventory-eligibility';
 import {
   allocateInventory,
   checkoutRequestFingerprint,
@@ -98,6 +99,38 @@ const safeQuantityProduct = (left: number, right: number): number => {
 
 const delay = async (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const jsonRecord = (value: Prisma.JsonValue | null): Prisma.JsonObject | null =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) ? value : null;
+
+const nullableOperationalDuration = (value: Prisma.JsonValue | undefined): number | null =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+
+const nullableOperationalEnum = <Value extends string>(
+  value: Prisma.JsonValue | undefined,
+  allowed: readonly Value[],
+): Value | null =>
+  typeof value === 'string' && (allowed as readonly string[]).includes(value)
+    ? (value as Value)
+    : null;
+
+const deliveryOperationalMetadata = (
+  snapshot: Prisma.JsonValue | null,
+  phoneConfirmationRequired: boolean,
+) => {
+  const record = jsonRecord(snapshot);
+  return {
+    estimatedMinDays: nullableOperationalDuration(record?.estimatedMinDays),
+    estimatedMaxDays: nullableOperationalDuration(record?.estimatedMaxDays),
+    estimatedMinMinutes: nullableOperationalDuration(record?.estimatedMinMinutes),
+    estimatedMaxMinutes: nullableOperationalDuration(record?.estimatedMaxMinutes),
+    paymentMethod: nullableOperationalEnum(record?.paymentMethod, ['CASH_ON_DELIVERY'] as const),
+    phoneConfirmationRequired:
+      typeof record?.phoneConfirmationRequired === 'boolean'
+        ? record.phoneConfirmationRequired
+        : phoneConfirmationRequired,
+  };
+};
 
 @Injectable()
 export class CheckoutOrderService {
@@ -239,19 +272,7 @@ export class CheckoutOrderService {
     const inventoryCandidates = await transaction.inventoryItem.findMany({
       where: {
         variantId: { in: variantIds },
-        onHandQuantity: { gt: 0 },
-        location: { is: { active: true, fulfillsOrders: true } },
-        OR: [
-          { batchId: null },
-          {
-            batch: {
-              is: {
-                archivedAt: null,
-                OR: [{ expiryDate: null }, { expiryDate: { gt: now } }],
-              },
-            },
-          },
-        ],
+        ...eligibleOrderInventoryWhere(now),
       },
       orderBy: { id: 'asc' },
       select: { id: true },
@@ -272,9 +293,7 @@ export class CheckoutOrderService {
     const variants = await transaction.productVariant.findMany({
       where: {
         id: { in: variantIds },
-        publicationStatus: 'PUBLISHED',
-        archivedAt: null,
-        deletedAt: null,
+        ...publicSellableVariantWhere(),
         product: { is: buildPublicProductWhere({}, now) },
       },
       select: {
@@ -480,6 +499,8 @@ export class CheckoutOrderService {
         grandTotalMillimes: true,
         expectedCodMillimes: true,
         deliveryMethodType: true,
+        deliveryFeeRuleSnapshot: true,
+        phoneConfirmationRequired: true,
         createdAt: true,
       },
     });
@@ -899,6 +920,8 @@ export class CheckoutOrderService {
         grandTotalMillimes: true,
         expectedCodMillimes: true,
         deliveryMethodType: true,
+        deliveryFeeRuleSnapshot: true,
+        phoneConfirmationRequired: true,
         createdAt: true,
       },
     });
@@ -924,14 +947,21 @@ export class CheckoutOrderService {
     grandTotalMillimes: number;
     expectedCodMillimes: number;
     deliveryMethodType: string;
+    deliveryFeeRuleSnapshot: Prisma.JsonValue | null;
+    phoneConfirmationRequired: boolean;
     createdAt: Date;
   }) {
+    const { deliveryFeeRuleSnapshot, phoneConfirmationRequired, ...publicOrder } = order;
     return {
       data: {
-        ...order,
+        ...publicOrder,
         status: 'PENDING_CONFIRMATION' as const,
         paymentStatus: 'CASH_EXPECTED' as const,
         createdAt: order.createdAt.toISOString(),
+        fulfillment: {
+          type: order.deliveryMethodType as 'COURIER' | 'STORE_PICKUP',
+          ...deliveryOperationalMetadata(deliveryFeeRuleSnapshot, phoneConfirmationRequired),
+        },
       },
     };
   }
@@ -1052,6 +1082,13 @@ export class CheckoutOrderService {
                 freeDeliveryThresholdMillimes: true,
                 phoneConfirmationRequired: true,
                 manualReviewRequired: true,
+                estimatedMinDays: true,
+                estimatedMaxDays: true,
+                estimatedMinMinutes: true,
+                estimatedMaxMinutes: true,
+                paymentMethod: true,
+                assignmentMode: true,
+                driverCommunication: true,
               },
             },
           },
@@ -1188,6 +1225,15 @@ export class CheckoutOrderService {
           feeMillimes: deliveryTotalMillimes,
           freeDeliveryApplied: deliveryTotalMillimes === 0,
           express: context.express,
+          estimatedMinDays: selectedZone.zone.estimatedMinDays,
+          estimatedMaxDays: selectedZone.zone.estimatedMaxDays,
+          estimatedMinMinutes: selectedZone.zone.estimatedMinMinutes,
+          estimatedMaxMinutes: selectedZone.zone.estimatedMaxMinutes,
+          paymentMethod: selectedZone.zone.paymentMethod,
+          assignmentMode: selectedZone.zone.assignmentMode,
+          driverCommunication: selectedZone.zone.driverCommunication,
+          phoneConfirmationRequired: selectedZone.zone.phoneConfirmationRequired,
+          manualReviewRequired: selectedZone.zone.manualReviewRequired,
         },
         courierAddress: {
           governorateId: locality.delegation.governorateId,

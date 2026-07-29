@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import type { DeliveryPaymentMethod, Prisma } from '@prisma/client';
 import type { StorefrontLocale } from '../catalog/catalog.service';
 import { PrismaService } from '../database/prisma.service';
 
@@ -8,6 +8,7 @@ const MAX_DELEGATIONS_PER_GOVERNORATE = 100;
 const MAX_LOCALITIES_PER_DELEGATION = 250;
 const MAX_DELIVERY_WINDOWS = 100;
 const MAX_PICKUP_LOCATIONS = 50;
+const MAX_DELIVERY_RATE_CANDIDATES = 250;
 
 const eligibleZoneLinkWhere: Prisma.DeliveryZoneLocalityWhereInput = {
   active: true,
@@ -16,14 +17,33 @@ const eligibleZoneLinkWhere: Prisma.DeliveryZoneLocalityWhereInput = {
   },
 };
 
-const activeRateWhere = (now: Date): Prisma.DeliveryRateWhereInput => ({
+const currentRateWhere = (now: Date): Prisma.DeliveryRateWhereInput => ({
   active: true,
-  feeMillimes: { gte: 0 },
   AND: [
     { OR: [{ validFrom: null }, { validFrom: { lte: now } }] },
     { OR: [{ validUntil: null }, { validUntil: { gt: now } }] },
   ],
 });
+
+const DELIVERY_METHOD_RATE_SELECT = {
+  id: true,
+  type: true,
+  priority: true,
+  feeMillimes: true,
+  deliveryZoneId: true,
+  governorateId: true,
+  delegationId: true,
+  localityId: true,
+  minWeightGrams: true,
+  maxWeightGrams: true,
+  minOrderMillimes: true,
+  maxOrderMillimes: true,
+  maxCodMillimes: true,
+  express: true,
+} as const satisfies Prisma.DeliveryRateSelect;
+type DeliveryMethodRate = Prisma.DeliveryRateGetPayload<{
+  select: typeof DELIVERY_METHOD_RATE_SELECT;
+}>;
 
 @Injectable()
 export class GeographyService {
@@ -206,6 +226,12 @@ export class GeographyService {
       address: string | null;
       minimumOrderMillimes: number | null;
       maximumCodMillimes: number | null;
+      estimatedMinDays: number | null;
+      estimatedMaxDays: number | null;
+      estimatedMinMinutes: number | null;
+      estimatedMaxMinutes: number | null;
+      paymentMethod: DeliveryPaymentMethod | null;
+      phoneConfirmationRequired: boolean;
     }> = [];
 
     if (localityId) {
@@ -220,6 +246,12 @@ export class GeographyService {
         address: pickup.address,
         minimumOrderMillimes: pickup.minOrderMillimes,
         maximumCodMillimes: pickup.maxCodMillimes,
+        estimatedMinDays: null,
+        estimatedMaxDays: null,
+        estimatedMinMinutes: null,
+        estimatedMaxMinutes: null,
+        paymentMethod: null,
+        phoneConfirmationRequired: false,
       })),
     );
     return { data: methods };
@@ -249,6 +281,12 @@ export class GeographyService {
                 nameAr: true,
                 minOrderMillimes: true,
                 maxCodMillimes: true,
+                estimatedMinDays: true,
+                estimatedMaxDays: true,
+                estimatedMinMinutes: true,
+                estimatedMaxMinutes: true,
+                paymentMethod: true,
+                phoneConfirmationRequired: true,
               },
             },
           },
@@ -270,10 +308,9 @@ export class GeographyService {
     if (nextPriority === selectedPriority) return null;
 
     const now = new Date();
-    const rateCount = await this.prisma.deliveryRate.count({
+    const rates = await this.prisma.deliveryRate.findMany({
       where: {
-        ...activeRateWhere(now),
-        type: { in: ['BASE', 'GOVERNORATE', 'DELEGATION', 'LOCALITY'] },
+        ...currentRateWhere(now),
         OR: [
           { localityId: locality.id },
           { delegationId: locality.delegationId, localityId: null },
@@ -296,8 +333,22 @@ export class GeographyService {
           },
         ],
       },
+      orderBy: [{ priority: 'desc' }, { id: 'asc' }],
+      take: MAX_DELIVERY_RATE_CANDIDATES + 1,
+      select: DELIVERY_METHOD_RATE_SELECT,
     });
-    if (rateCount === 0) return null;
+    if (rates.length > MAX_DELIVERY_RATE_CANDIDATES) return null;
+    const hasPotentialBaseRate = rates.some((rate) =>
+      canBackCourierMethod(rate, {
+        deliveryZoneId: selected.deliveryZone.id,
+        governorateId: locality.delegation.governorateId,
+        delegationId: locality.delegationId,
+        localityId: locality.id,
+        zoneMinOrderMillimes: selected.deliveryZone.minOrderMillimes,
+        zoneMaxCodMillimes: selected.deliveryZone.maxCodMillimes,
+      }),
+    );
+    if (!hasPotentialBaseRate) return null;
     return {
       id: `courier:${selected.deliveryZone.id}`,
       type: 'COURIER' as const,
@@ -305,9 +356,58 @@ export class GeographyService {
       address: null,
       minimumOrderMillimes: selected.deliveryZone.minOrderMillimes,
       maximumCodMillimes: selected.deliveryZone.maxCodMillimes,
+      estimatedMinDays: selected.deliveryZone.estimatedMinDays,
+      estimatedMaxDays: selected.deliveryZone.estimatedMaxDays,
+      estimatedMinMinutes: selected.deliveryZone.estimatedMinMinutes,
+      estimatedMaxMinutes: selected.deliveryZone.estimatedMaxMinutes,
+      paymentMethod: selected.deliveryZone.paymentMethod,
+      phoneConfirmationRequired: selected.deliveryZone.phoneConfirmationRequired,
     };
   }
 }
+
+const canBackCourierMethod = (
+  rate: DeliveryMethodRate,
+  context: {
+    deliveryZoneId: string;
+    governorateId: string;
+    delegationId: string;
+    localityId: string;
+    zoneMinOrderMillimes: number | null;
+    zoneMaxCodMillimes: number | null;
+  },
+): boolean => {
+  const geographicallyApplicable =
+    (rate.localityId === context.localityId && rate.type === 'LOCALITY') ||
+    (rate.localityId === null &&
+      rate.delegationId === context.delegationId &&
+      rate.type === 'DELEGATION') ||
+    (rate.localityId === null &&
+      rate.delegationId === null &&
+      rate.governorateId === context.governorateId &&
+      rate.type === 'GOVERNORATE') ||
+    (rate.localityId === null &&
+      rate.delegationId === null &&
+      rate.governorateId === null &&
+      rate.deliveryZoneId === context.deliveryZoneId &&
+      rate.type === 'BASE') ||
+    (rate.localityId === null &&
+      rate.delegationId === null &&
+      rate.governorateId === null &&
+      rate.deliveryZoneId === null &&
+      rate.type === 'BASE');
+  if (!geographicallyApplicable || rate.feeMillimes < 0) return false;
+
+  const minimumOrder = Math.max(context.zoneMinOrderMillimes ?? 0, rate.minOrderMillimes ?? 0);
+  const maximumOrder = Math.min(
+    context.zoneMaxCodMillimes ?? Number.MAX_SAFE_INTEGER,
+    rate.maxOrderMillimes ?? Number.MAX_SAFE_INTEGER,
+    rate.maxCodMillimes ?? Number.MAX_SAFE_INTEGER,
+  );
+  const minimumWeight = rate.minWeightGrams ?? 0;
+  const maximumWeight = rate.maxWeightGrams ?? Number.MAX_SAFE_INTEGER;
+  return minimumOrder <= maximumOrder && minimumWeight <= maximumWeight;
+};
 
 const localize = (locale: StorefrontLocale, french: string, arabic: string): string =>
   locale === 'ar' ? arabic : french;

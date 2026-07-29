@@ -1260,6 +1260,19 @@ enum DeliveryMethodType {
   MANUAL_QUOTE
 }
 
+enum DeliveryPaymentMethod {
+  CASH_ON_DELIVERY
+}
+
+enum DeliveryAssignmentMode {
+  MANUAL
+}
+
+enum DeliveryCommunicationChannel {
+  WHATSAPP
+  PHONE
+}
+
 enum DeliveryRateType {
   BASE
   GOVERNORATE
@@ -1359,6 +1372,11 @@ model DeliveryZone {
   freeDeliveryThresholdMillimes Int?
   estimatedMinDays              Int?
   estimatedMaxDays              Int?
+  estimatedMinMinutes           Int?
+  estimatedMaxMinutes           Int?
+  paymentMethod                 DeliveryPaymentMethod?
+  assignmentMode                DeliveryAssignmentMode?
+  driverCommunication           DeliveryCommunicationChannel?
   availableDays                 Json?
   createdAt                     DateTime               @default(now()) @db.DateTime(3)
   updatedAt                     DateTime               @updatedAt @db.DateTime(3)

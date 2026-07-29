@@ -20,6 +20,32 @@ describe('checkout geography reads', () => {
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 24 }));
   });
 
+  it('bounds active delegations to an active parent and localizes the safe projection', async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: 'delegation-1',
+        nameFr: 'Bizerte Nord',
+        nameAr: 'بنزرت الشمالية',
+        localities: [],
+      },
+    ]);
+    const service = new GeographyService({ delegation: { findMany } } as unknown as PrismaService);
+
+    await expect(service.delegations('governorate-1', 'ar')).resolves.toEqual({
+      data: [{ id: 'delegation-1', name: 'بنزرت الشمالية', supported: false }],
+    });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          governorateId: 'governorate-1',
+          active: true,
+          governorate: { is: { active: true } },
+        },
+        take: 100,
+      }),
+    );
+  });
+
   it('marks an active locality unsupported when no active delivery zone link exists', async () => {
     const service = new GeographyService({
       locality: {
@@ -47,7 +73,7 @@ describe('checkout geography reads', () => {
     });
   });
 
-  it('does not advertise courier delivery without a current nonnegative base rate', async () => {
+  it('does not advertise courier delivery without a uniquely resolvable current base rate', async () => {
     const prisma = {
       pickupLocation: { findMany: vi.fn().mockResolvedValue([]) },
       locality: {
@@ -65,16 +91,86 @@ describe('checkout geography reads', () => {
                 nameAr: 'تونس الكبرى',
                 minOrderMillimes: null,
                 maxCodMillimes: null,
+                estimatedMinDays: 1,
+                estimatedMaxDays: 3,
+                estimatedMinMinutes: null,
+                estimatedMaxMinutes: null,
+                paymentMethod: 'CASH_ON_DELIVERY',
+                assignmentMode: 'MANUAL',
+                driverCommunication: 'WHATSAPP',
+                phoneConfirmationRequired: true,
+                manualReviewRequired: false,
               },
             },
           ],
         }),
       },
-      deliveryRate: { count: vi.fn().mockResolvedValue(0) },
+      deliveryRate: { findMany: vi.fn().mockResolvedValue([]) },
     } as unknown as PrismaService;
     const service = new GeographyService(prisma);
 
     await expect(service.deliveryMethods('locality-1', 'fr')).resolves.toEqual({ data: [] });
+  });
+
+  it('keeps method discovery advisory when real-cart rate resolution may be ambiguous', async () => {
+    const baseRate = {
+      type: 'BASE',
+      priority: 10,
+      feeMillimes: 8_000,
+      deliveryZoneId: 'zone-1',
+      governorateId: null,
+      delegationId: null,
+      localityId: null,
+      minWeightGrams: null,
+      maxWeightGrams: null,
+      minOrderMillimes: null,
+      maxOrderMillimes: null,
+      maxCodMillimes: null,
+      express: false,
+    };
+    const prisma = {
+      pickupLocation: { findMany: vi.fn().mockResolvedValue([]) },
+      locality: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'locality-1',
+          delegationId: 'delegation-1',
+          delegation: { governorateId: 'governorate-1' },
+          zoneLinks: [
+            {
+              priorityOverride: null,
+              deliveryZone: {
+                id: 'zone-1',
+                priority: 10,
+                nameFr: 'Grand Tunis',
+                nameAr: 'تونس الكبرى',
+                minOrderMillimes: null,
+                maxCodMillimes: null,
+                estimatedMinDays: 1,
+                estimatedMaxDays: 3,
+                estimatedMinMinutes: null,
+                estimatedMaxMinutes: null,
+                paymentMethod: 'CASH_ON_DELIVERY',
+                assignmentMode: 'MANUAL',
+                driverCommunication: 'WHATSAPP',
+                phoneConfirmationRequired: true,
+                manualReviewRequired: false,
+              },
+            },
+          ],
+        }),
+      },
+      deliveryRate: {
+        findMany: vi.fn().mockResolvedValue([
+          { ...baseRate, id: 'rate-a' },
+          { ...baseRate, id: 'rate-b' },
+        ]),
+      },
+    } as unknown as PrismaService;
+    const service = new GeographyService(prisma);
+
+    const result = await service.deliveryMethods('locality-1', 'fr');
+
+    expect(result.data.map(({ id }) => id)).toEqual(['courier:zone-1']);
   });
 
   it('returns active pickup and rate-backed courier methods without exposing provider data', async () => {
@@ -106,12 +202,40 @@ describe('checkout geography reads', () => {
                 nameAr: 'توصيل تونس',
                 minOrderMillimes: 10_000,
                 maxCodMillimes: 400_000,
+                estimatedMinDays: 1,
+                estimatedMaxDays: 3,
+                estimatedMinMinutes: 30,
+                estimatedMaxMinutes: 50,
+                paymentMethod: 'CASH_ON_DELIVERY',
+                assignmentMode: 'MANUAL',
+                driverCommunication: 'WHATSAPP',
+                phoneConfirmationRequired: true,
+                manualReviewRequired: true,
               },
             },
           ],
         }),
       },
-      deliveryRate: { count: vi.fn().mockResolvedValue(1) },
+      deliveryRate: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'rate-1',
+            type: 'BASE',
+            priority: 10,
+            feeMillimes: 8_000,
+            deliveryZoneId: 'zone-1',
+            governorateId: null,
+            delegationId: null,
+            localityId: null,
+            minWeightGrams: 250,
+            maxWeightGrams: null,
+            minOrderMillimes: 10_000,
+            maxOrderMillimes: null,
+            maxCodMillimes: null,
+            express: false,
+          },
+        ]),
+      },
     } as unknown as PrismaService;
     const service = new GeographyService(prisma);
 
@@ -124,6 +248,12 @@ describe('checkout geography reads', () => {
           address: null,
           minimumOrderMillimes: 10_000,
           maximumCodMillimes: 400_000,
+          estimatedMinDays: 1,
+          estimatedMaxDays: 3,
+          estimatedMinMinutes: 30,
+          estimatedMaxMinutes: 50,
+          paymentMethod: 'CASH_ON_DELIVERY',
+          phoneConfirmationRequired: true,
         },
         {
           id: 'pickup-1',
@@ -132,6 +262,12 @@ describe('checkout geography reads', () => {
           address: 'Tunis',
           minimumOrderMillimes: 5_000,
           maximumCodMillimes: 500_000,
+          estimatedMinDays: null,
+          estimatedMaxDays: null,
+          estimatedMinMinutes: null,
+          estimatedMaxMinutes: null,
+          paymentMethod: null,
+          phoneConfirmationRequired: false,
         },
       ],
     });

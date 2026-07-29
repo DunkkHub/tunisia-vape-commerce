@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { CatalogPriceFieldReferences } from './catalog-policy';
-import { buildPublicProductWhere, normalizeCatalogFilter } from './catalog-policy';
+import {
+  buildPublicProductWhere,
+  normalizeCatalogFilter,
+  publicSellableVariantWhere,
+} from './catalog-policy';
 
 const priceFields = {
   productBasePrice: { modelName: 'Product', name: 'basePriceMillimes' },
@@ -50,6 +54,44 @@ describe('public catalog filters', () => {
         },
       },
     });
+  });
+
+  it('requires a published non-archived variant with a strictly positive effective price', () => {
+    const sellableVariant = publicSellableVariantWhere();
+    const where = buildPublicProductWhere({}, new Date('2026-07-11T12:00:00.000Z'));
+    const clauses = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
+
+    expect(sellableVariant).toEqual({
+      publicationStatus: 'PUBLISHED',
+      archivedAt: null,
+      deletedAt: null,
+      priceMillimes: { gt: 0 },
+      OR: [{ promotionalPriceMillimes: null }, { promotionalPriceMillimes: { gt: 0 } }],
+    });
+    expect(clauses).toContainEqual({ variants: { some: sellableVariant } });
+  });
+
+  it('requires approved eligible media while leaving zero-stock products publicly visible', () => {
+    const sellableVariant = publicSellableVariantWhere();
+    const where = buildPublicProductWhere({}, new Date('2026-07-11T12:00:00.000Z'));
+    const clauses = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
+    const approvedImage = { deletedAt: null, moderationStatus: 'APPROVED' };
+
+    expect(clauses).toContainEqual({
+      OR: [
+        { images: { some: approvedImage } },
+        {
+          variants: {
+            some: {
+              ...sellableVariant,
+              images: { some: approvedImage },
+            },
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(where)).not.toContain('inventoryItems');
+    expect(JSON.stringify(where)).not.toContain('onHandQuantity');
   });
 
   it('normalizes combinable type, flavor and integer-millime price filters', () => {

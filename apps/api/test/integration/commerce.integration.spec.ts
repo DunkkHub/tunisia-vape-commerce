@@ -10,8 +10,10 @@ import { CartService } from '../../src/cart/cart.service';
 import { CatalogImportService } from '../../src/catalog-import/catalog-import.service';
 import { buildWotofoImportRows } from '../../src/catalog-import/wotofo-import-data';
 import { officialProductJsonUrl, WOTOFO_PRODUCTS } from '../../src/catalog-import/wotofo-catalog';
+import { CatalogService } from '../../src/catalog/catalog.service';
 import { CheckoutOrderService } from '../../src/checkout/checkout-order.service';
 import { CheckoutPolicyService } from '../../src/checkout/checkout-policy.service';
+import type { AgeGateService } from '../../src/compliance/age-gate.service';
 import { CryptoService } from '../../src/common/security/crypto.service';
 import { validateEnvironment, type Environment } from '../../src/config/environment';
 import { CustomerOrdersService } from '../../src/customer-orders/customer-orders.service';
@@ -56,6 +58,7 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
   const prisma = new PrismaService();
   const crypto = new CryptoService(config);
   const carts = new CartService(prisma);
+  const catalog = new CatalogService(prisma, {} as AgeGateService, config);
   const checkoutPolicy = new CheckoutPolicyService(prisma, config);
   const checkout = new CheckoutOrderService(prisma, checkoutPolicy, crypto);
   const customerOrders = new CustomerOrdersService(prisma, crypto);
@@ -78,26 +81,38 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
     expect(await redis.ping()).toBe('PONG');
     await redis.set('connectivity', databaseName, 'EX', 120);
     expect(await redis.get('connectivity')).toBe(databaseName);
-    const [roleCount, permissionCount, governorateCount, userCount, productCount, seededSettings] =
-      await Promise.all([
-        prisma.role.count(),
-        prisma.permission.count(),
-        prisma.governorate.count(),
-        prisma.user.count(),
-        prisma.product.count(),
-        prisma.storeSetting.findMany({
-          where: {
-            key: {
-              in: ['checkout.enabled', 'store.currency', 'store.timezone', 'store.name'],
-            },
+    const [
+      roleCount,
+      permissionCount,
+      governorateCount,
+      delegationCount,
+      localityCount,
+      userCount,
+      productCount,
+      seededSettings,
+    ] = await Promise.all([
+      prisma.role.count(),
+      prisma.permission.count(),
+      prisma.governorate.count(),
+      prisma.delegation.count(),
+      prisma.locality.count(),
+      prisma.user.count(),
+      prisma.product.count(),
+      prisma.storeSetting.findMany({
+        where: {
+          key: {
+            in: ['checkout.enabled', 'store.currency', 'store.timezone', 'store.name'],
           },
-          select: { key: true, value: true },
-        }),
-      ]);
+        },
+        select: { key: true, value: true },
+      }),
+    ]);
     const settingValues = new Map(seededSettings.map((setting) => [setting.key, setting.value]));
     expect(roleCount).toBeGreaterThan(0);
     expect(permissionCount).toBeGreaterThan(0);
     expect(governorateCount).toBe(24);
+    expect(delegationCount).toBe(279);
+    expect(localityCount).toBe(2_082);
     expect(userCount).toBe(0);
     expect(productCount).toBe(0);
     expect(Object.fromEntries(settingValues)).toMatchObject({
@@ -113,6 +128,89 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
     await redis.del('connectivity').catch(() => 0);
     redis.disconnect(false);
     await prisma.$disconnect();
+  });
+
+  it('seeds the versioned bilingual Bizerte hierarchy without enabling delivery coverage', async () => {
+    const bizerte = await prisma.governorate.findUniqueOrThrow({
+      where: { code: '23' },
+      select: {
+        delegations: {
+          orderBy: { code: 'asc' },
+          select: {
+            code: true,
+            nameFr: true,
+            nameAr: true,
+            _count: { select: { localities: true } },
+          },
+        },
+      },
+    });
+
+    expect(bizerte.delegations).toHaveLength(14);
+    expect(bizerte.delegations.reduce((total, row) => total + row._count.localities, 0)).toBe(101);
+    expect(bizerte.delegations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: '1751', nameFr: 'Bizerte Nord' }),
+        expect.objectContaining({ code: '1752', nameFr: 'Zarzouna' }),
+        expect.objectContaining({ code: '1753', nameFr: 'Bizerte Sud' }),
+        expect.objectContaining({ code: '1758', nameFr: 'Menzel Bourguiba' }),
+        expect.objectContaining({ code: '1762', nameFr: 'Menzel Jemil' }),
+        expect.objectContaining({ code: '1764', nameFr: 'Ras Jebel' }),
+      ]),
+    );
+    expect(bizerte.delegations.every(({ nameAr }) => nameAr.trim().length > 0)).toBe(true);
+  });
+
+  it('fails public product reads closed while preserving supported zero-stock visibility', async () => {
+    const zeroStock = await createSellableVariant(prisma, foundation, { onHand: 0 });
+    await expect(catalog.product(zeroStock.product.slug, 'fr')).resolves.toMatchObject({
+      data: {
+        id: zeroStock.product.id,
+        availableQuantity: 0,
+        variants: [{ id: zeroStock.variant.id, availableQuantity: 0 }],
+      },
+    });
+
+    const draft = await createSellableVariant(prisma, foundation, { published: false });
+    await expect(catalog.product(draft.product.slug, 'fr')).rejects.toMatchObject({
+      response: { code: 'PRODUCT_NOT_FOUND' },
+    });
+
+    const suspended = await createSellableVariant(prisma, foundation);
+    await prisma.product.update({
+      where: { id: suspended.product.id },
+      data: { publicationStatus: 'SUSPENDED', suspendedAt: new Date() },
+    });
+    await expect(catalog.product(suspended.product.slug, 'fr')).rejects.toMatchObject({
+      response: { code: 'PRODUCT_NOT_FOUND' },
+    });
+
+    const missingImage = await createSellableVariant(prisma, foundation);
+    await prisma.productImage.updateMany({
+      where: { productId: missingImage.product.id },
+      data: { deletedAt: new Date() },
+    });
+    await expect(catalog.product(missingImage.product.slug, 'fr')).rejects.toMatchObject({
+      response: { code: 'PRODUCT_NOT_FOUND' },
+    });
+
+    const suspendedVariant = await createSellableVariant(prisma, foundation);
+    await prisma.productVariant.update({
+      where: { id: suspendedVariant.variant.id },
+      data: { publicationStatus: 'SUSPENDED' },
+    });
+    await expect(catalog.product(suspendedVariant.product.slug, 'fr')).rejects.toMatchObject({
+      response: { code: 'PRODUCT_NOT_FOUND' },
+    });
+
+    const nonPositivePrice = await createSellableVariant(prisma, foundation);
+    await prisma.productVariant.update({
+      where: { id: nonPositivePrice.variant.id },
+      data: { priceMillimes: 0 },
+    });
+    await expect(catalog.product(nonPositivePrice.product.slug, 'fr')).rejects.toMatchObject({
+      response: { code: 'PRODUCT_NOT_FOUND' },
+    });
   });
 
   it('creates one successful COD order with immutable snapshots and active reservation', async () => {

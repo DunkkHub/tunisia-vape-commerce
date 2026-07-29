@@ -20,6 +20,18 @@ import { AdminReadModule } from './operations/admin-read.module';
 import { AdminOrdersModule } from './orders/admin-orders.module';
 import { SettingsModule } from './settings/settings.module';
 
+export const HTTP_LOG_REDACTION_PATHS = [
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'req.headers["x-csrf-token"]',
+  'res.headers.set-cookie',
+  'password',
+  '*.password',
+  '*.token',
+  '*.secret',
+  '*.recoveryCodes',
+] as const;
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -32,16 +44,7 @@ import { SettingsModule } from './settings/settings.module';
       pinoHttp: {
         level: process.env.LOG_LEVEL ?? 'info',
         redact: {
-          paths: [
-            'req.headers.authorization',
-            'req.headers.cookie',
-            'res.headers.set-cookie',
-            'password',
-            '*.password',
-            '*.token',
-            '*.secret',
-            '*.recoveryCodes',
-          ],
+          paths: [...HTTP_LOG_REDACTION_PATHS],
           censor: '[REDACTED]',
         },
       },

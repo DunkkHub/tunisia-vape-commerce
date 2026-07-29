@@ -23,6 +23,7 @@ import { CustomerOrdersController } from '../customer-orders/customer-orders.con
 import { CustomerOrdersService } from '../customer-orders/customer-orders.service';
 import { CustomerAddressesController } from '../customer-addresses/customer-addresses.controller';
 import { CustomerAddressesService } from '../customer-addresses/customer-addresses.service';
+import { AdminDeliveryGeographyController } from '../geography/admin-delivery-geography.controller';
 import { DeliveryOptionsController, GeographyController } from '../geography/geography.controller';
 import { GeographyService } from '../geography/geography.service';
 import {
@@ -52,6 +53,7 @@ import { WishlistService } from '../wishlist/wishlist.service';
     CheckoutController,
     AgeGateController,
     CartController,
+    AdminDeliveryGeographyController,
     GeographyController,
     DeliveryOptionsController,
     CustomerOrdersController,

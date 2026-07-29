@@ -31,7 +31,7 @@ describe('launch environment defaults', () => {
       MINIMUM_PURCHASE_AGE: 18,
       HEALTHCHECK_TIMEOUT_MS: 2_000,
       WORKER_HEARTBEAT_MAX_AGE_SECONDS: 60,
-      EXPECTED_MIGRATION_NAME: '20260721023000_unverified_operator_source_urls',
+      EXPECTED_MIGRATION_NAME: '20260727090000_delivery_zone_operational_metadata',
       MEDIA_STORAGE_DRIVER: 'local',
       MEDIA_LOCAL_ROOT: 'uploads/media',
       S3_REGION: 'us-east-1',

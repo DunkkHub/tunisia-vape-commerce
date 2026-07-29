@@ -1,4 +1,7 @@
 import argon2, { argon2id } from 'argon2';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
 
 const CONFIRMATION = 'CREATE_DISPOSABLE_OPERATIONAL_E2E_FIXTURE';
@@ -34,6 +37,8 @@ const limitedAdminEmail = required('OPERATIONAL_E2E_LIMITED_ADMIN_EMAIL').toLoca
   'en-US',
 );
 const limitedAdminPassword = required('OPERATIONAL_E2E_LIMITED_ADMIN_PASSWORD');
+const baselineMediaPath = required('OPERATIONAL_E2E_BASELINE_MEDIA_PATH');
+const localMediaRoot = required('MEDIA_LOCAL_ROOT');
 for (const [name, password] of [
   ['OPERATIONAL_E2E_ADMIN_PASSWORD', adminPassword],
   ['OPERATIONAL_E2E_RECONCILER_PASSWORD', reconcilerPassword],
@@ -47,21 +52,64 @@ for (const [name, password] of [
 const prisma = new PrismaClient();
 
 try {
-  const [userCount, productCount, superAdministratorRole, accountantRole, readOnlyRole, tunis] =
-    await Promise.all([
-      prisma.user.count(),
-      prisma.product.count(),
-      prisma.role.findUnique({ where: { key: 'super-administrator' }, select: { id: true } }),
-      prisma.role.findUnique({ where: { key: 'accountant' }, select: { id: true } }),
-      prisma.role.findUnique({ where: { key: 'read-only-analyst' }, select: { id: true } }),
-      prisma.governorate.findUnique({ where: { code: '11' }, select: { id: true } }),
-    ]);
+  const [
+    userCount,
+    productCount,
+    superAdministratorRole,
+    accountantRole,
+    readOnlyRole,
+    bizerte,
+    bizerteNorth,
+    supportedBizerteLocality,
+    unsupportedBizerteLocality,
+  ] = await Promise.all([
+    prisma.user.count(),
+    prisma.product.count(),
+    prisma.role.findUnique({ where: { key: 'super-administrator' }, select: { id: true } }),
+    prisma.role.findUnique({ where: { key: 'accountant' }, select: { id: true } }),
+    prisma.role.findUnique({ where: { key: 'read-only-analyst' }, select: { id: true } }),
+    prisma.governorate.findUnique({ where: { code: '23' }, select: { id: true } }),
+    prisma.delegation.findFirst({
+      where: { code: '1751', governorate: { is: { code: '23' } } },
+      select: { id: true },
+    }),
+    prisma.locality.findFirst({
+      where: {
+        code: '175154',
+        delegation: { is: { code: '1751', governorate: { is: { code: '23' } } } },
+      },
+      select: { id: true },
+    }),
+    prisma.locality.findFirst({
+      where: {
+        code: '175153',
+        delegation: { is: { code: '1751', governorate: { is: { code: '23' } } } },
+      },
+      select: { id: true },
+    }),
+  ]);
   if (userCount !== 0 || productCount !== 0) {
     throw new Error('The operational E2E fixture requires a clean structural seed');
   }
-  if (!superAdministratorRole || !accountantRole || !readOnlyRole || !tunis) {
+  if (
+    !superAdministratorRole ||
+    !accountantRole ||
+    !readOnlyRole ||
+    !bizerte ||
+    !bizerteNorth ||
+    !supportedBizerteLocality ||
+    !unsupportedBizerteLocality
+  ) {
     throw new Error('Run the structural seed before creating the operational E2E fixture');
   }
+
+  const baselineMedia = await readFile(baselineMediaPath);
+  const baselineChecksum = createHash('sha256').update(baselineMedia).digest('hex');
+  const baselineObjectKey = `fixtures/operational-e2e/${baselineChecksum}.png`;
+  const baselineObjectKeyHash = createHash('sha256').update(baselineObjectKey).digest('hex');
+  const baselineObjectPath = path.resolve(localMediaRoot, ...baselineObjectKey.split('/'));
+  await mkdir(path.dirname(baselineObjectPath), { recursive: true });
+  await writeFile(baselineObjectPath, baselineMedia, { flag: 'wx' });
 
   const hashPassword = (password) =>
     argon2.hash(password, {
@@ -194,49 +242,28 @@ try {
       },
     });
 
-    const delegation = await transaction.delegation.create({
-      data: {
-        governorateId: tunis.id,
-        code: 'E2E-TUNIS',
-        nameFr: 'Délégation E2E',
-        nameAr: 'منطقة اختبار E2E',
-        active: true,
-      },
-    });
-    const locality = await transaction.locality.create({
-      data: {
-        delegationId: delegation.id,
-        code: 'E2E-LOCALITY',
-        nameFr: 'Localité E2E',
-        nameAr: 'محلية اختبار E2E',
-        active: true,
-      },
-    });
     await transaction.postalCode.create({
-      data: { localityId: locality.id, code: '1001', active: true },
+      data: { localityId: supportedBizerteLocality.id, code: '7000', active: true },
     });
 
     const zone = await transaction.deliveryZone.create({
       data: {
-        code: 'E2E-COURIER',
-        nameFr: 'Livraison E2E',
-        nameAr: 'توصيل اختبار E2E',
+        code: 'BIZERTE_EXPRESS',
+        nameFr: 'Bizerte Express E2E',
+        nameAr: 'Bizerte Express E2E',
         priority: 100,
-        active: true,
-        supported: true,
+        active: false,
+        supported: false,
         temporarilySuspended: false,
         minOrderMillimes: 1_000,
         maxCodMillimes: 500_000,
-        estimatedMinDays: 1,
-        estimatedMaxDays: 2,
-        localities: { create: { localityId: locality.id, active: true } },
         rates: {
           create: {
             type: 'BASE',
-            name: 'Operational E2E base rate',
+            name: 'Bizerte Express E2E base rate',
             priority: 100,
-            feeMillimes: 7_000,
-            active: true,
+            feeMillimes: 4,
+            active: false,
           },
         },
       },
@@ -282,6 +309,24 @@ try {
         publicationStatus: 'PUBLISHED',
         featured: true,
         publishedAt: new Date(Date.now() - 60_000),
+        images: {
+          create: {
+            objectKey: baselineObjectKey,
+            objectKeyHash: baselineObjectKeyHash,
+            bucket: 'local-media',
+            contentType: 'image/png',
+            originalFilename: 'baseline.png',
+            byteSize: baselineMedia.length,
+            checksumSha256: baselineChecksum,
+            width: 320,
+            height: 320,
+            altTextFr: 'Catalogue E2E baseline',
+            altTextAr: 'Catalogue E2E baseline',
+            sortOrder: 0,
+            isPrimary: true,
+            moderationStatus: 'APPROVED',
+          },
+        },
         variants: {
           create: {
             nameFr: 'Menthe E2E',
@@ -332,7 +377,10 @@ try {
     return {
       productId: product.id,
       variantId: variant.id,
-      localityId: locality.id,
+      localityId: supportedBizerteLocality.id,
+      unsupportedLocalityId: unsupportedBizerteLocality.id,
+      bizerteGovernorateId: bizerte.id,
+      bizerteDelegationId: bizerteNorth.id,
       deliveryZoneId: zone.id,
       inventoryItemId: inventory.id,
     };

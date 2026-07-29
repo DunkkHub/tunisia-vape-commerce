@@ -1,5 +1,11 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { DeliveryRateType, Prisma } from '@prisma/client';
+import {
+  DeliveryAssignmentMode,
+  DeliveryCommunicationChannel,
+  DeliveryPaymentMethod,
+  DeliveryRateType,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import {
   databaseTime,
@@ -30,6 +36,12 @@ export interface DeliveryConfigMutationContext {
 type Transaction = Prisma.TransactionClient;
 const SERIALIZABLE = { isolationLevel: Prisma.TransactionIsolationLevel.Serializable } as const;
 const MAX_RESOLVED_LOCALITIES = 1_000;
+const MAX_MONEY_MILLIMES = 1_000_000;
+const MAX_ESTIMATE_DAYS = 365;
+const MAX_ESTIMATE_MINUTES = 10_080;
+const BIZERTE_EXPRESS_CODE = 'BIZERTE_EXPRESS';
+// Governorate codes remain the repository's stable ISO-style codes; INS 2024 code 17 maps to 23.
+const BIZERTE_GOVERNORATE_CODE = '23';
 const BASE_RATE_TYPES: readonly DeliveryRateType[] = [
   DeliveryRateType.BASE,
   DeliveryRateType.GOVERNORATE,
@@ -81,6 +93,11 @@ const ZONE_SELECT = {
   freeDeliveryThresholdMillimes: true,
   estimatedMinDays: true,
   estimatedMaxDays: true,
+  estimatedMinMinutes: true,
+  estimatedMaxMinutes: true,
+  paymentMethod: true,
+  assignmentMode: true,
+  driverCommunication: true,
   createdAt: true,
   updatedAt: true,
   _count: {
@@ -149,6 +166,11 @@ export class DeliveryZonesConfigService {
             freeDeliveryThresholdMillimes: input.freeDeliveryThresholdMillimes ?? null,
             estimatedMinDays: input.estimatedMinDays ?? null,
             estimatedMaxDays: input.estimatedMaxDays ?? null,
+            estimatedMinMinutes: input.estimatedMinMinutes ?? null,
+            estimatedMaxMinutes: input.estimatedMaxMinutes ?? null,
+            paymentMethod: input.paymentMethod ?? null,
+            assignmentMode: input.assignmentMode ?? null,
+            driverCommunication: input.driverCommunication ?? null,
             phoneConfirmationRequired: input.phoneConfirmationRequired ?? false,
             manualReviewRequired: input.manualReviewRequired ?? false,
           },
@@ -197,6 +219,17 @@ export class DeliveryZonesConfigService {
             ...(input.estimatedMaxDays === undefined
               ? {}
               : { estimatedMaxDays: input.estimatedMaxDays }),
+            ...(input.estimatedMinMinutes === undefined
+              ? {}
+              : { estimatedMinMinutes: input.estimatedMinMinutes }),
+            ...(input.estimatedMaxMinutes === undefined
+              ? {}
+              : { estimatedMaxMinutes: input.estimatedMaxMinutes }),
+            ...(input.paymentMethod === undefined ? {} : { paymentMethod: input.paymentMethod }),
+            ...(input.assignmentMode === undefined ? {} : { assignmentMode: input.assignmentMode }),
+            ...(input.driverCommunication === undefined
+              ? {}
+              : { driverCommunication: input.driverCommunication }),
             ...(input.phoneConfirmationRequired === undefined
               ? {}
               : { phoneConfirmationRequired: input.phoneConfirmationRequired }),
@@ -207,6 +240,10 @@ export class DeliveryZonesConfigService {
         });
         if (updated.count !== 1) throw versionConflict('DELIVERY_ZONE');
         const changed = await requireZone(transaction, id);
+        await assertZoneFeeConfiguration(transaction, changed);
+        if (changed.active && changed.code === BIZERTE_EXPRESS_CODE) {
+          await assertBizerteExpressReady(transaction, changed);
+        }
         await writeAudit(
           transaction,
           context,
@@ -231,6 +268,11 @@ export class DeliveryZonesConfigService {
       const current = await requireZone(transaction, id);
       assertTimestamp(current.updatedAt, expectedUpdatedAt, 'DELIVERY_ZONE');
       if (active) {
+        validateZoneBounds(current);
+        await assertZoneFeeConfiguration(transaction, current);
+        if (current.code === BIZERTE_EXPRESS_CODE) {
+          await assertBizerteExpressReady(transaction, current);
+        }
         const [links, rates] = await Promise.all([
           transaction.deliveryZoneLocality.count({
             where: {
@@ -293,6 +335,12 @@ export class DeliveryZonesConfigService {
     return this.prisma.$transaction(async (transaction) => {
       const current = await requireZone(transaction, id);
       assertTimestamp(current.updatedAt, input.expectedUpdatedAt, 'DELIVERY_ZONE');
+      if (current.code === BIZERTE_EXPRESS_CODE && input.active && input.scope === 'GOVERNORATE') {
+        throw conflict(
+          'BIZERTE_EXPRESS_EXPLICIT_COVERAGE_REQUIRED',
+          'Bizerte Express coverage must be selected by delegation or locality.',
+        );
+      }
       const localityIds = await resolveLocalityIds(transaction, input.scope, input.geographyId);
       if (localityIds.length === 0)
         throw conflict(
@@ -304,6 +352,20 @@ export class DeliveryZonesConfigService {
           'DELIVERY_GEOGRAPHY_TOO_LARGE',
           'The selected geography exceeds the bounded link limit.',
         );
+      if (current.code === BIZERTE_EXPRESS_CODE && input.active) {
+        const bizerteLocalityCount = await transaction.locality.count({
+          where: {
+            id: { in: localityIds },
+            delegation: { is: { governorate: { is: { code: BIZERTE_GOVERNORATE_CODE } } } },
+          },
+        });
+        if (bizerteLocalityCount !== localityIds.length) {
+          throw conflict(
+            'BIZERTE_EXPRESS_COVERAGE_INVALID',
+            'Bizerte Express can cover only explicitly selected Bizerte localities.',
+          );
+        }
+      }
       const now = new Date();
       const touched = await transaction.deliveryZone.updateMany({
         where: { id, updatedAt: new Date(input.expectedUpdatedAt) },
@@ -324,6 +386,9 @@ export class DeliveryZonesConfigService {
       }
       if (current.active) await assertZoneHasSupportedLocality(transaction, id);
       const changed = await requireZone(transaction, id);
+      if (changed.active && changed.code === BIZERTE_EXPRESS_CODE) {
+        await assertBizerteExpressReady(transaction, changed);
+      }
       await transaction.auditLog.create({
         data: {
           ...audit(context),
@@ -880,28 +945,148 @@ function validateZoneBounds(input: {
   freeDeliveryThresholdMillimes?: number | null;
   estimatedMinDays?: number | null;
   estimatedMaxDays?: number | null;
+  estimatedMinMinutes?: number | null;
+  estimatedMaxMinutes?: number | null;
 }): void {
   for (const value of [
     input.minOrderMillimes,
     input.maxCodMillimes,
     input.freeDeliveryThresholdMillimes,
   ])
-    if (value !== undefined && value !== null && (!Number.isSafeInteger(value) || value < 0))
+    if (
+      value !== undefined &&
+      value !== null &&
+      (!Number.isSafeInteger(value) || value < 0 || value > MAX_MONEY_MILLIMES)
+    )
       throw conflict(
         'DELIVERY_ZONE_AMOUNT_INVALID',
-        'Zone monetary values must be nonnegative integer millimes.',
+        `Zone monetary values must be integer millimes from 0 to ${MAX_MONEY_MILLIMES}.`,
       );
+  validateEstimatePair(input.estimatedMinDays, input.estimatedMaxDays, 0, MAX_ESTIMATE_DAYS);
+  validateEstimatePair(
+    input.estimatedMinMinutes,
+    input.estimatedMaxMinutes,
+    1,
+    MAX_ESTIMATE_MINUTES,
+  );
+  const hasDayEstimate = input.estimatedMinDays !== undefined && input.estimatedMinDays !== null;
+  const hasMinuteEstimate =
+    input.estimatedMinMinutes !== undefined && input.estimatedMinMinutes !== null;
+  if (hasDayEstimate && hasMinuteEstimate) {
+    throw conflict(
+      'DELIVERY_ZONE_ESTIMATE_UNIT_INVALID',
+      'Choose either a day estimate or a minute estimate, not both.',
+    );
+  }
+}
+
+async function assertZoneFeeConfiguration(
+  transaction: Transaction,
+  zone: Pick<ZoneRecord, 'id' | 'freeDeliveryThresholdMillimes'>,
+): Promise<void> {
+  if (zone.freeDeliveryThresholdMillimes === 0) return;
+  const activeZeroRateCount = await transaction.deliveryRate.count({
+    where: {
+      active: true,
+      deliveryZoneId: zone.id,
+      feeMillimes: 0,
+    },
+  });
+  if (activeZeroRateCount > 0) {
+    throw conflict(
+      'DELIVERY_RATE_FREE_CONFIGURATION_REQUIRED',
+      'A zero delivery fee requires an explicitly free delivery zone.',
+    );
+  }
+}
+
+async function assertBizerteExpressReady(
+  transaction: Transaction,
+  zone: ZoneRecord,
+): Promise<void> {
   if (
-    input.estimatedMinDays !== undefined &&
-    input.estimatedMinDays !== null &&
-    input.estimatedMaxDays !== undefined &&
-    input.estimatedMaxDays !== null &&
-    input.estimatedMinDays > input.estimatedMaxDays
-  )
+    zone.estimatedMinMinutes !== 30 ||
+    zone.estimatedMaxMinutes !== 50 ||
+    zone.estimatedMinDays !== null ||
+    zone.estimatedMaxDays !== null ||
+    zone.paymentMethod !== DeliveryPaymentMethod.CASH_ON_DELIVERY ||
+    zone.assignmentMode !== DeliveryAssignmentMode.MANUAL ||
+    zone.driverCommunication !== DeliveryCommunicationChannel.WHATSAPP
+  ) {
+    throw conflict(
+      'BIZERTE_EXPRESS_CONFIGURATION_INVALID',
+      'Bizerte Express requires a 30–50 minute estimate, cash on delivery, manual assignment, and WhatsApp communication.',
+    );
+  }
+
+  const [activeLocalityCount, outsideBizerteCount] = await Promise.all([
+    transaction.deliveryZoneLocality.count({
+      where: {
+        deliveryZoneId: zone.id,
+        active: true,
+        locality: {
+          is: {
+            active: true,
+            delegation: { is: { active: true, governorate: { is: { active: true } } } },
+          },
+        },
+      },
+    }),
+    transaction.deliveryZoneLocality.count({
+      where: {
+        deliveryZoneId: zone.id,
+        active: true,
+        locality: {
+          is: {
+            delegation: {
+              is: { governorate: { is: { code: { not: BIZERTE_GOVERNORATE_CODE } } } },
+            },
+          },
+        },
+      },
+    }),
+  ]);
+  if (activeLocalityCount === 0) {
+    throw conflict(
+      'DELIVERY_ZONE_GEOGRAPHY_MISSING',
+      'Link at least one active Bizerte locality before activation.',
+    );
+  }
+  if (outsideBizerteCount > 0) {
+    throw conflict(
+      'BIZERTE_EXPRESS_COVERAGE_INVALID',
+      'Bizerte Express can cover only explicitly selected Bizerte localities.',
+    );
+  }
+}
+
+function validateEstimatePair(
+  minimum: number | null | undefined,
+  maximum: number | null | undefined,
+  lowerBound: number,
+  upperBound: number,
+): void {
+  const hasMinimum = minimum !== undefined && minimum !== null;
+  const hasMaximum = maximum !== undefined && maximum !== null;
+  if (hasMinimum !== hasMaximum) {
     throw conflict(
       'DELIVERY_ZONE_ESTIMATE_INVALID',
-      'The minimum estimate cannot exceed the maximum estimate.',
+      'Delivery estimates require both a minimum and a maximum.',
     );
+  }
+  if (!hasMinimum || !hasMaximum) return;
+  if (
+    !Number.isSafeInteger(minimum) ||
+    !Number.isSafeInteger(maximum) ||
+    minimum < lowerBound ||
+    maximum > upperBound ||
+    minimum > maximum
+  ) {
+    throw conflict(
+      'DELIVERY_ZONE_ESTIMATE_INVALID',
+      'The delivery estimate is outside the supported range.',
+    );
+  }
 }
 
 interface RateConfigInput {
@@ -958,10 +1143,14 @@ async function validateRate(
   transaction: Transaction,
   rate: Omit<RateRecord, 'id' | 'createdAt' | 'updatedAt'>,
 ): Promise<void> {
-  if (!Number.isSafeInteger(rate.feeMillimes) || rate.feeMillimes < 0)
+  if (
+    !Number.isSafeInteger(rate.feeMillimes) ||
+    rate.feeMillimes < 0 ||
+    rate.feeMillimes > MAX_MONEY_MILLIMES
+  )
     throw conflict(
       'DELIVERY_RATE_AMOUNT_INVALID',
-      'Delivery fees must be nonnegative integer millimes.',
+      `Delivery fees must be integer millimes from 0 to ${MAX_MONEY_MILLIMES}.`,
     );
   if (rate.validFrom && rate.validUntil && rate.validFrom >= rate.validUntil)
     throw conflict('DELIVERY_RATE_DATES_INVALID', 'The rate end must be after its start.');
@@ -996,14 +1185,20 @@ async function validateRate(
       'DELIVERY_RATE_SCOPE_INVALID',
       'The rate scope does not match its specificity type.',
     );
-  if (
-    rate.deliveryZoneId &&
-    !(await transaction.deliveryZone.findUnique({
-      where: { id: rate.deliveryZoneId },
-      select: { id: true },
-    }))
-  )
+  const deliveryZone = rate.deliveryZoneId
+    ? await transaction.deliveryZone.findUnique({
+        where: { id: rate.deliveryZoneId },
+        select: { id: true, freeDeliveryThresholdMillimes: true },
+      })
+    : null;
+  if (rate.deliveryZoneId && !deliveryZone)
     throw conflict('DELIVERY_ZONE_NOT_FOUND', 'The selected delivery zone is unavailable.');
+  if (rate.feeMillimes === 0 && deliveryZone?.freeDeliveryThresholdMillimes !== 0) {
+    throw conflict(
+      'DELIVERY_RATE_FREE_CONFIGURATION_REQUIRED',
+      'A zero delivery fee requires an explicitly free delivery zone.',
+    );
+  }
   if (
     rate.governorateId &&
     !(await transaction.governorate.findFirst({
@@ -1260,6 +1455,13 @@ function zoneAudit(record: ZoneRecord): Prisma.InputJsonObject {
     active: record.active,
     supported: record.supported,
     priority: record.priority,
+    estimatedMinDays: record.estimatedMinDays,
+    estimatedMaxDays: record.estimatedMaxDays,
+    estimatedMinMinutes: record.estimatedMinMinutes,
+    estimatedMaxMinutes: record.estimatedMaxMinutes,
+    paymentMethod: record.paymentMethod,
+    assignmentMode: record.assignmentMode,
+    driverCommunication: record.driverCommunication,
     updatedAt: record.updatedAt.toISOString(),
   };
 }
@@ -1289,6 +1491,11 @@ function zoneResponse(record: ZoneRecord) {
     freeDeliveryThresholdMillimes: record.freeDeliveryThresholdMillimes,
     estimatedMinDays: record.estimatedMinDays,
     estimatedMaxDays: record.estimatedMaxDays,
+    estimatedMinMinutes: record.estimatedMinMinutes,
+    estimatedMaxMinutes: record.estimatedMaxMinutes,
+    paymentMethod: record.paymentMethod,
+    assignmentMode: record.assignmentMode,
+    driverCommunication: record.driverCommunication,
     localityCount: record._count.localities,
     activeRateCount: record._count.rates,
     createdAt: record.createdAt.toISOString(),

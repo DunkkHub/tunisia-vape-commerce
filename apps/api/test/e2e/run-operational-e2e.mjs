@@ -234,6 +234,17 @@ try {
       return fixturePath;
     }),
   );
+  const baselineMediaFixturePath = path.join(mediaFixtureDirectory, 'input', 'baseline.png');
+  await sharp({
+    create: {
+      width: 320,
+      height: 320,
+      channels: 4,
+      background: { r: 16, g: 102, b: 146, alpha: 1 },
+    },
+  })
+    .png()
+    .toFile(baselineMediaFixturePath);
   const importedMediaFixture = await sharp({
     create: {
       width: 320,
@@ -304,6 +315,7 @@ try {
     OPERATIONAL_E2E_RECONCILER_PASSWORD: reconcilerPassword,
     OPERATIONAL_E2E_LIMITED_ADMIN_EMAIL: limitedAdminEmail,
     OPERATIONAL_E2E_LIMITED_ADMIN_PASSWORD: limitedAdminPassword,
+    OPERATIONAL_E2E_BASELINE_MEDIA_PATH: baselineMediaFixturePath,
   };
   const browserEnvironment = {
     ...applicationEnvironment,
@@ -430,6 +442,7 @@ try {
         delivery: true,
         cashCollections: true,
         consentSnapshots: true,
+        addressSnapshots: true,
         cart: true,
         notifications: true,
       },
@@ -440,13 +453,18 @@ try {
       order.paymentStatus !== 'CASH_REMITTED' ||
       order.currency !== 'TND' ||
       order.deliveryMethodType !== 'COURIER' ||
+      order.deliveryTotalMillimes !== 8_000 ||
       order.items.length !== 1 ||
+      order.items[0]?.skuSnapshot !== 'E2E-ADMIN-CITRON-V1' ||
       order.reservations.length !== 1 ||
       order.reservations[0]?.state !== 'CONSUMED' ||
       order.delivery?.status !== 'DELIVERED' ||
       order.cashCollections.length !== 1 ||
       order.cashCollections[0]?.status !== 'REMITTED' ||
       order.consentSnapshots.length !== 3 ||
+      order.addressSnapshots.length !== 1 ||
+      order.addressSnapshots[0]?.localityName !== 'La medina' ||
+      order.addressSnapshots[0]?.postalCode !== '7000' ||
       order.cart?.status !== 'CONVERTED' ||
       order.notifications.length < 4
     ) {
@@ -455,17 +473,30 @@ try {
     const inventory = await verification.inventoryItem.findUniqueOrThrow({
       where: { id: order.reservations[0].inventoryItemId },
     });
-    if (inventory.onHandQuantity !== 3 || order.reservations[0].quantity !== 1) {
+    if (inventory.onHandQuantity !== 1 || order.reservations[0].quantity !== 1) {
       throw new Error('Operational E2E stock reservation invariants were not preserved');
     }
+    const feeRuleSnapshot = order.deliveryFeeRuleSnapshot;
+    if (
+      !feeRuleSnapshot ||
+      typeof feeRuleSnapshot !== 'object' ||
+      Array.isArray(feeRuleSnapshot) ||
+      feeRuleSnapshot.estimatedMinMinutes !== 30 ||
+      feeRuleSnapshot.estimatedMaxMinutes !== 50 ||
+      feeRuleSnapshot.paymentMethod !== 'CASH_ON_DELIVERY' ||
+      feeRuleSnapshot.assignmentMode !== 'MANUAL' ||
+      feeRuleSnapshot.driverCommunication !== 'WHATSAPP'
+    ) {
+      throw new Error('Operational E2E delivery metadata snapshot was not preserved');
+    }
     const receivedBatch = await verification.productBatch.findFirst({
-      where: { batchNumber: 'E2E-BATCH-RECEIPT' },
+      where: { batchNumber: 'E2E-MANAGED-BATCH-RECEIPT' },
       include: { inventoryItems: true },
     });
     if (
       !receivedBatch?.receivedAt ||
       receivedBatch.inventoryItems.length !== 1 ||
-      receivedBatch.inventoryItems[0]?.onHandQuantity !== 2
+      receivedBatch.inventoryItems[0]?.onHandQuantity !== 1
     ) {
       throw new Error('Operational E2E batch receipt was not persisted exactly once');
     }
@@ -505,9 +536,58 @@ try {
     }
     const managedProduct = await verification.product.findUnique({
       where: { slug: 'admin-created-e2e-product' },
+      include: {
+        images: { where: { deletedAt: null } },
+        variants: { where: { deletedAt: null } },
+      },
     });
-    if (!managedProduct || managedProduct.nameFr !== 'Produit E2E administré modifié') {
-      throw new Error('Operational E2E product create/edit workflow was not persisted');
+    const managedVariant = managedProduct?.variants.find(
+      ({ sku }) => sku === 'E2E-ADMIN-CITRON-V1',
+    );
+    if (
+      !managedProduct ||
+      managedProduct.nameFr !== 'Produit E2E administré modifié' ||
+      managedProduct.publicationStatus !== 'PUBLISHED' ||
+      !managedProduct.featured ||
+      managedProduct.images.length !== 2 ||
+      managedProduct.images.some(
+        (image) => image.moderationStatus !== 'APPROVED' || image.productId !== managedProduct.id,
+      ) ||
+      !managedProduct.images.some((image) => image.isPrimary) ||
+      !managedVariant ||
+      managedVariant.nameFr !== 'Citron électrique E2E' ||
+      managedVariant.color !== 'Jaune électrique' ||
+      managedVariant.priceMillimes !== 13_000 ||
+      managedVariant.publicationStatus !== 'PUBLISHED'
+    ) {
+      throw new Error('Operational E2E sellable product workflow was not persisted');
+    }
+    const bizerteExpress = await verification.deliveryZone.findUnique({
+      where: { code: 'BIZERTE_EXPRESS' },
+      include: {
+        localities: { include: { locality: { include: { delegation: true } } } },
+        rates: true,
+      },
+    });
+    if (
+      !bizerteExpress ||
+      !bizerteExpress.active ||
+      !bizerteExpress.supported ||
+      bizerteExpress.estimatedMinDays !== null ||
+      bizerteExpress.estimatedMaxDays !== null ||
+      bizerteExpress.estimatedMinMinutes !== 30 ||
+      bizerteExpress.estimatedMaxMinutes !== 50 ||
+      bizerteExpress.paymentMethod !== 'CASH_ON_DELIVERY' ||
+      bizerteExpress.assignmentMode !== 'MANUAL' ||
+      bizerteExpress.driverCommunication !== 'WHATSAPP' ||
+      bizerteExpress.localities.length !== 1 ||
+      bizerteExpress.localities[0]?.locality.code !== '175154' ||
+      bizerteExpress.localities[0]?.locality.delegation.code !== '1751' ||
+      bizerteExpress.rates.length !== 1 ||
+      bizerteExpress.rates[0]?.feeMillimes !== 8_000 ||
+      !bizerteExpress.rates[0]?.active
+    ) {
+      throw new Error('Operational E2E Bizerte Express configuration was not persisted exactly');
     }
     const mediaProduct = await verification.product.findUnique({
       where: { slug: 'puffjet-menthe-operationnelle' },
@@ -528,7 +608,7 @@ try {
     const deletedMediaImages = mediaImages.filter(({ deletedAt }) => deletedAt !== null);
     if (
       activeMediaImages.length !== 3 ||
-      deletedMediaImages.length !== 2 ||
+      deletedMediaImages.length !== 3 ||
       !activeMediaImages.some(
         (image) =>
           image.productId === mediaProduct.id &&
@@ -563,6 +643,10 @@ try {
         (image) =>
           image.altTextFr === 'Image secondaire modifiée E2E' &&
           image.originalFilename === 'replacement.png',
+      ) ||
+      !deletedMediaImages.some(
+        (image) =>
+          image.altTextFr === 'Catalogue E2E baseline' && image.originalFilename === 'baseline.png',
       )
     ) {
       throw new Error('Operational E2E product-media lifecycle invariants were not persisted');
@@ -621,6 +705,10 @@ try {
         catalogCartCheckout: 'passed',
         adminTotpEnrollment: 'passed',
         productCreateEdit: 'passed',
+        sellableProductPublication: 'passed',
+        bizerteExpressConfiguration: 'passed',
+        bizerteExpressUnsupportedLocalityBoundary: 'passed',
+        failedDeliveryConfigurationAtomicity: 'passed',
         productMediaLifecycle: 'passed',
         genericCatalogImportReplay: 'passed',
         genericCatalogMediaReview: 'passed',

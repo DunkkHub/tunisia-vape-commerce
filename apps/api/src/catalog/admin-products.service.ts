@@ -318,25 +318,29 @@ export class AdminProductsService {
       ...(input.featured === undefined ? {} : { featured: input.featured }),
     };
 
-    const product = await this.prisma.$transaction(async (transaction) => {
-      const created = await transaction.product.create({ data });
-      await transaction.auditLog.create({
-        data: {
-          ...auditMetadata(context),
-          action: 'catalog.product.create',
-          resourceType: 'Product',
-          resourceId: created.id,
-          afterSummary: {
-            slug: created.slug,
-            categoryId: created.categoryId,
-            publicationStatus: created.publicationStatus,
-            version: created.version,
+    try {
+      const product = await this.prisma.$transaction(async (transaction) => {
+        const created = await transaction.product.create({ data });
+        await transaction.auditLog.create({
+          data: {
+            ...auditMetadata(context),
+            action: 'catalog.product.create',
+            resourceType: 'Product',
+            resourceId: created.id,
+            afterSummary: {
+              slug: created.slug,
+              categoryId: created.categoryId,
+              publicationStatus: created.publicationStatus,
+              version: created.version,
+            },
           },
-        },
+        });
+        return created;
       });
-      return created;
-    });
-    return adminProductResponse(product);
+      return adminProductResponse(product);
+    } catch (error) {
+      this.rethrowUnique(error);
+    }
   }
 
   async update(id: string, input: UpdateProductDto, context: AdminMutationContext) {
@@ -457,7 +461,7 @@ export class AdminProductsService {
       );
     } catch (error) {
       if (isTransactionConflict(error)) throw this.versionConflict();
-      throw error;
+      this.rethrowUnique(error);
     }
     return adminProductResponse(updated);
   }
@@ -966,6 +970,28 @@ export class AdminProductsService {
         message: 'The promotional price cannot exceed or exist without the base price.',
       });
     }
+  }
+
+  private rethrowUnique(error: unknown): never {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      const target = error.meta?.target;
+      const fields = (Array.isArray(target) ? target : [target]).flatMap((value) =>
+        typeof value === 'string' ? [value.toLocaleLowerCase('en-US')] : [],
+      );
+      if (fields.some((field) => field.includes('slug'))) {
+        const message = 'The product slug is already assigned to another product.';
+        throw new ConflictException({
+          code: 'PRODUCT_SLUG_CONFLICT',
+          message,
+          errors: { slug: [message] },
+        });
+      }
+      throw new ConflictException({
+        code: 'PRODUCT_IDENTIFIER_CONFLICT',
+        message: 'The product SKU or barcode is already assigned to another product.',
+      });
+    }
+    throw error;
   }
 
   private async findCurrent(id: string): Promise<Product> {
