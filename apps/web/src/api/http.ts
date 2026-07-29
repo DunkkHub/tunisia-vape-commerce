@@ -4,6 +4,21 @@ interface ErrorPayload {
   message?: string;
   requestId?: string;
   errors?: Record<string, string[]>;
+  blockers?: unknown;
+}
+
+const publicationBlockerPattern = /^[A-Z][A-Z0-9_]{0,79}$/;
+
+function safeBlockers(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value.filter(
+        (blocker): blocker is string =>
+          typeof blocker === 'string' && publicationBlockerPattern.test(blocker),
+      ),
+    ),
+  ].slice(0, 20);
 }
 
 export class ApiError extends Error {
@@ -11,6 +26,7 @@ export class ApiError extends Error {
   readonly code: string;
   readonly requestId: string | undefined;
   readonly fieldErrors: Record<string, string[]>;
+  readonly blockers: string[];
 
   constructor(status: number, payload?: ErrorPayload) {
     super(payload?.message ?? 'The request could not be completed.');
@@ -19,6 +35,7 @@ export class ApiError extends Error {
     this.code = payload?.code ?? 'REQUEST_FAILED';
     this.requestId = payload?.requestId;
     this.fieldErrors = payload?.errors ?? {};
+    this.blockers = safeBlockers(payload?.blockers);
   }
 }
 

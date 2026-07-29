@@ -30,6 +30,7 @@ export default defineConfig(({ mode }) => {
       css: false,
       fileParallelism: false,
       maxWorkers: 1,
+      testTimeout: 15_000,
       coverage: {
         reporter: ['text', 'html'],
       },

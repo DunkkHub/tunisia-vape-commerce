@@ -27,6 +27,7 @@ import type {
   AdminCsvDownload,
 } from '../../api/types';
 import { useAdminAuth } from '../../auth/admin-auth-context';
+import { AdminDisclosure } from '../../components/admin/admin-workspace';
 import { Button } from '../../components/ui/button';
 import { CheckboxField, FormField, SelectField } from '../../components/ui/form-field';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
@@ -704,39 +705,38 @@ function AuthorizedCatalogImportsPage() {
           </form>
         </section>
 
-        <section className="admin-import-card" aria-labelledby="wotofo-import-title">
-          <div className="admin-import-card__heading">
-            <ShieldAlert aria-hidden="true" size={24} />
-            <div>
-              <h2 id="wotofo-import-title">{t('admin.imports.wotofoTitle')}</h2>
-              <p>{t('admin.imports.wotofoBody')}</p>
-            </div>
-          </div>
-          <form onSubmit={submitWotofo}>
-            <FormField
-              name="wotofoImportKey"
-              label={t('admin.imports.importKey')}
-              hint={t('admin.imports.wotofoImportKeyHint')}
-              minLength={3}
-              maxLength={100}
-              pattern={IMPORT_KEY_PATTERN}
-              required
-              autoComplete="off"
-            />
-            <div className="admin-import-safety-note">
-              <ShieldAlert aria-hidden="true" size={19} />
-              <p>{t('admin.imports.wotofoSafety')}</p>
-            </div>
-            {wotofoPreview.error ? (
-              <p className="admin-action-error" role="alert">
-                {errorLabel(wotofoPreview.error, t)}
-              </p>
-            ) : null}
-            <Button type="submit" variant="admin" loading={wotofoPreview.isPending}>
-              {t('admin.imports.previewWotofo')}
-            </Button>
-          </form>
-        </section>
+        <AdminDisclosure
+          className="admin-import-advanced"
+          title={t('admin.imports.wotofoTitle')}
+          description={t('admin.imports.wotofoBody')}
+        >
+          <section className="admin-import-card" aria-label={t('admin.imports.wotofoTitle')}>
+            <form onSubmit={submitWotofo}>
+              <FormField
+                name="wotofoImportKey"
+                label={t('admin.imports.importKey')}
+                hint={t('admin.imports.wotofoImportKeyHint')}
+                minLength={3}
+                maxLength={100}
+                pattern={IMPORT_KEY_PATTERN}
+                required
+                autoComplete="off"
+              />
+              <div className="admin-import-safety-note">
+                <ShieldAlert aria-hidden="true" size={19} />
+                <p>{t('admin.imports.wotofoSafety')}</p>
+              </div>
+              {wotofoPreview.error ? (
+                <p className="admin-action-error" role="alert">
+                  {errorLabel(wotofoPreview.error, t)}
+                </p>
+              ) : null}
+              <Button type="submit" variant="admin" loading={wotofoPreview.isPending}>
+                {t('admin.imports.previewWotofo')}
+              </Button>
+            </form>
+          </section>
+        </AdminDisclosure>
       </div>
 
       <section className="admin-import-section" aria-labelledby="current-import-title">

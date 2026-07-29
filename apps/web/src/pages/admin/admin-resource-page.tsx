@@ -126,6 +126,12 @@ function Cell({ record, column }: { record: AdminRecord; column: Column }) {
   if (column.kind === 'json' && value !== undefined) {
     return <span>{typeof value === 'string' ? value : JSON.stringify(value)}</span>;
   }
+  if (
+    (column.key === 'status' || column.key === 'publicationStatus') &&
+    typeof value === 'string'
+  ) {
+    return <span className="admin-status-pill">{value}</span>;
+  }
   if (typeof value === 'string' || typeof value === 'number') return <span>{value}</span>;
   return <span>—</span>;
 }
@@ -253,21 +259,27 @@ export function AdminResourcePage({ resource }: { resource: Resource }) {
           </Button>
         </div>
       </header>
-      <form className="admin-search" role="search" onSubmit={submitSearch}>
-        <Search aria-hidden="true" size={18} />
-        <label className="sr-only" htmlFor={`${resource}-search`}>
-          {t('admin.filterPlaceholder')}
-        </label>
-        <input
-          id={`${resource}-search`}
-          name="q"
-          defaultValue={query}
-          placeholder={t('admin.filterPlaceholder')}
-        />
-        <Button type="submit" variant="ghost">
-          {t('common.search')}
-        </Button>
-      </form>
+      <section className="admin-list-workspace" aria-labelledby={`${resource}-list-tools`}>
+        <div className="admin-list-workspace__heading">
+          <h2 id={`${resource}-list-tools`}>{t('admin.ui.filtersTitle')}</h2>
+          <p>{t('admin.ui.filtersHint')}</p>
+        </div>
+        <form className="admin-search" role="search" onSubmit={submitSearch}>
+          <Search aria-hidden="true" size={18} />
+          <label className="sr-only" htmlFor={`${resource}-search`}>
+            {t('admin.filterPlaceholder')}
+          </label>
+          <input
+            id={`${resource}-search`}
+            name="q"
+            defaultValue={query}
+            placeholder={t('admin.filterPlaceholder')}
+          />
+          <Button type="submit" variant="ghost">
+            {t('common.search')}
+          </Button>
+        </form>
+      </section>
       {body}
     </div>
   );

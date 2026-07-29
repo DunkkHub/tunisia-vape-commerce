@@ -21,17 +21,21 @@ export function LoadingState({
 export function ErrorState({
   onRetry,
   compact = false,
+  title,
+  body,
 }: {
   onRetry?: () => void;
   compact?: boolean;
+  title?: string;
+  body?: string;
 }) {
   const { t } = useTranslation();
   return (
     <section className={`state state--error ${compact ? 'state--compact' : ''}`} role="alert">
       <AlertTriangle aria-hidden="true" size={24} />
       <div>
-        <h2>{t('common.errorTitle')}</h2>
-        <p>{t('common.errorBody')}</p>
+        <h2>{title ?? t('common.errorTitle')}</h2>
+        <p>{body ?? t('common.errorBody')}</p>
       </div>
       {onRetry ? (
         <Button type="button" variant="secondary" onClick={onRetry}>

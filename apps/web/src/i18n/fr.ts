@@ -425,6 +425,9 @@ export const fr = {
       delegation: 'Délégation',
       locality: 'Localité',
       postalCode: 'Code postal',
+      postalCodeOptional: 'Code postal (si disponible)',
+      postalCodeConfigured: 'Renseigné automatiquement à partir de la localité sélectionnée.',
+      postalCodeNotRequired: 'Le code postal n’est pas requis pour cette localité.',
       street: 'Rue et numéro',
       building: 'Immeuble (facultatif)',
       floor: 'Étage (facultatif)',
@@ -434,6 +437,13 @@ export const fr = {
       method: 'Mode de remise',
       deliveryMethod: 'Livraison à domicile',
       pickupMethod: 'Retrait en boutique',
+      deliveryDetails: 'Informations de livraison',
+      estimatedDelivery: 'Délai estimé',
+      estimateMinutes: '{{min}}–{{max}} minutes',
+      estimateDays: '{{min}}–{{max}} jours',
+      paymentMethodLabel: 'Paiement',
+      cashOnDelivery: 'Paiement à la livraison',
+      phoneConfirmation: 'Confirmation téléphonique',
       date: 'Date souhaitée (facultatif)',
       timeWindow: 'Créneau souhaité (facultatif)',
       adult: 'Je confirme avoir l’âge minimum requis et accepte une vérification à la remise.',
@@ -442,10 +452,63 @@ export const fr = {
       summary: 'Récapitulatif sécurisé',
       serverNote: 'Le serveur applique le tarif de zone et bloque toute zone non prise en charge.',
       placeOrder: 'Confirmer la commande avec paiement à réception',
+      retryOrder: 'Réessayer la même commande',
       placing: 'Création sécurisée…',
       quoteFailed: 'Cette adresse ne peut pas être tarifée actuellement.',
+      quoteErrors: {
+        storeInformation:
+          'La commande est temporairement indisponible pendant la finalisation des coordonnées de la boutique. Réessayez plus tard.',
+        deliveryConfiguration:
+          'Le tarif de livraison est temporairement indisponible pour cette sélection. Choisissez une autre localité ou le retrait en boutique.',
+        areaUnsupported:
+          'La livraison n’est pas disponible pour cette localité. Choisissez une autre localité ou le retrait en boutique.',
+        outOfStock:
+          'Un article n’est plus disponible dans la quantité demandée. Mettez à jour votre panier puis réessayez.',
+        productUnavailable:
+          'Un article de votre panier n’est plus disponible. Retirez-le du panier puis réessayez.',
+        minimumOrder:
+          'Le minimum de commande de ce mode de livraison n’est pas atteint. Ajustez votre panier puis réessayez.',
+        maximumCod:
+          'Le total dépasse le montant autorisé pour le paiement à la livraison dans cette zone.',
+        generic:
+          'Le total ne peut pas être calculé actuellement. Vérifiez le panier et l’adresse, puis réessayez.',
+      },
       orderFailed:
         'La commande n’a pas pu être créée. Aucun doublon ne sera créé lors d’une nouvelle tentative avec la même clé.',
+      requestReference: 'Référence de la demande : {{requestId}}',
+      orderErrors: {
+        postalCode:
+          'Le code postal ne correspond pas à la localité. Sélectionnez de nouveau la localité pour utiliser sa valeur autorisée.',
+        cart: 'Votre panier a changé ou a expiré. Revenez au panier, vérifiez-le, puis recommencez.',
+        outOfStock:
+          'La quantité demandée n’est plus disponible. Mettez à jour votre panier puis réessayez.',
+        productUnavailable:
+          'Un article de votre panier n’est plus disponible. Retirez-le du panier puis réessayez.',
+        deliveryArea:
+          'La livraison n’est plus disponible pour cette localité. Choisissez une autre localité ou le retrait en boutique.',
+        deliveryConfiguration:
+          'Le tarif de livraison est temporairement indisponible. Choisissez une autre localité ou le retrait en boutique.',
+        minimumOrder:
+          'Le minimum de commande de ce mode de livraison n’est pas atteint. Ajustez votre panier puis réessayez.',
+        maximumCod:
+          'Le total dépasse le montant autorisé pour le paiement à la livraison dans cette zone.',
+        fulfillment:
+          'Le mode de remise sélectionné n’est plus disponible. Choisissez de nouveau la livraison ou le retrait.',
+        validation: 'Vérifiez les coordonnées, l’adresse et les confirmations, puis réessayez.',
+        authentication: 'Votre session a expiré. Reconnectez-vous avant de confirmer la commande.',
+        account:
+          'Ce compte ne peut pas passer de commande actuellement. Contactez la boutique si le problème persiste.',
+        unavailable:
+          'La prise de commande est temporairement indisponible. Réessayez lorsque le service sera rétabli.',
+        idempotencyInProgress:
+          'Cette même commande est encore en cours de traitement. Attendez quelques instants, puis réessayez sans modifier les informations.',
+        idempotencyConflict:
+          'Cette tentative sécurisée ne correspond plus aux informations affichées. Vérifiez vos commandes, puis rechargez la page avant de recommencer.',
+        idempotencyUnavailable:
+          'Nous ne pouvons pas confirmer l’enregistrement pour le moment. Réessayez sans modifier les informations afin de vérifier la même tentative sécurisée.',
+        unknown:
+          'Nous ne pouvons pas confirmer si la commande a été enregistrée. Réessayez sans modifier les informations : la même tentative sera vérifiée sans créer de doublon.',
+      },
     },
     order: {
       confirmedEyebrow: 'Demande reçue',
@@ -520,6 +583,55 @@ export const fr = {
       cash: 'Trésorerie COD',
       settings: 'Réglages',
       audit: 'Journal d’audit',
+      navGroups: {
+        overview: 'Vue générale',
+        commerce: 'Ventes et service',
+        products: 'Produits et stock',
+        system: 'Contrôle et réglages',
+      },
+      ui: {
+        workspaceLabel: 'Espaces de travail de cette page',
+        attentionTitle: 'Éléments nécessitant une attention',
+        attentionCount: '{{count}} élément(s) à vérifier.',
+        filtersTitle: 'Rechercher et filtrer',
+        filtersHint: 'Affinez la liste sans modifier les données.',
+        stockOverview: 'Vue du stock',
+        stockOverviewHint: 'Disponibilité, filtres et répartition',
+        stockReceive: 'Réceptionner',
+        stockReceiveHint: 'Seuil, emplacement et nouveau lot',
+        stockManage: 'Gérer les lots',
+        stockManageHint: 'Ajustements, transferts et approbations',
+        stockHistory: 'Consulter l’historique',
+        stockHistoryHint: 'Mouvements et transferts récents',
+        cashCollections: 'Encaissements',
+        cashCollectionsHint: 'Contrôler le COD attendu et collecté',
+        cashRemittances: 'Remises livreur',
+        cashRemittancesHint: 'Créer, soumettre et rapprocher',
+        cashDiscrepancies: 'Écarts',
+        cashDiscrepanciesHint: 'Résoudre sous double contrôle',
+        orderProcess: 'Traiter la commande',
+        orderProcessHint: 'Résumé, articles et prochaine action autorisée',
+        orderCommunication: 'Communication',
+        orderCommunicationHint: 'Notes et tentatives de contact',
+        orderHistory: 'Historique',
+        orderHistoryHint: 'Transitions de statut enregistrées',
+        settingsStore: 'Boutique',
+        settingsStoreHint: 'Identité, devise et fuseau horaire',
+        settingsCommerce: 'Vente et conformité',
+        settingsCommerceHint: 'Checkout, âge et consentements',
+        settingsNotifications: 'Notifications',
+        settingsNotificationsHint: 'Alertes client et administration',
+        settingsSystem: 'Système',
+        settingsSystemHint: 'Maintenance et paramètres en lecture seule',
+        settingReadOnly: 'Information en lecture seule',
+        createAdministratorHint: 'Afficher le formulaire de création sécurisée',
+        listAdministrators: 'Comptes administrateurs',
+        listAdministratorsHint: 'Rechercher, suspendre ou réactiver un compte',
+        productIdentity: 'Identité et classement',
+        productPricing: 'Prix',
+        productContent: 'Descriptions et avertissements',
+        productPublication: 'Conformité et publication',
+      },
       navLabel: 'Navigation administration',
       openNav: 'Ouvrir la navigation administration',
       signedInAs: 'Session de {{name}}',
@@ -697,6 +809,8 @@ export const fr = {
         lowStockThreshold: 'Seuil de stock bas',
         threshold: 'Seuil',
         updateThreshold: 'Mettre à jour',
+        thresholdUpdated: 'Le seuil de stock bas a été mis à jour.',
+        thresholdUnchanged: 'Le seuil est déjà enregistré à cette valeur.',
         locationsAndLots: 'Emplacements et lots',
         itemQuantities: '{{onHand}} physique · {{reserved}} réservé · {{available}} disponible',
         operation: 'Opération',
@@ -741,6 +855,9 @@ export const fr = {
         locationName: 'Nom de l’emplacement',
         optionalAddress: 'Adresse facultative',
         createLocation: 'Créer l’emplacement',
+        locationCreated: 'L’emplacement de stock a été créé.',
+        locationRequired:
+          'Créez d’abord un emplacement actif. Vous pourrez ensuite enregistrer une réception de lot ou créer un contenant vide.',
         activeLocation: 'Emplacement actif',
         bucketNote: 'Note facultative',
         createEmptyBucket: 'Créer un contenant vide',
@@ -752,8 +869,9 @@ export const fr = {
         quantity: 'Quantité',
         expiryDate: 'Date d’expiration',
         manufacturedAt: 'Date de fabrication facultative',
-        supplierId: 'Identifiant fournisseur facultatif',
-        supplierReference: 'Référence fournisseur facultative',
+        supplierReference: 'Référence facture ou bon de livraison (facultative)',
+        supplierReferenceHint:
+          'Aucun fournisseur n’est requis. Saisissez uniquement une référence externe si vous en avez une.',
         receiptNote: 'Note de réception',
         recordReceipt: 'Enregistrer la réception',
         receiptRecorded: 'La réception et son mouvement de stock ont été enregistrés.',
@@ -782,6 +900,23 @@ export const fr = {
         exportCsv: 'Exporter le stock CSV',
         exportReady: 'L’export du stock a été téléchargé.',
         exportReadyRows: '{{count}} ligne(s) de stock exportée(s).',
+        errors: {
+          recentAuthenticationRequired:
+            'Cette opération exige une authentification administrateur récente. Reconnectez-vous, puis réessayez.',
+          locationCodeConflict: 'Ce code d’emplacement est déjà utilisé.',
+          bucketConflict: 'Un contenant existe déjà pour cette variante, ce lieu et ce lot.',
+          invalidBatchDates:
+            'Vérifiez les dates du lot : l’expiration doit être postérieure à la réception.',
+          invalidBatchReference:
+            'La variante, l’emplacement actif ou le fournisseur n’est plus disponible. Actualisez la page et vérifiez la sélection.',
+          batchMetadataConflict:
+            'Ce numéro de lot existe avec des informations différentes. Vérifiez les dates et le fournisseur.',
+          reservedQuantityConflict:
+            'Cette modification placerait le stock sous la quantité déjà réservée.',
+          dualControlRequired: 'Un autre administrateur doit approuver cette correction.',
+          versionConflict:
+            'Le stock a changé depuis l’ouverture de la page. Actualisez avant de réessayer.',
+        },
       },
       cashOps: {
         subtitle: 'Encaissements, remises et rapprochement en millimes.',
@@ -881,16 +1016,79 @@ export const fr = {
           'Paramètres opérationnels validés côté serveur. Chaque modification sensible exige une authentification récente et laisse une trace d’audit.',
         export: 'Exporter sans secrets',
         exportReady: 'Le fichier de configuration sans secrets a été téléchargé.',
+        saveSuccess: 'Modification enregistrée. La valeur affichée est maintenant à jour.',
+        valueUnchanged: 'Cette valeur est déjà active. Aucune modification n’était nécessaire.',
+        fixedValueActive: 'Valeur opérationnelle fixe déjà configurée : {{value}}.',
         value: 'Valeur',
         reason: 'Motif obligatoire de la modification',
         metadata: '{{scope}} · version {{version}} ·',
+        requestReference: 'Référence de la demande : {{requestId}}',
         reviewRecorded: 'Revue enregistrée',
         notManageable:
           'Ce paramètre est affiché en lecture seule : il est secret, structuré ou non publiable depuis cette interface.',
+        hints: {
+          phone:
+            'Format tunisien attendu : +216 suivi de 8 chiffres, commençant par 2, 4, 5, 7 ou 9.',
+          email: 'Saisissez une adresse e-mail complète, par exemple contact@boutique.tn.',
+        },
+        errors: {
+          fallback: 'La modification n’a pas pu être enregistrée. Vérifiez la valeur et réessayez.',
+          authenticationRequired:
+            'Votre session administrateur a expiré. Reconnectez-vous avant de réessayer.',
+          permissionDenied:
+            'Votre rôle ne permet pas de modifier ce paramètre. Demandez l’autorisation appropriée à un super administrateur.',
+          recentAuthenticationRequired:
+            'Votre session est toujours ouverte, mais cette action exige une authentification récente. Déconnectez-vous, reconnectez-vous avec votre mot de passe et votre code 2FA, puis réessayez immédiatement.',
+          sessionVerificationFailed:
+            'La vérification de sécurité de la session a échoué. Rechargez la page ; si le problème persiste, reconnectez-vous.',
+          invalidValue:
+            'Cette valeur ne respecte pas le format attendu. Corrigez-la à l’aide de l’indication du champ, puis réessayez.',
+          reasonRequired: 'Indiquez un motif précis avant d’enregistrer cette modification.',
+          notFound: 'Ce paramètre n’existe plus. Rechargez la page avant de réessayer.',
+          notManageable: 'Ce paramètre ne peut pas être modifié depuis cette interface.',
+          typeMismatch:
+            'Le type enregistré ne correspond plus à ce formulaire. Rechargez la page et contactez un administrateur si le problème persiste.',
+          validation: 'Vérifiez la valeur et le motif, puis réessayez.',
+          versionConflict:
+            'Ce paramètre a été modifié depuis son chargement. Rechargez la page, vérifiez la nouvelle valeur, puis réessayez.',
+        },
       },
       deliveryOps: {
         subtitle:
           'Pilotage manuel audité des livraisons, livreurs, manifestes, imports CSV et paramètres de desserte.',
+        workspaceTitle: 'Que voulez-vous gérer ?',
+        workspaceHint:
+          'Choisissez un espace. Les réglages courants restent séparés des opérations quotidiennes et des outils techniques.',
+        workspaceNav: 'Espaces de gestion de la livraison',
+        configurationWorkspace: 'Configurer la livraison',
+        configurationWorkspaceHint: 'Zones, couverture, tarifs et activation',
+        operationsWorkspace: 'Gérer les livraisons',
+        operationsWorkspaceHint: 'Commandes, livreurs et manifestes',
+        toolsWorkspace: 'Outils avancés',
+        toolsWorkspaceHint: 'Exports et imports CSV contrôlés',
+        configurationLoadErrorTitle: 'Impossible de charger la configuration de livraison',
+        configurationLoadErrorBody:
+          'Les zones, couvertures ou tarifs ne sont pas tous disponibles. Réessayez sans quitter cet espace.',
+        operationsLoadErrorTitle: 'Impossible de charger les opérations de livraison',
+        operationsLoadErrorBody:
+          'Les livraisons, livreurs ou manifestes ne sont pas tous disponibles. Réessayez dans quelques instants.',
+        toolsLoadErrorTitle: 'Impossible de charger les outils de transfert',
+        toolsLoadErrorBody:
+          'La liste nécessaire aux exports et imports est indisponible. Réessayez dans quelques instants.',
+        activeZonesCount: 'zone(s) active(s)',
+        incompleteZonesCount: 'zone(s) à terminer',
+        guidedSetup: 'Configuration guidée',
+        setupTitle: 'Mettre une méthode de livraison en service',
+        setupHint:
+          'Suivez les quatre étapes dans l’ordre. Une zone ne peut être activée qu’après l’ajout de sa couverture et d’un tarif actif.',
+        stepZone: 'Créer la zone',
+        stepZoneHint: 'Délais, paiement et affectation',
+        stepCoverage: 'Choisir la couverture',
+        stepCoverageHint: 'Gouvernorat, délégation ou localité',
+        stepRate: 'Ajouter le tarif',
+        stepRateHint: 'Montant en TND, puis activation',
+        stepActivation: 'Activer la zone',
+        stepActivationHint: 'Disponible quand les étapes 2 et 3 sont terminées',
         readOnlyPermission:
           'Votre rôle permet la consultation, mais pas les opérations de livraison.',
         recentAuthenticationRequired:
@@ -923,6 +1121,9 @@ export const fr = {
         couriersBody:
           'Créez les fiches nécessaires avant toute assignation. L’archivage conserve l’historique.',
         code: 'Code',
+        configurationCode: 'Code (majuscules)',
+        codeHint:
+          'Les lettres minuscules sont converties automatiquement. Utilisez lettres, chiffres, _ ou -.',
         courierName: 'Nom du livreur',
         contactName: 'Nom du contact',
         phoneE164: 'Téléphone international',
@@ -934,6 +1135,8 @@ export const fr = {
         externallyManaged:
           'Cette fiche est gérée par une intégration externe et reste en lecture seule ici.',
         courierCreated: 'Livreur manuel créé.',
+        courierCreatedNamed: 'Livreur créé : {{code}} · {{name}}.',
+        courierCodeConflict: 'Ce code de livreur est déjà utilisé.',
         courierUpdated: 'Statut du livreur mis à jour.',
         manifestsTitle: 'Manifestes de livraison',
         manifestsBody:
@@ -984,29 +1187,175 @@ export const fr = {
         valid: 'Valide',
         exportDownloaded: 'Export CSV téléchargé.',
         exportDownloadedRows: '{{count}} ligne(s) CSV téléchargée(s).',
-        zonesTitle: 'Zones de livraison',
+        zonesTitle: '1. Zones de livraison',
+        zonesHint:
+          'Chaque carte résume une méthode de livraison et indique exactement ce qui manque avant son activation.',
+        createZoneTitle: 'Créer une nouvelle zone',
+        createZoneHint: 'Utilisez un réglage assisté pour préremplir les valeurs courantes.',
         nameFr: 'Nom français',
         nameAr: 'Nom arabe',
+        priority: 'Priorité (la valeur la plus élevée gagne)',
+        estimatedMinDays: 'Délai minimum estimé (jours)',
+        estimatedMaxDays: 'Délai maximum estimé (jours)',
+        estimatedMinMinutes: 'Délai minimum estimé (minutes)',
+        estimatedMaxMinutes: 'Délai maximum estimé (minutes)',
+        paymentMethod: 'Mode de paiement',
+        assignmentMode: 'Mode d’affectation',
+        driverCommunication: 'Communication avec le livreur',
+        paymentMethods: {
+          CASH_ON_DELIVERY: 'Paiement à la livraison',
+        },
+        assignmentModes: {
+          MANUAL: 'Affectation manuelle',
+        },
+        communicationChannels: {
+          WHATSAPP: 'WhatsApp',
+          PHONE: 'Téléphone',
+        },
+        zonePresetTitle: 'Réglages assistés',
+        zonePresetHint:
+          'Appliquez les valeurs opérationnelles attendues, puis vérifiez les noms et la priorité avant d’enregistrer.',
+        applyStandardCod: 'Appliquer Standard COD',
+        applyBizerteExpress: 'Appliquer Bizerte Express',
+        phoneConfirmationRequired: 'Confirmation téléphonique obligatoire',
+        manualReviewRequired: 'Revue manuelle obligatoire',
         createInactiveZone: 'Créer une zone inactive',
         zoneCounts: '{{localities}} localité(s) · {{rates}} tarif(s) actif(s)',
+        zoneServiceSummary: 'Délai : {{estimate}} · Confirmation téléphonique : {{phone}}',
+        estimateDays: '{{min}}–{{max}} jour(s)',
+        estimateMinutes: '{{min}}–{{max}} minutes',
+        zoneOperationalSummary:
+          'Paiement : {{payment}} · Affectation : {{assignment}} · Communication : {{communication}}',
+        zoneSupported: 'Couverture opérationnelle prise en charge.',
+        zoneUnsupported: 'Couverture opérationnelle non prise en charge pour le moment.',
+        zoneEditForm: 'Modifier la zone {{code}}',
+        saveZoneDetails: 'Enregistrer la zone',
+        zoneDetailsUpdated: 'Configuration de la zone mise à jour.',
         activate: 'Activer',
         deactivate: 'Désactiver',
         inactive: 'Inactif',
         localityId: 'Identifiant de localité prise en charge',
         addLocality: 'Ajouter la localité',
+        geographyTitle: '2. Couverture géographique',
+        geographyHint:
+          'Choisissez une zone administrative existante. Le serveur crée les liens vers ses localités actives sans exposer d’identifiants internes.',
+        geographyScope: 'Niveau de couverture',
+        scopeGovernorate: 'Gouvernorat entier',
+        scopeDelegation: 'Délégation entière',
+        scopeLocality: 'Localité précise',
+        geographyDataMissing:
+          'Aucune délégation ou localité active n’est configurée sous cette sélection. Chargez d’abord la hiérarchie géographique structurelle.',
+        geographySupported: 'Cette sélection est déjà desservie par une zone active.',
+        geographyUnsupported:
+          'Cette sélection existe et peut être configurée, mais elle n’est pas encore desservie.',
+        bizerteCoverageHint:
+          'Bizerte Express exige une délégation ou une localité précise de Bizerte. Le gouvernorat entier ne peut pas être lié.',
+        bizerteGovernorateUnavailable:
+          'Le gouvernorat de Bizerte est indisponible dans la hiérarchie active. Vérifiez les données géographiques.',
+        addGeography: 'Ajouter cette couverture',
         zoneCreated: 'Zone inactive créée.',
         zoneUpdated: 'Statut de la zone mis à jour.',
+        deliveryTime: 'Délai de livraison',
+        configurationIncomplete: 'Configuration incomplète',
+        readyToActivate: 'Prête à activer',
+        activationReadiness: 'Conditions d’activation',
+        coverageReady: 'Couverture configurée',
+        coverageMissing: 'Couverture à ajouter',
+        coverageCount: '{{count}} localité(s) reliée(s)',
+        rateReady: 'Tarif actif configuré',
+        rateMissing: 'Tarif actif à ajouter',
+        activeRateCount: '{{count}} tarif(s) actif(s)',
+        configureCoverage: 'Configurer la couverture',
+        configureRate: 'Configurer le tarif',
+        activateZone: 'Activer la zone {{code}}',
+        deactivateZone: 'Désactiver la zone {{code}}',
+        editZoneSettings: 'Modifier les réglages de la zone',
+        editZoneSettingsHint: 'Délais, noms et paramètres opérationnels avancés',
         localityLinked: 'Localité ajoutée à la zone.',
-        ratesTitle: 'Tarifs en millimes',
+        geographyLinked: 'Couverture géographique ajoutée à la zone.',
+        ratesTitle: '3. Tarifs de livraison',
+        ratesHint:
+          'Créez le tarif dans la zone correspondante, vérifiez son montant en TND, puis activez-le avant la zone.',
+        createRateTitle: 'Créer un nouveau tarif',
+        createRateHint: 'Le nouveau tarif reste inactif jusqu’à votre validation.',
+        zoneUnavailable: 'Zone indisponible',
         rateName: 'Nom du tarif',
         amountMillimes: 'Montant (millimes)',
+        amountMillimesHint: 'Exemple : 8000 millimes = 8,000 DT.',
+        amountTnd: 'Montant du tarif (TND)',
+        amountTndHint:
+          'Utilisez un point ou une virgule et jusqu’à trois décimales, par exemple 8,000. Le serveur accepte 0 uniquement pour une zone explicitement gratuite.',
+        rateAmountPreview: '{{millimes}} millimes',
+        editRateForm: 'Modifier le montant du tarif {{name}}',
+        saveRateAmount: 'Enregistrer le montant',
+        expressRate: 'Tarif express',
+        express: 'Express',
         createInactiveRate: 'Créer le tarif inactif',
         rateCreated: 'Tarif inactif créé.',
         rateUpdated: 'Statut du tarif mis à jour.',
-        pickupsTitle: 'Points de retrait',
+        rateAmountSaved: 'Montant du tarif mis à jour.',
+        activateRate: 'Activer le tarif {{name}}',
+        deactivateRate: 'Désactiver le tarif {{name}}',
+        pickupsTitle: 'Optionnel · Points de retrait',
+        pickupsHint:
+          'Configurez cette partie uniquement si les clients peuvent retirer leurs commandes dans un emplacement physique.',
+        createPickupTitle: 'Créer un point de retrait',
+        createPickupHint: 'Le point reste inactif jusqu’à ce que son emplacement soit prêt.',
         createInactivePickup: 'Créer le point inactif',
         pickupCreated: 'Point de retrait inactif créé.',
         pickupUpdated: 'Statut du point de retrait mis à jour.',
+        requestReference: 'Référence de la demande : {{requestId}}',
+        errors: {
+          title: 'Impossible d’effectuer cette opération',
+          fallback: 'La modification n’a pas pu être enregistrée. Réessayez.',
+          validation:
+            'Vérifiez les champs. Les codes acceptent uniquement des lettres majuscules, des chiffres, _ ou -.',
+          recentAuthenticationRequired:
+            'Cette opération exige une authentification administrateur récente. Reconnectez-vous, puis réessayez.',
+          zoneCodeConflict: 'Ce code de zone est déjà utilisé.',
+          zoneAmountInvalid: 'Les montants de la zone doivent être compris entre 0 et 1 000 TND.',
+          zoneEstimateInvalid:
+            'Vérifiez le délai : la valeur minimale doit être inférieure ou égale à la valeur maximale.',
+          zoneEstimateUnitInvalid:
+            'Choisissez un délai en jours ou en minutes, sans remplir les deux unités.',
+          bizerteConfigurationInvalid:
+            'Bizerte Express exige 30–50 minutes, le paiement à la livraison, l’affectation manuelle et WhatsApp.',
+          bizerteExplicitCoverageRequired:
+            'Choisissez une délégation ou une localité précise de Bizerte, pas le gouvernorat entier.',
+          bizerteCoverageInvalid:
+            'Bizerte Express ne peut couvrir que des délégations ou localités de Bizerte.',
+          pickupCodeConflict: 'Ce code de point de retrait est déjà utilisé.',
+          geographyEmpty:
+            'La sélection ne contient aucune localité active. Vérifiez la hiérarchie géographique.',
+          geographyTooLarge:
+            'Cette sélection dépasse la limite de 1 000 localités. Choisissez une couverture plus précise.',
+          geographyUnavailable: 'La zone géographique sélectionnée est inactive ou indisponible.',
+          zoneGeographyMissing:
+            'Ajoutez au moins une localité active à cette zone avant de l’activer.',
+          zoneRateMissing:
+            'Activez d’abord un tarif de base actuel pour cette zone, puis activez la zone.',
+          versionConflict:
+            'Cette configuration a changé depuis son chargement. Actualisez la page puis réessayez.',
+          rateAmbiguous: 'Un tarif actif de même priorité couvre déjà cette zone et cette période.',
+          rateAmountInvalid: 'Le tarif doit être un montant entier positif ou nul en millimes.',
+          rateFreeConfigurationRequired:
+            'Un tarif de 0 TND exige une zone explicitement configurée comme gratuite.',
+          rateAmountRequired: 'Saisissez le montant du tarif en TND.',
+          rateAmountFormat:
+            'Utilisez uniquement des chiffres et, si nécessaire, un point ou une virgule comme séparateur décimal.',
+          rateAmountPrecision: 'Le montant ne peut pas contenir plus de trois décimales.',
+          rateAmountNonNegative: 'Le montant du tarif ne peut pas être négatif.',
+          rateAmountMaximum: 'Le montant ne peut pas dépasser 1 000 TND.',
+          rateDatesInvalid: 'La date de fin du tarif doit être postérieure à sa date de début.',
+          rateBoundsInvalid: 'La limite minimale du tarif ne peut pas dépasser sa limite maximale.',
+          rateScopeInvalid: 'Le périmètre sélectionné ne correspond pas au type de tarif.',
+          inventoryLocationUnavailable:
+            'L’emplacement de stock associé au point de retrait est indisponible.',
+          activeZoneGeographyRequired:
+            'Désactivez la zone avant de retirer sa dernière localité active.',
+          activeZoneRateRequired:
+            'Désactivez la zone avant de retirer son dernier tarif de base actif.',
+        },
         courierActions: {
           ACTIVE: 'Réactiver',
           SUSPENDED: 'Suspendre',
@@ -1150,17 +1499,68 @@ export const fr = {
       productEditor: 'Fiche produit',
       productEditorSubtitle:
         'Les prix sont saisis en millimes et validés à nouveau par le serveur.',
+      productErrors: {
+        title: 'Impossible d’enregistrer cette modification',
+        fallback: 'La modification n’a pas pu être enregistrée. Réessayez.',
+        slugConflict:
+          'Cet identifiant URL est déjà utilisé. Choisissez un identifiant unique puis réessayez.',
+        recentAuthenticationRequired:
+          'Votre session est toujours ouverte, mais cette action sensible exige une authentification récente. Déconnectez-vous, reconnectez-vous avec votre mot de passe et votre code 2FA, puis réessayez dans les 10 minutes.',
+        invalidCatalogReference:
+          'La catégorie ou la marque sélectionnée n’est pas publiée. Publiez-la ci-dessous, puis enregistrez de nouveau le produit.',
+        invalidPromotionalPrice:
+          'Le prix promotionnel doit être positif, ne peut pas dépasser le prix normal et exige un prix de base.',
+        mediaReviewConfirmationNotApplicable:
+          'La confirmation des images ne peut être envoyée que pour publier un produit signalé pour contrôle.',
+        productArchived: 'Restaurez ce produit en brouillon avant de le modifier.',
+        variantArchived: 'Restaurez cette variante avant de la modifier.',
+        productPublicationNotReady:
+          'Le produit ne remplit pas encore toutes les conditions opérationnelles de publication.',
+        variantPublicationNotReady:
+          'Cette variante ne remplit pas encore toutes les conditions opérationnelles de publication.',
+        productPublicationRequirementsMissing:
+          'Publiez au moins une variante vendable avec un prix valide avant de publier le produit.',
+        versionConflict:
+          'Cette fiche a été modifiée depuis son chargement. Rechargez la page, vérifiez les nouvelles valeurs puis réessayez.',
+        validation: 'Vérifiez les champs signalés et corrigez les valeurs invalides.',
+        resolveRequirements: 'Éléments à corriger :',
+        requestReference: 'Référence de la demande : {{requestId}}',
+        blockers: {
+          approvedImageMissing: 'Ajoutez et approuvez au moins une image admissible.',
+          availableStockMissing:
+            'Ajoutez du stock disponible à au moins une variante avant sa publication.',
+          deliveryMethodMissing:
+            'Configurez une zone et un tarif de livraison actifs, ou un point de retrait actif.',
+          mediaReviewConfirmationRequired:
+            'Confirmez explicitement le contrôle des médias lors de la publication.',
+          mediaReviewPending: 'Traitez toutes les images en attente ou en quarantaine.',
+          mediaReviewRequired: 'Terminez le contrôle requis des images importées.',
+          nonPositivePrice: 'Saisissez un prix de vente strictement supérieur à zéro.',
+          pricingReviewRequired: 'Remplacez les prix importés provisoires par des prix réels.',
+          sellableVariantMissing:
+            'Publiez au moins une variante avec un prix valide et du stock disponible.',
+          stockReviewRequired: 'Vérifiez et enregistrez le stock réel de la variante.',
+          variantSkuDuplicate: 'Chaque variante doit avoir un SKU unique.',
+          variantSkuInvalid: 'Chaque variante doit avoir un SKU valide et non vide.',
+        },
+      },
       variantOps: {
+        saveSeparately:
+          'Chaque variante possède son propre formulaire. Enregistrer le produit ne sauvegarde pas les informations, prix, seuils ou statuts ci-dessous ; utilisez « Mettre à jour la variante » pour chacune.',
         title: 'Variantes, prix et seuils',
+        color: 'Couleur (facultatif)',
         priceMillimes: 'Prix (millimes)',
         promotionalPriceMillimes: 'Prix promotionnel (millimes)',
         costMillimes: 'Coût (millimes)',
         lowStockThreshold: 'Seuil de stock bas',
         update: 'Mettre à jour la variante',
+        updated: 'La variante a été mise à jour.',
         restore: 'Restaurer',
         archive: 'Archiver',
         newDraft: 'Nouvelle variante (brouillon)',
         create: 'Créer la variante',
+        created: 'La variante a été créée en brouillon.',
+        manageStock: 'Gérer le stock',
       },
       slug: 'Identifiant URL',
       draft: 'Brouillon',
@@ -1169,6 +1569,16 @@ export const fr = {
       createDraftNote:
         'Tout nouveau produit est créé en brouillon. La publication reste une action séparée et contrôlée.',
       taxonomy: {
+        publicationTitle: 'Préparer les références avant la publication',
+        publicationHint:
+          'Un produit ne peut être publié que lorsque sa catégorie et sa marque sélectionnée sont elles-mêmes publiées. Ces actions restent séparées et contrôlées.',
+        publishSelectedCategory: 'Publier la catégorie sélectionnée',
+        publishSelectedBrand: 'Publier la marque sélectionnée',
+        categoryPublished: 'La catégorie sélectionnée est maintenant publiée.',
+        brandPublished: 'La marque sélectionnée est maintenant publiée.',
+        publicationUnavailable:
+          'Cette référence ne peut pas être publiée avec vos permissions ou depuis son état actuel.',
+        archivedStatus: 'Archivé',
         title: 'Préparer le catalogue',
         hint: 'Créez et publiez ici la première catégorie ou marque. La sélection du produit est mise à jour automatiquement.',
         createCategory: 'Créer et publier la catégorie',
@@ -1189,7 +1599,10 @@ export const fr = {
       skuOptional: 'SKU (facultatif)',
       shortDescriptionFr: 'Description courte en français',
       shortDescriptionAr: 'Description courte en arabe',
+      descriptionFr: 'Description complète en français',
+      descriptionAr: 'Description complète en arabe',
       basePriceMillimes: 'Prix de base (millimes)',
+      productPromotionalPriceMillimes: 'Prix promotionnel du produit (millimes)',
       warningFr: 'Avertissement en français',
       warningAr: 'Avertissement en arabe',
       minimumAge: 'Âge minimum',

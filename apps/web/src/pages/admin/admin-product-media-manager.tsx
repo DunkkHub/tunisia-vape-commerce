@@ -19,6 +19,7 @@ import type { AdminProductImage, AdminProductPublicationStatus } from '../../api
 import { Button } from '../../components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
 import { CheckboxField, FormField, SelectField } from '../../components/ui/form-field';
+import { invalidatePublicProductCaches } from './admin-product-cache';
 
 const formText = (form: FormData, key: string): string => {
   const value = form.get(key);
@@ -77,6 +78,7 @@ export function AdminProductMediaManager({
       queryClient.invalidateQueries({ queryKey: ['admin', 'product', productId, 'variants'] }),
       queryClient.invalidateQueries({ queryKey: ['admin', 'product', productId] }),
       queryClient.invalidateQueries({ queryKey: ['admin', 'catalog'] }),
+      invalidatePublicProductCaches(queryClient),
     ]);
   };
   useEffect(() => {

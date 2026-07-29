@@ -19,7 +19,9 @@ import type {
   AdminProductCreatePayload,
   AdminProductImage,
   AdminProductRead,
+  AdminProductVariantCreatePayload,
   AdminProductVariantRead,
+  AdminProductVariantUpdatePayload,
   AdminProductUpdatePayload,
   AdminOrderDetail,
   AdminRecord,
@@ -28,6 +30,7 @@ import type {
   AdminSettingRecord,
   StoreConfigurationExport,
   AdminDeliveryZoneConfig,
+  AdminDeliveryZoneInput,
   AdminDeliveryRateConfig,
   AdminPickupConfig,
   AdminCashCollection,
@@ -46,6 +49,7 @@ import type {
   AdminCatalogImportBatch,
   AdminCatalogMediaImportResult,
   AdminCatalogImportPreviewPayload,
+  GeographyOption,
   Pagination,
 } from './types';
 
@@ -378,18 +382,41 @@ export const adminDataClient = {
     adminRequest<Pagination<AdminDeliveryZoneConfig>>(
       '/admin/delivery-config/zones?page=1&limit=50',
     ),
+  deliveryGeographyGovernorates: () =>
+    adminRequest<GeographyOption[]>('/admin/delivery-config/geography/governorates'),
+  deliveryGeographyDelegations: (governorateId: string) =>
+    adminRequest<GeographyOption[]>(
+      `/admin/delivery-config/geography/governorates/${encodeURIComponent(governorateId)}/delegations`,
+    ),
+  deliveryGeographyLocalities: (delegationId: string) =>
+    adminRequest<GeographyOption[]>(
+      `/admin/delivery-config/geography/delegations/${encodeURIComponent(delegationId)}/localities`,
+    ),
   deliveryRates: () =>
     adminRequest<Pagination<AdminDeliveryRateConfig>>(
       '/admin/delivery-config/rates?page=1&limit=50',
     ),
   pickupLocations: () =>
     adminRequest<Pagination<AdminPickupConfig>>('/admin/delivery-config/pickups?page=1&limit=50'),
-  createDeliveryZone: (payload: { code: string; nameFr: string; nameAr: string }) =>
+  createDeliveryZone: (payload: AdminDeliveryZoneInput) =>
     adminRequest<AdminDeliveryZoneConfig>('/admin/delivery-config/zones', {
       method: 'POST',
       body: jsonBody(payload),
     }),
-  linkDeliveryZoneLocality: (zone: AdminDeliveryZoneConfig, localityId: string, active: boolean) =>
+  updateDeliveryZone: (zone: AdminDeliveryZoneConfig, payload: Partial<AdminDeliveryZoneInput>) =>
+    adminRequest<AdminDeliveryZoneConfig>(
+      `/admin/delivery-config/zones/${encodeURIComponent(zone.id)}`,
+      {
+        method: 'PATCH',
+        body: jsonBody({ ...payload, expectedUpdatedAt: zone.updatedAt }),
+      },
+    ),
+  linkDeliveryZoneGeography: (
+    zone: AdminDeliveryZoneConfig,
+    scope: 'GOVERNORATE' | 'DELEGATION' | 'LOCALITY',
+    geographyId: string,
+    active: boolean,
+  ) =>
     adminRequest<AdminDeliveryZoneConfig>(
       `/admin/delivery-config/zones/${encodeURIComponent(zone.id)}/geography-links`,
       {
@@ -397,8 +424,8 @@ export const adminDataClient = {
         body: jsonBody({
           expectedUpdatedAt: zone.updatedAt,
           confirmed: true,
-          scope: 'LOCALITY',
-          geographyId: localityId,
+          scope,
+          geographyId,
           active,
         }),
       },
@@ -411,11 +438,25 @@ export const adminDataClient = {
         body: jsonBody({ expectedUpdatedAt: zone.updatedAt, confirmed: true }),
       },
     ),
-  createDeliveryRate: (payload: { deliveryZoneId: string; name: string; feeMillimes: number }) =>
+  createDeliveryRate: (payload: {
+    deliveryZoneId: string;
+    name: string;
+    feeMillimes: number;
+    priority?: number;
+    express?: boolean;
+  }) =>
     adminRequest<AdminDeliveryRateConfig>('/admin/delivery-config/rates', {
       method: 'POST',
       body: jsonBody({ type: 'BASE', priority: 0, ...payload }),
     }),
+  updateDeliveryRate: (rate: AdminDeliveryRateConfig, payload: { feeMillimes: number }) =>
+    adminRequest<AdminDeliveryRateConfig>(
+      `/admin/delivery-config/rates/${encodeURIComponent(rate.id)}`,
+      {
+        method: 'PATCH',
+        body: jsonBody({ ...payload, expectedVersion: rate.version }),
+      },
+    ),
   setDeliveryRateActive: (rate: AdminDeliveryRateConfig, active: boolean) =>
     adminRequest<AdminDeliveryRateConfig>(
       `/admin/delivery-config/rates/${encodeURIComponent(rate.id)}/${active ? 'activate' : 'deactivate'}`,
@@ -750,18 +791,7 @@ export const adminDataClient = {
     adminRequest<{ items: AdminProductVariantRead[] }>(
       `/admin/products/${encodeURIComponent(productId)}/variants`,
     ),
-  createProductVariant: (
-    productId: string,
-    payload: {
-      nameFr: string;
-      nameAr: string;
-      sku: string;
-      costMillimes: number;
-      priceMillimes: number;
-      promotionalPriceMillimes?: number | null;
-      lowStockThreshold?: number;
-    },
-  ) =>
+  createProductVariant: (productId: string, payload: AdminProductVariantCreatePayload) =>
     adminRequest<AdminProductVariantRead>(
       `/admin/products/${encodeURIComponent(productId)}/variants`,
       { method: 'POST', body: jsonBody(payload) },
@@ -769,13 +799,7 @@ export const adminDataClient = {
   updateProductVariant: (
     productId: string,
     variantId: string,
-    payload: {
-      version: number;
-      priceMillimes?: number;
-      promotionalPriceMillimes?: number | null;
-      publicationStatus?: 'DRAFT' | 'PUBLISHED' | 'SUSPENDED';
-      lowStockThreshold?: number;
-    },
+    payload: AdminProductVariantUpdatePayload,
   ) =>
     adminRequest<AdminProductVariantRead>(
       `/admin/products/${encodeURIComponent(productId)}/variants/${encodeURIComponent(variantId)}`,

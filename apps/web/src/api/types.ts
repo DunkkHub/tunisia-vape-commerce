@@ -407,6 +407,41 @@ export interface CheckoutPayload {
   };
 }
 
+export type StorefrontDeliveryPaymentMethod = 'CASH_ON_DELIVERY';
+
+export interface StorefrontDeliveryMetadata {
+  estimatedMinDays: number | null;
+  estimatedMaxDays: number | null;
+  estimatedMinMinutes: number | null;
+  estimatedMaxMinutes: number | null;
+  paymentMethod: StorefrontDeliveryPaymentMethod | null;
+  phoneConfirmationRequired: boolean;
+}
+
+export interface CheckoutOrderFulfillment extends StorefrontDeliveryMetadata {
+  type: 'COURIER' | 'STORE_PICKUP';
+}
+
+export type CheckoutQuoteFulfillment =
+  | ({
+      type: 'COURIER';
+      express: boolean;
+      deliveryZone: { id: string; code: string; nameFr: string; nameAr: string };
+      selectedRateIds: string[];
+      freeDeliveryApplied: boolean;
+    } & StorefrontDeliveryMetadata)
+  | {
+      type: 'STORE_PICKUP';
+      pickupLocation: {
+        id: string;
+        code: string;
+        nameFr: string;
+        nameAr: string;
+        address: string;
+      };
+      selectedRateIds: string[];
+    };
+
 export interface CheckoutResult {
   id: string;
   orderNumber: string;
@@ -420,6 +455,7 @@ export interface CheckoutResult {
   grandTotalMillimes: number;
   expectedCodMillimes: number;
   deliveryMethodType: 'COURIER' | 'STORE_PICKUP';
+  fulfillment: CheckoutOrderFulfillment;
   createdAt: string;
 }
 
@@ -438,6 +474,7 @@ export interface CheckoutQuote {
   taxTotalMillimes: number;
   grandTotalMillimes: number;
   expectedCodMillimes: number;
+  fulfillment: CheckoutQuoteFulfillment;
   expiresAt: string;
   stockReserved: false;
   orderCreated: false;
@@ -455,7 +492,7 @@ export interface DeliveryWindowOption {
   label: string;
 }
 
-export interface DeliveryMethodOption {
+export interface DeliveryMethodOption extends StorefrontDeliveryMetadata {
   id: string;
   type: 'COURIER' | 'STORE_PICKUP';
   label: string;
@@ -771,6 +808,26 @@ export interface StoreConfigurationExport {
   checksumSha256: string;
 }
 
+export type AdminDeliveryPaymentMethod = 'CASH_ON_DELIVERY';
+export type AdminDeliveryAssignmentMode = 'MANUAL';
+export type AdminDeliveryCommunicationChannel = 'WHATSAPP' | 'PHONE';
+
+export interface AdminDeliveryZoneInput {
+  code: string;
+  nameFr: string;
+  nameAr: string;
+  priority?: number;
+  estimatedMinDays?: number | null;
+  estimatedMaxDays?: number | null;
+  estimatedMinMinutes?: number | null;
+  estimatedMaxMinutes?: number | null;
+  paymentMethod?: AdminDeliveryPaymentMethod | null;
+  assignmentMode?: AdminDeliveryAssignmentMode | null;
+  driverCommunication?: AdminDeliveryCommunicationChannel | null;
+  phoneConfirmationRequired?: boolean;
+  manualReviewRequired?: boolean;
+}
+
 export interface AdminDeliveryZoneConfig {
   id: string;
   code: string;
@@ -779,8 +836,22 @@ export interface AdminDeliveryZoneConfig {
   priority: number;
   active: boolean;
   supported: boolean;
+  temporarilySuspended: boolean;
+  phoneConfirmationRequired: boolean;
+  manualReviewRequired: boolean;
+  minOrderMillimes: number | null;
+  maxCodMillimes: number | null;
+  freeDeliveryThresholdMillimes: number | null;
+  estimatedMinDays: number | null;
+  estimatedMaxDays: number | null;
+  estimatedMinMinutes: number | null;
+  estimatedMaxMinutes: number | null;
+  paymentMethod: AdminDeliveryPaymentMethod | null;
+  assignmentMode: AdminDeliveryAssignmentMode | null;
+  driverCommunication: AdminDeliveryCommunicationChannel | null;
   localityCount: number;
   activeRateCount: number;
+  createdAt: string;
   updatedAt: string;
 }
 
@@ -790,8 +861,12 @@ export interface AdminDeliveryRateConfig {
   name: string;
   feeMillimes: number;
   priority: number;
+  deliveryZoneId: string | null;
+  express: boolean;
   active: boolean;
   version: number;
+  validFrom: string | null;
+  validUntil: string | null;
 }
 
 export interface AdminPickupConfig {
@@ -1241,6 +1316,30 @@ export interface AdminProductVariantRead {
   version: number;
 }
 
+export interface AdminProductVariantCreatePayload {
+  nameFr: string;
+  nameAr: string;
+  sku: string;
+  color?: string | null;
+  costMillimes: number;
+  priceMillimes: number;
+  promotionalPriceMillimes?: number | null;
+  lowStockThreshold?: number;
+}
+
+export interface AdminProductVariantUpdatePayload {
+  version: number;
+  nameFr?: string;
+  nameAr?: string;
+  sku?: string;
+  color?: string | null;
+  costMillimes?: number;
+  priceMillimes?: number;
+  promotionalPriceMillimes?: number | null;
+  publicationStatus?: AdminProductMutablePublicationStatus;
+  lowStockThreshold?: number;
+}
+
 export interface AdminProductCreatePayload {
   categoryId: string;
   brandId: string | null;
@@ -1252,8 +1351,11 @@ export interface AdminProductCreatePayload {
   sku: string | null;
   shortDescriptionFr: string | null;
   shortDescriptionAr: string | null;
+  descriptionFr: string | null;
+  descriptionAr: string | null;
   containsNicotine: boolean;
   basePriceMillimes: number | null;
+  promotionalPriceMillimes: number | null;
   warningFr: string | null;
   warningAr: string | null;
   minimumAge: number | null;

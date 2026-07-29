@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -48,6 +49,7 @@ describe('administrator product media workflow', () => {
   });
 
   it('lists validated images and uploads through the protected multipart endpoint', async () => {
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = requestUrl(input);
       if (url.includes('/admin/products/product-1/images?')) {
@@ -122,6 +124,19 @@ describe('administrator product media workflow', () => {
     });
     expect(await screen.findByText('Image validée et téléversée.')).toBeVisible();
     expect(revokeObjectUrl).toHaveBeenCalledWith('blob:local-product-preview');
+    await waitFor(() => {
+      for (const queryKey of [
+        ['storefront', 'home'],
+        ['catalog'],
+        ['products'],
+        ['product'],
+        ['cart'],
+        ['checkout'],
+      ]) {
+        expect(invalidateSpy).toHaveBeenCalledWith({ queryKey });
+      }
+    });
+    invalidateSpy.mockRestore();
   });
 
   it('keeps the authenticated review queue reachable across every result page', async () => {
