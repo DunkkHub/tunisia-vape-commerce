@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import { adminDataClient } from '../../api/admin-data-client';
 import { ApiError } from '../../api/http';

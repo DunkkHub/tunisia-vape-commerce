@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Filter, Search, X } from 'lucide-react';
 import { useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router';
 
 import { storefrontClient } from '../../api/storefront-client';
 import { ProductCard } from '../../components/catalog/product-card';

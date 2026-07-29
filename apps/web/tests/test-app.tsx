@@ -1,5 +1,5 @@
 import { render, type RenderResult } from '@testing-library/react';
-import { RouterProvider } from 'react-router-dom';
+import { RouterProvider } from 'react-router/dom';
 import { vi } from 'vitest';
 
 import { AppProviders } from '../src/app/providers';

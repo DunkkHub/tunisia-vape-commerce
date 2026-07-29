@@ -1,9 +1,4 @@
-import {
-  createBrowserRouter,
-  createMemoryRouter,
-  Navigate,
-  type RouteObject,
-} from 'react-router-dom';
+import { createBrowserRouter, createMemoryRouter, Navigate, type RouteObject } from 'react-router';
 import type { ReactNode } from 'react';
 
 import { AdminGuard, CustomerGuard } from '../auth/guards';

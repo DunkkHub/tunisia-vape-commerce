@@ -1,6 +1,6 @@
 # Production readiness report
 
-Review date: 2026-07-27
+Review date: 2026-07-29
 
 ## Verdict vocabulary
 
@@ -193,8 +193,44 @@ includes courier order creation without an unconfigured postal code, automatic u
 locality code, server validation of every submitted code, safe error mapping, and request-reference
 feedback. Formatting, linting,
 workspace type checking, Prisma validation, and API, worker, and web production builds also pass. The
-web build transformed 2,076 modules; the sandbox-compatible verification used Vite's native config
-loader because the default Windows config bundler is not permitted to spawn helper processes here.
+web build transformed 2,133 modules.
+
+The 2026-07-29 dependency-security follow-up removes all three findings reported by
+`pnpm audit --audit-level=high`. GHSA-qwww-vcr4-c8h2 is resolved with the supported React Router 8.3.0
+migration: the removed `react-router-dom` compatibility package is gone, normal imports use
+`react-router`, and `RouterProvider` uses `react-router/dom`. The application has no unstable RSC
+entry or API affected by the advisory, and no route definition, authorization guard, or session
+boundary changed. GHSA-r28c-9q8g-f849 and GHSA-mh99-v99m-4gvg are resolved with exact pnpm overrides
+to the first patched releases, PostCSS 8.5.18 and brace-expansion 5.0.8; their existing Vite and
+minimatch parents accept those patches. No Vite, Vitest, ESLint, minimatch, or unrelated direct
+dependency was upgraded. A frozen install and the audit pass with zero advisories. The post-update
+verification passes formatting, lint, all workspace type checks, Prisma validation, 407 API unit
+tests, 129 web unit tests, 30 worker unit tests, 19 disposable MySQL/Redis integration tests, 6
+security tests, 26 operations tests, every production build, and fast Playwright with 8 passes and 2
+intentional project-matrix skips. A clean Node 24 web-container build also passed with the frozen
+lockfile and supply-chain policy enabled. The rebuilt gateway serves `/`, `/admin`, and `/checkout`
+with HTTP 200; web-container health is `healthy`, and MySQL, Redis, worker, and migration readiness
+remain `up`.
+
+GitHub Security run 30455832962 exposed a separate runtime-image dependency path that the pnpm
+override cannot control. Its API and worker SARIF analyses each reported HIGH CVE-2026-14257 in
+npm-bundled brace-expansion 5.0.7, fixed in 5.0.8, plus MEDIUM GHSA-r292-9mhp-454m in npm-bundled
+tar 7.5.19, fixed in 7.5.21. The web image had zero findings because its nginx runtime contains no
+npm tree. The API and worker processes invoke `node` directly and never use npm at runtime, so the
+final images now remove npm and its binaries instead of upgrading an unused package manager across
+a major version. The Trivy action remains on stable v0.36.0, selects stable Trivy 0.72.0 rather than
+its older 0.70.0 default, and explicitly scans vulnerabilities and secrets while constraining SARIF
+enforcement to the declared `HIGH,CRITICAL` policy; fixed findings still fail the job and
+`ignore-unfixed` remains enabled.
+
+Local parity runtime builds now pass for both affected images. Each remains non-root, retains its
+original direct Node.js command, and contains no npm directory or npm/npx executable. Trivy 0.72.0,
+using the CI-equivalent vulnerability and secret scanners, HIGH/CRITICAL severity filter,
+`ignore-unfixed`, and failing exit code, returns exit zero with no findings for the rebuilt API and
+worker images and the current web runtime. Formatting, linting, workspace type checks, Prisma
+validation, 407 API/129 web/30 worker unit tests, 19 disposable integration tests, 6 security tests,
+26 operations tests, every production build, and fast Playwright with 8 passes and 2 intentional
+skips also pass on this final worktree.
 
 The earlier live Compose run applied all 10 migrations and reported the schema up to date. The
 structural seed completed twice with stable totals of 9 roles, 43 permissions, 24 governorates, 279

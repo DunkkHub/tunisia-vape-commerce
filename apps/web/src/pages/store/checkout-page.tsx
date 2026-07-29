@@ -4,7 +4,7 @@ import { Banknote, LockKeyhole, MapPin, ShieldCheck } from 'lucide-react';
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import { z } from 'zod';
 
 import { storefrontClient } from '../../api/storefront-client';

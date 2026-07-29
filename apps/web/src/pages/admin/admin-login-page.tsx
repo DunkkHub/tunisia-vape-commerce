@@ -4,7 +4,7 @@ import QRCode from 'qrcode';
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
-import { Link, Navigate, useLocation } from 'react-router-dom';
+import { Link, Navigate, useLocation } from 'react-router';
 import { z } from 'zod';
 
 import { ApiError } from '../../api/http';
