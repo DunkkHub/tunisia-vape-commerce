@@ -13,6 +13,8 @@ export class TrustedOriginGuard implements CanActivate {
     const origin = request.get('origin');
     const expectedOrigin = this.expectedOrigin(request);
 
+    if (this.isGoogleCallbackNavigation(request)) return true;
+
     if (fetchSite === 'cross-site' || (origin && this.originOf(origin) !== expectedOrigin)) {
       throw new ForbiddenException({
         code: 'UNTRUSTED_REQUEST_ORIGIN',
@@ -20,6 +22,17 @@ export class TrustedOriginGuard implements CanActivate {
       });
     }
     return true;
+  }
+
+  private isGoogleCallbackNavigation(request: Request): boolean {
+    const path = (request.originalUrl || request.url || '').split('?', 1)[0] ?? '';
+    return (
+      request.method === 'GET' &&
+      path === '/api/v1/auth/customer/google/callback' &&
+      request.get('sec-fetch-site') === 'cross-site' &&
+      request.get('sec-fetch-mode') === 'navigate' &&
+      request.get('sec-fetch-dest') === 'document'
+    );
   }
 
   private expectedOrigin(request: Request): string {

@@ -10,6 +10,7 @@ export const statusPayload = {
   maintenanceMode: false,
   prelaunchMode: false,
   checkoutEnabled: true,
+  googleLoginEnabled: false,
   minimumAge: 18,
   ageGateEnabled: true,
   checkoutAgeConfirmationRequired: true,

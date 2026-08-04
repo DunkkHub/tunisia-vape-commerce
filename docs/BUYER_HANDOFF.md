@@ -29,7 +29,7 @@ corepack pnpm prisma:seed
 corepack pnpm admin:create
 ```
 
-The latest expected migration is `20260727090000_delivery_zone_operational_metadata`. Prove clean installation and a representative upgrade containing existing orders, inventory, deliveries, cash records, catalog/media, and an import receipt. The seed creates structure only and preserves existing setting values on rerun.
+The latest expected migration is `20260804090000_customer_google_identity`. It adds the customer-only Google identity binding and permits provider-only customers to omit a local password; administrator credentials remain password-plus-TOTP only. Prove clean installation and a representative upgrade containing existing customers, orders, inventory, deliveries, cash records, catalog/media, and an import receipt. The seed creates structure only and preserves existing setting values on rerun.
 
 ## 3. Configure the store
 

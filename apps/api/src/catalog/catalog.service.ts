@@ -370,6 +370,7 @@ export class CatalogService {
         checkoutEnabled:
           this.config.get('CHECKOUT_ENABLED', { infer: true }) &&
           jsonBoolean(store.get('checkout.enabled')),
+        googleLoginEnabled: this.config.get('GOOGLE_OAUTH_ENABLED', { infer: true }),
         minimumAge,
         ageGateEnabled,
         checkoutAgeConfirmationRequired: configuredBoolean('age_gate.checkout.enabled'),

@@ -56,6 +56,7 @@ export interface StorefrontStatus {
   maintenanceMode: boolean;
   prelaunchMode: boolean;
   checkoutEnabled: boolean;
+  googleLoginEnabled: boolean;
   minimumAge: number;
   ageGateEnabled: boolean;
   checkoutAgeConfirmationRequired: boolean;

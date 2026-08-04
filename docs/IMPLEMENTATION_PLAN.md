@@ -121,6 +121,8 @@ Fresh-database operational defaults are `checkout.enabled=true` and `prelaunch.m
 - During first-login enrollment, return an `otpauth://` URI and render its QR code locally in the admin UI with a manual-key fallback. Reuse the same encrypted, unverified TOTP seed across password retries until enrollment succeeds or an authorized reset explicitly replaces it.
 - Keep the admin UI entry at /admin/login and customer entry at /login.
 - Implement Argon2id hashing, generic errors, progressive delay, reset/verification token hashing, rotation, idle and absolute expiry, and full revocation.
+- Keep optional Google OAuth inside the customer realm only: authorization code plus PKCE, state/nonce validation, single-use encrypted Redis state, official ID-token verification, safe verified-email linking, profile onboarding, no provider-token persistence, and negative administrator/cross-realm tests.
+- Render local-password reset and provider-only recovery guidance through the durable notification worker using escaped French/Arabic multipart templates. Reset requests remain non-enumerating and independently throttled by IP and account.
 - Create the first Super Administrator through a secure interactive CLI; never seed one.
 - Restrict that interactive CLI to the first administrator only. Subsequent named non-super administrators are created through the exact-super protected API and must enroll TOTP before becoming operational.
 - Separate administrator and customer lifecycle commands. Require exact Super Administrator role plus permissions, CSRF, recent authentication, confirmation, reason, optimistic versions, realm-scoped revocation, and audit; forbid self-lifecycle changes and loss of the last operational Super Administrator.

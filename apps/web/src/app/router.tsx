@@ -26,6 +26,7 @@ import {
   CatalogPage,
   CheckoutPage,
   CustomerLoginPage,
+  GoogleOnboardingPage,
   HomePage,
   InfoPage,
   LegalPage,
@@ -109,6 +110,7 @@ export const appRoutes: RouteObject[] = [
       { path: 'products/:slug', element: routeElement(<ProductPage />) },
       { path: 'login', element: routeElement(<CustomerLoginPage />) },
       { path: 'register', element: routeElement(<RegisterPage />) },
+      { path: 'register/google', element: routeElement(<GoogleOnboardingPage />) },
       { path: 'password-reset', element: routeElement(<PasswordResetPage />) },
       { path: 'password-reset/confirm', element: routeElement(<PasswordResetPage />) },
       {

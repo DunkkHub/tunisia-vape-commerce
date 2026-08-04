@@ -250,6 +250,7 @@ describe('provider-neutral notification adapter', () => {
         recipient: 'customer@example.com',
         subject: 'Reset',
         body: 'Safe body',
+        html: '<!doctype html><html><body>Safe HTML body</body></html>',
         providerIdempotencyKey: 'a'.repeat(64),
       }),
     ).resolves.toEqual({
@@ -258,10 +259,14 @@ describe('provider-neutral notification adapter', () => {
     });
     const smtpRequest = sendMail.mock.calls[0]?.[0] as {
       to: string;
+      text: string;
+      html: string;
       messageId: string;
       headers: Record<string, string>;
     };
     expect(smtpRequest.to).toBe('customer@example.com');
+    expect(smtpRequest.text).toBe('Safe body');
+    expect(smtpRequest.html).toContain('Safe HTML body');
     expect(smtpRequest.messageId).toBe(`<${'a'.repeat(64)}@local.test>`);
     expect(smtpRequest.headers['X-Idempotency-Key']).toBe('a'.repeat(64));
   });
@@ -365,7 +370,15 @@ describe('notification outbox processing', () => {
 
     const prepared = send.mock.calls[0]?.[0] as PreparedNotificationMessage;
     expect(prepared.recipient).toBe('customer@example.com');
-    expect(prepared.body).toContain('/password-reset/confirm?token=');
+    expect(prepared.body).toContain(
+      '/password-reset/confirm#token=reset-token-value-that-is-at-least-thirty-two-characters',
+    );
+    expect(prepared.body).not.toContain('/password-reset/confirm?token=');
+    expect(prepared.html).toContain(
+      '/password-reset/confirm#token=reset-token-value-that-is-at-least-thirty-two-characters',
+    );
+    expect(prepared.html).not.toContain('/password-reset/confirm?token=');
+    expect(prepared.html).toContain('Tunisia Vape Commerce');
     expect(prepared.providerIdempotencyKey).toMatch(/^[a-f0-9]{64}$/);
     const notificationUpdate = result.notification.update.mock.calls[0]?.[0] as {
       data: { status: string };

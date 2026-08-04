@@ -10,7 +10,10 @@ import argon2, { argon2id } from 'argon2';
 import type { Request, Response } from 'express';
 import { AUTH_AUDIENCES } from '../common/auth/auth.constants';
 import { CryptoService } from '../common/security/crypto.service';
-import { createNotificationWithOutbox } from '../common/outbox/notification-outbox';
+import {
+  createNotificationWithOutbox,
+  ensureNotificationWithOutbox,
+} from '../common/outbox/notification-outbox';
 import type { Environment } from '../config/environment';
 import { PrismaService } from '../database/prisma.service';
 import type { SessionResponse, CustomerUserResponse } from './auth-response.types';
@@ -39,6 +42,16 @@ const normalizePhone = (phone: string): string => {
   return compact.startsWith('+216') ? compact : `+216${compact}`;
 };
 
+export interface GoogleCustomerRegistrationInput {
+  fullName: string;
+  email: string;
+  phone: string;
+  adultConfirmed: boolean;
+  termsAccepted: boolean;
+  locale: 'fr' | 'ar';
+  providerSubjectHash: string;
+}
+
 @Injectable()
 export class CustomerAuthService {
   constructor(
@@ -56,50 +69,6 @@ export class CustomerAuthService {
     response: Response,
   ): Promise<SessionResponse<CustomerUserResponse>> {
     await this.throttle.consume('customer-registration', input.email, request, 3, 15 * 60);
-    const complianceSettings = await this.prisma.complianceSetting.findMany({
-      where: {
-        key: {
-          in: [
-            'minimum_purchase_age',
-            'age_gate.entry.enabled',
-            'consent.terms.required',
-            'consent.recording.enabled',
-          ],
-        },
-      },
-      select: { key: true, value: true },
-    });
-    const compliance = new Map(
-      complianceSettings.map((setting) => [setting.key, setting.value] as const),
-    );
-    const configuredBoolean = (key: string): boolean =>
-      !compliance.has(key) || compliance.get(key) === true;
-    const ageConfirmationRequired = configuredBoolean('age_gate.entry.enabled');
-    const termsAcceptanceRequired = configuredBoolean('consent.terms.required');
-    const consentRecordingEnabled = configuredBoolean('consent.recording.enabled');
-    const minimumAgeValue = compliance.get('minimum_purchase_age');
-    const minimumAge =
-      typeof minimumAgeValue === 'number' && Number.isSafeInteger(minimumAgeValue)
-        ? minimumAgeValue
-        : null;
-    const missingConfirmations = [
-      ...(ageConfirmationRequired && !input.adultConfirmed ? ['adultConfirmed'] : []),
-      ...(termsAcceptanceRequired && !input.termsAccepted ? ['termsAccepted'] : []),
-    ];
-    if (missingConfirmations.length > 0) {
-      throw new BadRequestException({
-        code: 'CONSENT_REQUIRED',
-        message: 'Complete the confirmations configured for customer registration.',
-        fields: missingConfirmations,
-      });
-    }
-    if (ageConfirmationRequired && (minimumAge === null || minimumAge < 1)) {
-      throw new BadRequestException({
-        code: 'AGE_POLICY_NOT_CONFIGURED',
-        message: 'Registration is temporarily unavailable.',
-      });
-    }
-
     const emailNormalized = normalizeEmail(input.email);
     const phoneE164 = normalizePhone(input.phone);
     const existing = await this.prisma.user.findFirst({
@@ -115,76 +84,12 @@ export class CustomerAuthService {
       });
     }
 
-    const [firstName = input.fullName.trim(), ...remainingName] = input.fullName
-      .trim()
-      .split(/\s+/);
-    const lastName = remainingName.join(' ');
     const passwordHash = await argon2.hash(input.password, ARGON2_OPTIONS);
-    const consentedAt = new Date();
-    const ipAddress = (request.ip ?? request.socket.remoteAddress ?? 'unknown').slice(0, 45);
-    const userAgent = request.get('user-agent')?.slice(0, 512);
-    const termsVersion =
-      consentRecordingEnabled && input.termsAccepted
-        ? await this.prisma.legalDocumentVersion.findFirst({
-            where: {
-              status: 'PUBLISHED',
-              publishedAt: { lte: consentedAt },
-              legalDocument: {
-                is: { type: 'TERMS_AND_CONDITIONS', locale: input.locale },
-              },
-            },
-            orderBy: [{ version: 'desc' }, { id: 'desc' }],
-            select: { id: true },
-          })
-        : null;
-    const consentRecords: Prisma.ConsentRecordCreateWithoutCustomerInput[] = [];
-    if (consentRecordingEnabled && input.adultConfirmed) {
-      consentRecords.push({
-        type: 'AGE_GATE',
-        granted: true,
-        consentedAt,
-        ipAddress,
-        ...(userAgent ? { userAgent } : {}),
-        locale: input.locale,
-        source: 'customer_registration',
-      });
-    }
-    if (consentRecordingEnabled && input.termsAccepted) {
-      consentRecords.push({
-        type: 'TERMS',
-        granted: true,
-        consentedAt,
-        ...(termsVersion ? { legalDocumentVersion: { connect: { id: termsVersion.id } } } : {}),
-        ipAddress,
-        ...(userAgent ? { userAgent } : {}),
-        locale: input.locale,
-        source: 'customer_registration',
-      });
-    }
-    const customerProfile: Prisma.CustomerProfileCreateWithoutUserInput = {
-      firstName,
-      lastName,
-      phoneE164,
-      phoneSearch: phoneE164.replace(/\D/g, ''),
-      locale: input.locale,
-      marketingConsent: false,
-      ...(consentRecords.length > 0 ? { consentRecords: { create: consentRecords } } : {}),
-      ...(consentRecordingEnabled && input.adultConfirmed && minimumAge !== null
-        ? {
-            ageVerificationEvents: {
-              create: {
-                phase: 'STORE_ENTRY',
-                result: 'PASSED',
-                minimumAge,
-                method: 'self_declaration',
-                ipAddress,
-                ...(userAgent ? { userAgent } : {}),
-                metadata: { source: 'customer_registration' },
-              },
-            },
-          }
-        : {}),
-    };
+    const customerProfile = await this.prepareCustomerProfile(
+      input,
+      request,
+      'customer_registration',
+    );
     let userId: string;
     try {
       const user = await this.prisma.user.create({
@@ -227,6 +132,58 @@ export class CustomerAuthService {
       sessionId: session.sessionId,
     });
     return this.sessions.customerResponse(userId, session.expiresAt);
+  }
+
+  async createGoogleCustomer(
+    input: GoogleCustomerRegistrationInput,
+    request: Request,
+  ): Promise<string> {
+    const emailNormalized = normalizeEmail(input.email);
+    const phoneE164 = normalizePhone(input.phone);
+    const existing = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ emailNormalized }, { customerProfile: { is: { phoneE164 } } }],
+      },
+      select: { id: true },
+    });
+    if (existing) throw this.accountChanged();
+
+    const customerProfile = await this.prepareCustomerProfile(
+      input,
+      request,
+      'customer_google_registration',
+    );
+    try {
+      const user = await this.prisma.user.create({
+        data: {
+          audience: 'CUSTOMER',
+          email: input.email.trim(),
+          emailNormalized,
+          passwordHash: null,
+          status: 'ACTIVE',
+          emailVerifiedAt: new Date(),
+          lastLoginAt: new Date(),
+          customerProfile: {
+            create: {
+              ...customerProfile,
+              externalIdentities: {
+                create: {
+                  provider: 'GOOGLE',
+                  providerSubjectHash: input.providerSubjectHash,
+                  emailNormalized,
+                  lastAuthenticatedAt: new Date(),
+                },
+              },
+            },
+          },
+        },
+        select: { id: true },
+      });
+      return user.id;
+    } catch (error) {
+      if (this.isUniqueConstraint(error)) throw this.accountChanged();
+      throw error;
+    }
   }
 
   async login(
@@ -320,23 +277,77 @@ export class CustomerAuthService {
 
   async requestPasswordReset(input: PasswordResetRequestDto, request: Request): Promise<void> {
     await this.throttle.consume('customer-password-reset', input.email, request, 3, 15 * 60);
+    await argon2.verify(await DUMMY_PASSWORD_HASH, 'password-reset-timing-baseline');
     const user = await this.prisma.user.findFirst({
       where: {
         audience: 'CUSTOMER',
         emailNormalized: normalizeEmail(input.email),
         status: { in: ['ACTIVE', 'PENDING_VERIFICATION'] },
       },
-      select: { id: true, emailNormalized: true, customerProfile: { select: { locale: true } } },
+      select: {
+        id: true,
+        emailNormalized: true,
+        passwordHash: true,
+        customerProfile: {
+          select: {
+            locale: true,
+            externalIdentities: { select: { provider: true } },
+          },
+        },
+      },
     });
     if (!user) {
-      await DUMMY_PASSWORD_HASH;
+      await this.events.audit({
+        audience: 'CUSTOMER',
+        action: 'auth.customer.password_reset.request',
+        outcome: 'SUCCESS',
+        request,
+      });
+      return;
+    }
+
+    const now = new Date();
+    const recipient = user.emailNormalized ?? normalizeEmail(input.email);
+    if (
+      !user.passwordHash &&
+      user.customerProfile?.externalIdentities.some(({ provider }) => provider === 'GOOGLE')
+    ) {
+      const hourBucket = now.toISOString().slice(0, 13);
+      await this.prisma.$transaction(async (transaction) => {
+        await ensureNotificationWithOutbox(transaction, {
+          idempotencyKey: `password-reset-provider:${user.id}:${hourBucket}`,
+          event: 'PASSWORD_RESET',
+          channel: 'EMAIL',
+          recipientHash: this.crypto.hashToken(recipient),
+          encryptedRecipient: this.crypto.encrypt(recipient),
+          locale: user.customerProfile?.locale ?? 'fr',
+          payload: { kind: 'PROVIDER_SIGN_IN', provider: 'GOOGLE' },
+          status: 'QUEUED',
+        });
+      });
+      await this.events.audit({
+        audience: 'CUSTOMER',
+        action: 'auth.customer.password_reset.provider_guidance',
+        outcome: 'SUCCESS',
+        request,
+        userId: user.id,
+      });
+      return;
+    }
+    if (!user.passwordHash) {
+      await this.events.audit({
+        audience: 'CUSTOMER',
+        action: 'auth.customer.password_reset.request',
+        outcome: 'SUCCESS',
+        request,
+        userId: user.id,
+      });
       return;
     }
 
     const token = this.crypto.randomToken();
     const tokenHash = this.crypto.hashToken(token);
-    const now = new Date();
-    const recipient = user.emailNormalized ?? normalizeEmail(input.email);
+    const expiresInMinutes = this.config.get('PASSWORD_RESET_TTL_MINUTES', { infer: true });
     await this.prisma.$transaction(async (transaction) => {
       await transaction.passwordResetToken.create({
         data: {
@@ -344,7 +355,7 @@ export class CustomerAuthService {
           audience: 'CUSTOMER',
           tokenHash,
           requestedIp: (request.ip ?? request.socket.remoteAddress ?? 'unknown').slice(0, 45),
-          expiresAt: new Date(now.getTime() + 30 * 60_000),
+          expiresAt: new Date(now.getTime() + expiresInMinutes * 60_000),
         },
       });
       await createNotificationWithOutbox(transaction, {
@@ -355,11 +366,19 @@ export class CustomerAuthService {
         encryptedRecipient: this.crypto.encrypt(recipient),
         locale: user.customerProfile?.locale ?? 'fr',
         payload: {
+          kind: 'PASSWORD_RESET',
           encryptedResetToken: this.crypto.encrypt(token),
-          expiresInMinutes: 30,
+          expiresInMinutes,
         },
         status: 'QUEUED',
       });
+    });
+    await this.events.audit({
+      audience: 'CUSTOMER',
+      action: 'auth.customer.password_reset.request',
+      outcome: 'SUCCESS',
+      request,
+      userId: user.id,
     });
   }
 
@@ -384,9 +403,24 @@ export class CustomerAuthService {
       token.expiresAt <= now ||
       token.user.audience !== 'CUSTOMER' ||
       token.user.status !== 'ACTIVE' ||
+      !token.user.passwordHash ||
       !token.user.customerProfile ||
       token.user.customerProfile.suspendedAt
     ) {
+      await this.events.audit({
+        audience: 'CUSTOMER',
+        action: 'auth.customer.password_reset',
+        outcome: 'DENIED',
+        request,
+        ...(token?.userId ? { userId: token.userId } : {}),
+        errorCode: !token
+          ? 'RESET_TOKEN_INVALID'
+          : token.consumedAt
+            ? 'RESET_TOKEN_REUSED'
+            : token.expiresAt <= now
+              ? 'RESET_TOKEN_EXPIRED'
+              : 'RESET_ACCOUNT_UNAVAILABLE',
+      });
       throw this.invalidResetToken();
     }
 
@@ -429,6 +463,137 @@ export class CustomerAuthService {
       outcome: 'SUCCESS',
       request,
       userId: token.userId,
+    });
+  }
+
+  private async prepareCustomerProfile(
+    input: Pick<
+      CustomerRegistrationDto,
+      'fullName' | 'phone' | 'adultConfirmed' | 'termsAccepted' | 'locale'
+    >,
+    request: Request,
+    source: 'customer_registration' | 'customer_google_registration',
+  ): Promise<Prisma.CustomerProfileCreateWithoutUserInput> {
+    const complianceSettings = await this.prisma.complianceSetting.findMany({
+      where: {
+        key: {
+          in: [
+            'minimum_purchase_age',
+            'age_gate.entry.enabled',
+            'consent.terms.required',
+            'consent.recording.enabled',
+          ],
+        },
+      },
+      select: { key: true, value: true },
+    });
+    const compliance = new Map(
+      complianceSettings.map((setting) => [setting.key, setting.value] as const),
+    );
+    const configuredBoolean = (key: string): boolean =>
+      !compliance.has(key) || compliance.get(key) === true;
+    const ageConfirmationRequired = configuredBoolean('age_gate.entry.enabled');
+    const termsAcceptanceRequired = configuredBoolean('consent.terms.required');
+    const consentRecordingEnabled = configuredBoolean('consent.recording.enabled');
+    const minimumAgeValue = compliance.get('minimum_purchase_age');
+    const minimumAge =
+      typeof minimumAgeValue === 'number' && Number.isSafeInteger(minimumAgeValue)
+        ? minimumAgeValue
+        : null;
+    const missingConfirmations = [
+      ...(ageConfirmationRequired && !input.adultConfirmed ? ['adultConfirmed'] : []),
+      ...(termsAcceptanceRequired && !input.termsAccepted ? ['termsAccepted'] : []),
+    ];
+    if (missingConfirmations.length > 0) {
+      throw new BadRequestException({
+        code: 'CONSENT_REQUIRED',
+        message: 'Complete the confirmations configured for customer registration.',
+        fields: missingConfirmations,
+      });
+    }
+    if (ageConfirmationRequired && (minimumAge === null || minimumAge < 1)) {
+      throw new BadRequestException({
+        code: 'AGE_POLICY_NOT_CONFIGURED',
+        message: 'Registration is temporarily unavailable.',
+      });
+    }
+
+    const [firstName = input.fullName.trim(), ...remainingName] = input.fullName
+      .trim()
+      .split(/\s+/);
+    const lastName = remainingName.join(' ');
+    const phoneE164 = normalizePhone(input.phone);
+    const consentedAt = new Date();
+    const ipAddress = (request.ip ?? request.socket.remoteAddress ?? 'unknown').slice(0, 45);
+    const userAgent = request.get('user-agent')?.slice(0, 512);
+    const termsVersion =
+      consentRecordingEnabled && input.termsAccepted
+        ? await this.prisma.legalDocumentVersion.findFirst({
+            where: {
+              status: 'PUBLISHED',
+              publishedAt: { lte: consentedAt },
+              legalDocument: {
+                is: { type: 'TERMS_AND_CONDITIONS', locale: input.locale },
+              },
+            },
+            orderBy: [{ version: 'desc' }, { id: 'desc' }],
+            select: { id: true },
+          })
+        : null;
+    const consentRecords: Prisma.ConsentRecordCreateWithoutCustomerInput[] = [];
+    if (consentRecordingEnabled && input.adultConfirmed) {
+      consentRecords.push({
+        type: 'AGE_GATE',
+        granted: true,
+        consentedAt,
+        ipAddress,
+        ...(userAgent ? { userAgent } : {}),
+        locale: input.locale,
+        source,
+      });
+    }
+    if (consentRecordingEnabled && input.termsAccepted) {
+      consentRecords.push({
+        type: 'TERMS',
+        granted: true,
+        consentedAt,
+        ...(termsVersion ? { legalDocumentVersion: { connect: { id: termsVersion.id } } } : {}),
+        ipAddress,
+        ...(userAgent ? { userAgent } : {}),
+        locale: input.locale,
+        source,
+      });
+    }
+    return {
+      firstName,
+      lastName,
+      phoneE164,
+      phoneSearch: phoneE164.replace(/\D/g, ''),
+      locale: input.locale,
+      marketingConsent: false,
+      ...(consentRecords.length > 0 ? { consentRecords: { create: consentRecords } } : {}),
+      ...(consentRecordingEnabled && input.adultConfirmed && minimumAge !== null
+        ? {
+            ageVerificationEvents: {
+              create: {
+                phase: 'STORE_ENTRY',
+                result: 'PASSED',
+                minimumAge,
+                method: 'self_declaration',
+                ipAddress,
+                ...(userAgent ? { userAgent } : {}),
+                metadata: { source },
+              },
+            },
+          }
+        : {}),
+    };
+  }
+
+  private accountChanged(): ConflictException {
+    return new ConflictException({
+      code: 'GOOGLE_ACCOUNT_STATE_CHANGED',
+      message: 'The account could not be linked. Start Google sign-in again.',
     });
   }
 

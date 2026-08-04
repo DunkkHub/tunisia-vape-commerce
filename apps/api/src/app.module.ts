@@ -1,8 +1,10 @@
 import { Module, RequestMethod } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import type { IncomingMessage } from 'node:http';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
+import { stdSerializers } from 'pino-http';
 import { AppController } from './app.controller';
 import { AdminAccessModule } from './access/admin-access.module';
 import { AuthModule } from './auth/auth.module';
@@ -32,6 +34,14 @@ export const HTTP_LOG_REDACTION_PATHS = [
   '*.recoveryCodes',
 ] as const;
 
+export const sanitizedRequestLog = (request: IncomingMessage) => {
+  const serialized = stdSerializers.req(request);
+  return {
+    ...serialized,
+    url: serialized.url?.split('?', 1)[0],
+  };
+};
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -43,6 +53,12 @@ export const HTTP_LOG_REDACTION_PATHS = [
       forRoutes: [{ path: '{*path}', method: RequestMethod.ALL }],
       pinoHttp: {
         level: process.env.LOG_LEVEL ?? 'info',
+        wrapSerializers: false,
+        serializers: {
+          req: sanitizedRequestLog,
+          res: stdSerializers.res,
+          err: stdSerializers.err,
+        },
         redact: {
           paths: [...HTTP_LOG_REDACTION_PATHS],
           censor: '[REDACTED]',
