@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, FileText, RadioTower } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Link, useLocation, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router';
 
 import { storefrontClient } from '../../api/storefront-client';
 import { ServiceModePage } from '../../components/compliance/compliance-boundary';

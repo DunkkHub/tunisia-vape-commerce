@@ -2,7 +2,7 @@
 
 Legal and regulatory suitability is the responsibility of the purchaser/operator and is outside the software production-readiness assessment.
 
-This guide covers development and buyer evaluation. Neither path is production-readiness evidence. Use Node.js 22.12 or newer and the repository-declared pnpm 11.11.0 through Corepack.
+This guide covers development and buyer evaluation. Neither path is production-readiness evidence. Use Node.js 22.22 or newer and the repository-declared pnpm 11.11.0 through Corepack.
 
 ## Common preparation
 

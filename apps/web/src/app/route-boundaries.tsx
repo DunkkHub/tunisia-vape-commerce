@@ -1,4 +1,4 @@
-import { Outlet } from 'react-router-dom';
+import { Outlet } from 'react-router';
 
 import { AdminAuthProvider } from '../auth/admin-auth-provider';
 import { CustomerAuthProvider } from '../auth/customer-auth-provider';

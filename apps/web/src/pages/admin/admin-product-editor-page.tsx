@@ -4,7 +4,7 @@ import { AlertTriangle, Archive, ArrowLeft, Plus, RotateCcw, ShieldCheck } from 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router';
 import { z } from 'zod';
 
 import { adminDataClient } from '../../api/admin-data-client';

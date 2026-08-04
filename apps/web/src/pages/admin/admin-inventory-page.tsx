@@ -2,8 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Download, RefreshCw, Search, X } from 'lucide-react';
 import { useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useSearchParams } from 'react-router-dom';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 
 import { adminDataClient } from '../../api/admin-data-client';
 import type { AdminInventoryPage } from '../../api/types';

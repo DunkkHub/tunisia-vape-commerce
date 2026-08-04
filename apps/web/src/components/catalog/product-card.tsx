@@ -1,6 +1,6 @@
 import { ArrowUpRight, Plus, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import type { ProductSummary } from '../../api/types';
 import { Price } from '../ui/price';

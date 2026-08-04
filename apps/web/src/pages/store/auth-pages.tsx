@@ -3,7 +3,7 @@ import { AtSign, LockKeyhole, Phone, UserRound } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
-import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { z } from 'zod';
 
 import { customerAuthClient } from '../../api/customer-client';

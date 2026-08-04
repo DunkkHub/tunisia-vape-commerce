@@ -18,7 +18,7 @@ RUN cp prisma/schema.prisma /opt/worker/prisma.schema \
   && rm prisma.schema
 
 FROM ${NODE_IMAGE} AS runtime
-RUN npm install --global npm@11.18.0 --no-audit --no-fund && npm cache clean --force
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 RUN apk add --no-cache dumb-init libstdc++
 ENV NODE_ENV=production
 WORKDIR /app

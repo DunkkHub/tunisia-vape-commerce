@@ -125,6 +125,10 @@ describe('administrator product media workflow', () => {
     expect(await screen.findByText('Image validée et téléversée.')).toBeVisible();
     expect(revokeObjectUrl).toHaveBeenCalledWith('blob:local-product-preview');
     await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ['admin', 'product', 'product-1'],
+        exact: true,
+      });
       for (const queryKey of [
         ['storefront', 'home'],
         ['catalog'],
@@ -279,6 +283,53 @@ describe('administrator product media workflow', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Définir comme principale' })).toBeEnabled(),
     );
+  });
+
+  it('prevents delete while a replacement and its owner-version refresh are pending', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.includes('/admin/products/product-1/images?')) {
+        return Promise.resolve(
+          json({ items: [image], page: 1, pageSize: 50, total: 1, totalPages: 1 }),
+        );
+      }
+      if (url.includes('/admin/products/product-1/variants')) {
+        return Promise.resolve(json({ items: [] }));
+      }
+      return Promise.resolve(json({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    let resolveReplacement!: (value: AdminProductImage) => void;
+    const replacementPromise = new Promise<AdminProductImage>((resolve) => {
+      resolveReplacement = resolve;
+    });
+    const replaceSpy = vi
+      .spyOn(adminDataClient, 'replaceProductImage')
+      .mockReturnValue(replacementPromise);
+    const user = userEvent.setup();
+
+    render(
+      <AppProviders>
+        <AdminProductMediaManager productId="product-1" productVersion={3} />
+      </AppProviders>,
+    );
+
+    expect(await screen.findByRole('img', { name: 'Produit vu de face' })).toBeVisible();
+    const replacementFile = new File([new Uint8Array([0xff, 0xd8, 0xff])], 'replacement.jpg', {
+      type: 'image/jpeg',
+    });
+    const replacementInput = screen.getByLabelText('Remplacer le fichier');
+    await user.upload(replacementInput, replacementFile);
+    fireEvent.submit(replacementInput.closest('form')!);
+
+    await waitFor(() => expect(replaceSpy).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'Supprimer' })).toBeDisabled();
+
+    await act(async () => {
+      resolveReplacement({ ...image, id: 'image-2', ownerVersion: 4 });
+      await replacementPromise;
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Supprimer' })).toBeEnabled());
   });
 
   it('keeps a flagged draft non-public while explicitly completing its media review', async () => {

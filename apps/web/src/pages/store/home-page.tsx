@@ -16,7 +16,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import { storefrontClient } from '../../api/storefront-client';
 import { ProductCard } from '../../components/catalog/product-card';

@@ -17,7 +17,7 @@ The realms use separate providers, API clients, cookies, CSRF contexts, rate-lim
 
 ## Stack
 
-- React 19, TypeScript 5.9, Vite 8, React Router 7, TanStack Query, React Hook Form, Zod, Tailwind CSS, Radix UI, and i18next
+- React 19, TypeScript 5.9, Vite 8, React Router 8, TanStack Query, React Hook Form, Zod, Tailwind CSS, Radix UI, and i18next
 - NestJS 11, Prisma 6.19, MySQL 8.4, Redis, BullMQ, Argon2id, opaque server-managed sessions, and TOTP
 - Docker Compose with MySQL, Redis, MinIO, Mailpit, API, worker, web, and Nginx
 - Vitest, Testing Library, Playwright, Supertest-compatible API tooling, ESLint, and Prettier
@@ -26,7 +26,7 @@ Exact dependency versions are recorded in the package manifests and `pnpm-lock.y
 
 ## Start locally
 
-Requirements: Node.js 22.12+, Corepack, and pnpm 11.11.0. The supported dependency path uses Docker Compose:
+Requirements: Node.js 22.22+, Corepack, and pnpm 11.11.0. The supported dependency path uses Docker Compose:
 
 ```bash
 corepack enable

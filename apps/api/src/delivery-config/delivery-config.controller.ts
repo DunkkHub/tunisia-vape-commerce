@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -108,6 +110,7 @@ export class AdminDeliveryConfigController {
     return this.zones.update(params.id, input, context(request));
   }
   @Post('zones/:id/activate')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('deliveries.update')
   @ApiOkResponse({ type: DeliveryZoneResponseDto })
@@ -119,6 +122,7 @@ export class AdminDeliveryConfigController {
     return this.zones.setActive(params.id, input.expectedUpdatedAt, true, context(request));
   }
   @Post('zones/:id/deactivate')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('deliveries.update')
   @ApiOkResponse({ type: DeliveryZoneResponseDto })
@@ -172,6 +176,7 @@ export class AdminDeliveryConfigController {
     return this.rates.update(params.id, input, context(request));
   }
   @Post('rates/:id/activate')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('deliveries.update')
   @ApiOkResponse({ type: DeliveryRateResponseDto })
@@ -183,6 +188,7 @@ export class AdminDeliveryConfigController {
     return this.rates.setActive(params.id, input.expectedVersion, true, context(request));
   }
   @Post('rates/:id/deactivate')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('deliveries.update')
   @ApiOkResponse({ type: DeliveryRateResponseDto })
@@ -225,6 +231,7 @@ export class AdminDeliveryConfigController {
     return this.pickups.update(params.id, input, context(request));
   }
   @Post('pickups/:id/activate')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('deliveries.update')
   @ApiOkResponse({ type: PickupLocationResponseDto })
@@ -236,6 +243,7 @@ export class AdminDeliveryConfigController {
     return this.pickups.setActive(params.id, input.expectedStateToken, true, context(request));
   }
   @Post('pickups/:id/deactivate')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('deliveries.update')
   @ApiOkResponse({ type: PickupLocationResponseDto })
@@ -278,6 +286,7 @@ export class AdminDeliveryConfigController {
     return this.windows.update(params.id, input, context(request));
   }
   @Post('windows/:id/activate')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('deliveries.update')
   @ApiOkResponse({ type: DeliveryWindowResponseDto })
@@ -289,6 +298,7 @@ export class AdminDeliveryConfigController {
     return this.windows.setActive(params.id, input.expectedStateToken, true, context(request));
   }
   @Post('windows/:id/deactivate')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('deliveries.update')
   @ApiOkResponse({ type: DeliveryWindowResponseDto })

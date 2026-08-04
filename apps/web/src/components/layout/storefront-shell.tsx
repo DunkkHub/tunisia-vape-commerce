@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Menu, RadioTower, Search, ShoppingBag, UserRound, X } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, Outlet, useLocation } from 'react-router-dom';
+import { Link, Outlet, useLocation } from 'react-router';
 
 import { storefrontClient } from '../../api/storefront-client';
 import { useCustomerAuth } from '../../auth/customer-auth-context';

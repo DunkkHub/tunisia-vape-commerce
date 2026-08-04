@@ -1,4 +1,4 @@
-import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { Navigate, Outlet, useLocation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 
 import { LoadingState } from '../components/ui/feedback';

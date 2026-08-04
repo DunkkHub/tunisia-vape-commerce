@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router';
 
 import { adminDataClient } from '../../api/admin-data-client';
 import {
