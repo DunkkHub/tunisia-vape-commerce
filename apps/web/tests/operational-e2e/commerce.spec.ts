@@ -752,6 +752,7 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     await expect(page).toHaveURL(/\/admin\/catalog$/);
 
     await page.goto(`/admin/catalog/${managedProductId}/edit`);
+    await page.getByRole('heading', { name: 'Variantes, prix et seuils', exact: true }).click();
     const createVariantForm = page
       .locator('form.admin-panel')
       .filter({ hasText: 'Nouvelle variante (brouillon)' });
@@ -786,6 +787,7 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
 
     let variantForm = page.locator('form.admin-panel').filter({ hasText: 'E2E-ADMIN-CITRON-V1' });
     await expect(variantForm).toBeVisible();
+    await page.getByRole('heading', { name: 'Images du produit', exact: true }).click();
     const uploadForm = page.locator('.admin-media-upload');
     await expect(uploadForm).toBeVisible();
     const mediaListPath = `/api/v1/admin/products/${managedProductId}/images`;
@@ -856,10 +858,9 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
 
     await variantForm.getByRole('link', { name: 'Gérer le stock' }).click();
     await expect(page).toHaveURL(new RegExp(`/admin/inventory/${managedVariantId}$`));
-    const receiptPanel = page
-      .locator('section.admin-panel')
-      .filter({ hasText: 'Réception de lot' });
-    const receiptForm = receiptPanel.locator('form');
+    const receiptForm = page.locator('form').filter({
+      has: page.getByRole('button', { name: 'Enregistrer la réception', exact: true }),
+    });
     const fulfillmentOption = receiptForm
       .locator('select[name="locationId"] option')
       .filter({ hasText: 'E2E-FULFILLMENT' });
@@ -924,6 +925,7 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     expect(replayed).toMatchObject({ quantityReceived: 2, replayed: true });
 
     await page.goto(`/admin/catalog/${managedProductId}/edit`);
+    await page.getByRole('heading', { name: 'Variantes, prix et seuils', exact: true }).click();
     variantForm = page.locator('form.admin-panel').filter({ hasText: 'E2E-ADMIN-CITRON-V1' });
     await expect(variantForm).toBeVisible();
     await variantForm.locator('input[name="color"]').fill('Jaune électrique');
@@ -1160,7 +1162,7 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
         phoneConfirmationRequired: false,
       }),
     ]);
-    await page.locator('input[name="postalCode"]').fill('7000');
+    await expect(page.locator('input[name="postalCode"]')).toHaveValue('7000');
     await page.locator('input[name="street"]').fill('Rue Habib Bougatfa, La Médina, Bizerte');
 
     const methodSelect = page.locator('select[name="deliveryMethodId"]');
@@ -1271,8 +1273,9 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     expect(variant).toBeTruthy();
 
     await page.goto(`/admin/catalog/${product!.id}/edit`);
+    await page.getByRole('heading', { name: 'Images du produit', exact: true }).click();
     const uploadForm = page.locator('.admin-media-upload');
-    await expect(page.getByRole('heading', { name: 'Images du produit' })).toBeVisible();
+    await expect(page.locator('#product-media-title')).toBeVisible();
     await expect(uploadForm.locator('select[name="variantId"] option')).toHaveCount(2);
 
     const mediaListPath = `/api/v1/admin/products/${product!.id}/images`;
@@ -1426,8 +1429,19 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     );
     const deletionRefresh = waitForMediaRefresh();
     await originalCard.getByRole('button', { name: 'Supprimer' }).click();
-    expect((await deletionResponse).status()).toBe(200);
-    await deletionRefresh;
+    const deletionHttp = await deletionResponse;
+    expect(deletionHttp.status()).toBe(200);
+    expect((await deletionHttp.json()) as { data: unknown }).toMatchObject({
+      data: { id: replacementImage.id, deleted: true },
+    });
+    const deletionRefreshHttp = await deletionRefresh;
+    expect(deletionRefreshHttp.status()).toBe(200);
+    const deletionRefreshPayload = (await deletionRefreshHttp.json()) as {
+      data: PageResult<AdminProductImage>;
+    };
+    expect(deletionRefreshPayload.data.items.map(({ id }) => id)).not.toContain(
+      replacementImage.id,
+    );
     await expect(imageCard('Image secondaire modifiée E2E')).toHaveCount(0);
 
     const persistedImages = await adminApi<PageResult<AdminProductImage>>(
@@ -1696,6 +1710,7 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     ).toHaveLength(1);
 
     await page.goto(`/admin/catalog/${publishedProduct!.id}/edit`);
+    await page.getByRole('heading', { name: 'Images du produit', exact: true }).click();
     await page.getByLabel('Afficher uniquement les images en attente de contrôle').check();
     const pendingCard = page.locator('.admin-media-card').filter({
       has: page.getByRole('img', { name: genericMediaAlt, exact: true }),

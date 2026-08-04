@@ -76,7 +76,10 @@ export function AdminProductMediaManager({
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['admin', 'product', productId, 'images'] }),
       queryClient.invalidateQueries({ queryKey: ['admin', 'product', productId, 'variants'] }),
-      queryClient.invalidateQueries({ queryKey: ['admin', 'product', productId] }),
+      queryClient.invalidateQueries({
+        queryKey: ['admin', 'product', productId],
+        exact: true,
+      }),
       queryClient.invalidateQueries({ queryKey: ['admin', 'catalog'] }),
       invalidatePublicProductCaches(queryClient),
     ]);
@@ -251,6 +254,13 @@ export function AdminProductMediaManager({
     action.error ??
     review.error ??
     completeMediaReview.error;
+  const mediaMutationPending =
+    upload.isPending ||
+    metadata.isPending ||
+    replace.isPending ||
+    action.isPending ||
+    review.isPending ||
+    completeMediaReview.isPending;
   const variantNames = new Map(
     variants.data?.items.map((variant) => [
       variant.id,
@@ -316,7 +326,11 @@ export function AdminProductMediaManager({
             type="submit"
             variant="admin"
             loading={completeMediaReview.isPending}
-            disabled={!mediaReviewAcknowledged || mediaReviewReason.trim().length < 4}
+            disabled={
+              mediaMutationPending ||
+              !mediaReviewAcknowledged ||
+              mediaReviewReason.trim().length < 4
+            }
           >
             <ShieldCheck aria-hidden="true" size={17} />
             {t('admin.media.confirmReview')}
@@ -380,7 +394,12 @@ export function AdminProductMediaManager({
           </figure>
         ) : null}
         <CheckboxField name="isPrimary" label={t('admin.media.makePrimary')} />
-        <Button type="submit" variant="admin" loading={upload.isPending}>
+        <Button
+          type="submit"
+          variant="admin"
+          loading={upload.isPending}
+          disabled={mediaMutationPending}
+        >
           <ImagePlus aria-hidden="true" size={17} />
           {t('admin.media.upload')}
         </Button>
@@ -488,7 +507,12 @@ export function AdminProductMediaManager({
                   dir="rtl"
                   required
                 />
-                <Button type="submit" variant="admin" loading={metadata.isPending}>
+                <Button
+                  type="submit"
+                  variant="admin"
+                  loading={metadata.isPending}
+                  disabled={mediaMutationPending}
+                >
                   {t('common.save')}
                 </Button>
               </form>
@@ -509,7 +533,7 @@ export function AdminProductMediaManager({
                     type="submit"
                     variant="ghost"
                     loading={replace.isPending && replacementProgress?.imageId === image.id}
-                    disabled={replace.isPending}
+                    disabled={mediaMutationPending}
                   >
                     {t('admin.media.replace')}
                   </Button>
@@ -536,7 +560,7 @@ export function AdminProductMediaManager({
                       type="button"
                       variant="ghost"
                       disabled={
-                        action.isPending || ((images.data?.total ?? 0) <= 50 && ownerIndex <= 0)
+                        mediaMutationPending || ((images.data?.total ?? 0) <= 50 && ownerIndex <= 0)
                       }
                       aria-label={t('admin.media.moveUp')}
                       onClick={() => action.mutate({ image, kind: 'up' })}
@@ -547,7 +571,7 @@ export function AdminProductMediaManager({
                       type="button"
                       variant="ghost"
                       disabled={
-                        action.isPending ||
+                        mediaMutationPending ||
                         ((images.data?.total ?? 0) <= 50 && ownerIndex >= ownerImages.length - 1)
                       }
                       aria-label={t('admin.media.moveDown')}
@@ -563,6 +587,7 @@ export function AdminProductMediaManager({
                       type="button"
                       variant="admin"
                       loading={review.isPending}
+                      disabled={mediaMutationPending}
                       onClick={() => review.mutate({ image, decision: 'APPROVE' })}
                     >
                       <CheckCircle2 aria-hidden="true" size={16} />
@@ -572,6 +597,7 @@ export function AdminProductMediaManager({
                       type="button"
                       variant="danger"
                       loading={review.isPending}
+                      disabled={mediaMutationPending}
                       onClick={() => review.mutate({ image, decision: 'REJECT' })}
                     >
                       <XCircle aria-hidden="true" size={16} />
@@ -583,7 +609,7 @@ export function AdminProductMediaManager({
                   <Button
                     type="button"
                     variant="ghost"
-                    disabled={action.isPending}
+                    disabled={mediaMutationPending}
                     onClick={() => action.mutate({ image, kind: 'primary' })}
                   >
                     <Star aria-hidden="true" size={16} />
@@ -593,7 +619,7 @@ export function AdminProductMediaManager({
                 <Button
                   type="button"
                   variant="danger"
-                  disabled={action.isPending}
+                  disabled={mediaMutationPending}
                   onClick={() => {
                     if (window.confirm(t('admin.media.confirmDelete'))) {
                       action.mutate({ image, kind: 'delete' });

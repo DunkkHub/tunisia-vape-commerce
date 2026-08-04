@@ -1,6 +1,11 @@
 import 'reflect-metadata';
 /* eslint-disable @typescript-eslint/unbound-method -- handlers are inspected as metadata targets */
-import { GUARDS_METADATA, INTERCEPTORS_METADATA, PATH_METADATA } from '@nestjs/common/constants';
+import {
+  GUARDS_METADATA,
+  HTTP_CODE_METADATA,
+  INTERCEPTORS_METADATA,
+  PATH_METADATA,
+} from '@nestjs/common/constants';
 import { describe, expect, it } from 'vitest';
 import { AdminSessionGuard } from '../auth/guards/admin-session.guard';
 import { CsrfGuard } from '../auth/guards/csrf.guard';
@@ -66,5 +71,21 @@ describe('administrator delivery configuration access policy', () => {
         RecentAuthenticationGuard,
       ]);
     }
+  });
+
+  it('returns HTTP 200 for delivery lifecycle actions rather than the POST creation default', () => {
+    const handlers = [
+      AdminDeliveryConfigController.prototype.activateZone,
+      AdminDeliveryConfigController.prototype.deactivateZone,
+      AdminDeliveryConfigController.prototype.activateRate,
+      AdminDeliveryConfigController.prototype.deactivateRate,
+      AdminDeliveryConfigController.prototype.activatePickup,
+      AdminDeliveryConfigController.prototype.deactivatePickup,
+      AdminDeliveryConfigController.prototype.activateWindow,
+      AdminDeliveryConfigController.prototype.deactivateWindow,
+    ];
+
+    for (const handler of handlers)
+      expect(Reflect.getMetadata(HTTP_CODE_METADATA, handler)).toBe(200);
   });
 });

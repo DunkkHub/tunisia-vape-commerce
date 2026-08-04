@@ -183,7 +183,7 @@ deploy stages regenerate Prisma Client inside the deployed package. Static regre
 rebuilt images, in-container enum/client probes, clean migration execution, service health, live
 smoke, and the subsequent complete 14-stage release rerun all passed.
 
-### 2026-07-27 through 2026-07-29 follow-up verification boundary
+### 2026-07-27 through 2026-08-04 follow-up verification boundary
 
 Focused follow-up checks passed for delivery configuration, geography projection, checkout metadata
 sanitization, catalog publication policy, product editor/media, and the last-sellable-variant guard.
@@ -243,14 +243,28 @@ remains.
 This is not a replacement for the complete release gate above. On 2026-07-29 the fast Playwright
 matrix executed successfully with 8 passing assertions and 2 intentional project-matrix skips. The
 full operational browser harness also migrated and seeded its disposable database, started the API,
-worker, and production web preview, and launched Chromium, but stopped before checkout because the
-delivery-rate activation response was HTTP 201 while the scenario still asserts HTTP 200. That
-status-contract mismatch remains an open browser-gate failure; no API behavior was changed to hide
-it. The local Compose gateway at `http://127.0.0.1:18080` is running, the rebuilt web container is
-healthy, dependency readiness is `ready`, and checkout policy reports `allowed=true` with no
-blockers. The final operational order-to-cash walkthrough, complete Compose smoke, a representative
-existing-data upgrade, and a migration-10 backup/restore drill remain required before promotion.
-The overall verdict remains **NOT READY**.
+worker, and production web preview, and launched Chromium. Its HTTP 201 delivery-rate activation
+failure exposed an accidental Nest POST default: the controller and generated OpenAPI already
+declared these lifecycle actions as HTTP 200. All eight delivery zone, rate, pickup, and window
+activate/deactivate handlers now explicitly return HTTP 200; resource creation remains HTTP 201,
+and a focused controller metadata regression passed 4 tests. The next browser attempt passed both
+delivery activations and exposed stale test interactions with the intentionally closed product
+editor disclosures, the uniquely labelled inventory receipt form, and the now server-derived
+read-only postal code. Those interactions now follow the rendered controls without changing the
+underlying application contracts. A later media deletion assertion exposed overlapping React Query
+invalidations: the media list was invalidated directly and then cancelled by a second broad product
+prefix invalidation. Product-detail invalidation is now exact, media owner-version actions remain
+serialized through their refresh, and the focused media-manager suite passes 5 tests.
+
+On 2026-08-04 the full disposable operational browser runner applied all ten migrations to a new
+database, repeated the structural seed at 9 roles, 43 permissions, 24 governorates, 279 delegations,
+and 2,082 localities with no users or commerce records, built the production web bundle, and passed
+the complete real-service scenario in 1.6 minutes. Registration/login, administrator TOTP, product
+creation/editing/publication, product-media lifecycle, stock receipt, authoritative COD checkout and
+replay, Bizerte Express supported/unsupported locality boundaries, delivery, cash remittance and
+reconciliation, permission denial, checkout gate, and maintenance gate all passed. The exact-worktree
+Compose rebuild/smoke, representative existing-data upgrade, and migration-10 backup/restore drill
+remain required before promotion. The overall verdict remains **NOT READY**.
 
 ## Catalog import and media evidence
 
