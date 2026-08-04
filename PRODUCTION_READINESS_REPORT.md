@@ -1,6 +1,6 @@
 # Production readiness report
 
-Review date: 2026-07-29
+Review date: 2026-08-04
 
 ## Verdict vocabulary
 
@@ -187,7 +187,7 @@ smoke, and the subsequent complete 14-stage release rerun all passed.
 
 Focused follow-up checks passed for delivery configuration, geography projection, checkout metadata
 sanitization, catalog publication policy, product editor/media, and the last-sellable-variant guard.
-The latest exact-worktree package results are 97 API unit files/407 tests, 24 web unit files/129 tests,
+The latest exact-worktree package results are 97 API unit files/408 tests, 24 web unit files/130 tests,
 6 worker unit files/30 tests, and 2 security files/6 tests, all passing. The checkout regression set
 includes courier order creation without an unconfigured postal code, automatic use of a configured
 locality code, server validation of every submitted code, safe error mapping, and request-reference
@@ -195,13 +195,13 @@ feedback. Formatting, linting,
 workspace type checking, Prisma validation, and API, worker, and web production builds also pass. The
 web build transformed 2,133 modules.
 
-The 2026-07-29 dependency-security follow-up removes all three findings reported by
+The 2026-07-29 dependency-security follow-up removed the three findings reported at that time by
 `pnpm audit --audit-level=high`. GHSA-qwww-vcr4-c8h2 is resolved with the supported React Router 8.3.0
 migration: the removed `react-router-dom` compatibility package is gone, normal imports use
 `react-router`, and `RouterProvider` uses `react-router/dom`. The application has no unstable RSC
 entry or API affected by the advisory, and no route definition, authorization guard, or session
 boundary changed. GHSA-r28c-9q8g-f849 and GHSA-mh99-v99m-4gvg are resolved with exact pnpm overrides
-to the first patched releases, PostCSS 8.5.18 and brace-expansion 5.0.8; their existing Vite and
+to the then-first patched releases, PostCSS 8.5.18 and brace-expansion 5.0.8; their existing Vite and
 minimatch parents accept those patches. No Vite, Vitest, ESLint, minimatch, or unrelated direct
 dependency was upgraded. A frozen install and the audit pass with zero advisories. The post-update
 verification passes formatting, lint, all workspace type checks, Prisma validation, 407 API unit
@@ -211,6 +211,25 @@ intentional project-matrix skips. A clean Node 24 web-container build also passe
 lockfile and supply-chain policy enabled. The rebuilt gateway serves `/`, `/admin`, and `/checkout`
 with HTTP 200; web-container health is `healthy`, and MySQL, Redis, worker, and migration readiness
 remain `up`.
+
+GitHub run 30870440454 then detected two HIGH advisories published on 2026-08-03 after that earlier
+evidence: GHSA-4cwx-7wf7-3272 in Undici 7.28.0 and GHSA-rgw5-rvv9-x895 in brace-expansion 5.0.8. The
+smallest compatible updates are applied separately: Undici 7.29.0 is pinned both as the API direct
+dependency and as an override for jsdom's test-only path, while the existing brace-expansion
+override advances to 5.0.9. The all-severity audit also exposed MEDIUM GHSA-fxqj-rqcc-2cmp; the
+existing PostCSS override advances independently from 8.5.18 to 8.5.23, which refreshes only its
+Nano ID child to 3.3.16. These are the first patched releases for the dependency lines already in
+use. No parent framework, test runner, linter, or unrelated dependency changes. A frozen install
+passes supply-chain policy and `pnpm audit` now reports no known vulnerabilities locally. The
+mandatory remote workflow refresh remains required for the promoted commit.
+
+The exact patched worktree also passes formatting, linting, all workspace type checks, Prisma
+validation, 408 API unit tests, 130 web unit tests, 30 worker unit tests, 19 disposable MySQL/Redis
+integration tests, 6 security tests, 26 operations tests, and every production workspace build.
+Standard Chromium/mobile Playwright passes 8 tests with 2 intentional project-matrix skips. A fresh
+disposable operational rerun applies all ten migrations, repeats the structural seed without
+commerce/demo data, builds the production storefront, and passes its complete real-service journey
+in 2.2 minutes, ending with the order delivered, cash remitted, and inventory reservation consumed.
 
 GitHub Security run 30455832962 exposed a separate runtime-image dependency path that the pnpm
 override cannot control. Its API and worker SARIF analyses each reported HIGH CVE-2026-14257 in

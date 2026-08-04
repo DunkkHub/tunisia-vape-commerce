@@ -1,6 +1,6 @@
 # Implementation plan
 
-Last updated: 2026-07-29
+Last updated: 2026-08-04
 
 ## Delivery policy
 
@@ -16,7 +16,7 @@ The direct dependency baseline selected in the manifests on 2026-07-11 is:
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Toolchain              | Node >=22.22.0 (container line 24), pnpm 11.11.0, TypeScript 5.9.3, Prisma/Prisma Client 6.19.3, ESLint 10.7.0, Prettier 3.9.5, tsx 4.23.0                                  |
 | API framework/security | NestJS common/core/platform-express 11.1.28, Nest config 4.0.4, Swagger 11.4.5, throttler 6.5.0, Argon2 0.44.0, Helmet 8.2.0, cookie-parser 1.4.7, Zod 4.4.3                |
-| API runtime/telemetry  | ioredis 5.11.1, nestjs-pino 4.6.1, pino-http 11.0.0, otplib 13.4.1, qrcode 1.5.4, RxJS 7.8.2, uuid 14.0.1                                                                   |
+| API runtime/telemetry  | ioredis 5.11.1, nestjs-pino 4.6.1, pino-http 11.0.0, otplib 13.4.1, qrcode 1.5.4, RxJS 7.8.2, Undici 7.29.0, uuid 14.0.1                                                    |
 | Web                    | React/React DOM 19.2.7, Vite 8.1.4, React Router 8.3.0, TanStack Query 5.101.2, React Hook Form 7.81.0, Zod 4.4.3, i18next 26.3.6, react-i18next 17.0.9, Tailwind CSS 4.3.2 |
 | Accessible UI          | Radix Dialog 1.1.19, Radix Slot 1.3.0, Lucide React 1.24.0                                                                                                                  |
 | Tests                  | Vitest 4.1.10, Testing Library React 16.3.2/User Event 14.6.1/jest-dom 6.9.1, Playwright 1.61.1, Supertest 7.2.2, jsdom 29.1.1                                              |
@@ -28,12 +28,30 @@ The 2026-07-29 dependency-security update addresses GHSA-qwww-vcr4-c8h2 by repla
 the supported `react-router/dom` entry point. The storefront does not use the advisory's unstable
 RSC APIs, and the migration changes no route definitions or authentication boundaries. React
 Router 8 raises the declared Node.js floor to 22.22.0; CI and containers remain on Node 24. The same
-update resolves GHSA-r28c-9q8g-f849 and GHSA-mh99-v99m-4gvg with exact pnpm overrides to the first
+update resolves GHSA-r28c-9q8g-f849 and GHSA-mh99-v99m-4gvg with exact pnpm overrides to the then-first
 patched transitive releases, PostCSS 8.5.18 and brace-expansion 5.0.8. Vite, Vitest, ESLint,
 minimatch, and all unrelated direct dependencies remain unchanged. Regenerating the pnpm 11
 lockfile also normalizes the existing `@vitest/coverage-v8` peer reference from the web workspace's
 `@types/node` 26.1.1 context to the API workspace's declared 24.10.9 context; this changes no package
 version or manifest.
+
+Three advisories published on 2026-08-03 require a second, isolated patch refresh. HIGH
+GHSA-4cwx-7wf7-3272 is addressed by moving the API's direct Undici dependency from 7.28.0 to 7.29.0
+and applying the same exact override to the jsdom test path. HIGH GHSA-rgw5-rvv9-x895 supersedes the
+earlier brace-expansion mitigation and moves that override from 5.0.8 to 5.0.9. MEDIUM
+GHSA-fxqj-rqcc-2cmp moves the existing PostCSS override from 8.5.18 to 8.5.23; PostCSS's patched
+manifest resolves Nano ID 3.3.16 as its sole associated lockfile refresh. Each selected version is
+the first patched release in the dependency line already present. No Vite, Vitest, jsdom, ESLint,
+minimatch, or unrelated application dependency is upgraded.
+
+The exact patched worktree passes the frozen install and all-severity dependency audit, formatting,
+linting, workspace type checking, Prisma validation, 97 API files/408 unit tests, 24 web files/130
+unit tests, 6 worker files/30 unit tests, 3 disposable MySQL/Redis integration files/19 tests, 2
+security files/6 tests, 26 operations tests, and all six production workspace builds. Standard
+Playwright passes 8 tests with 2 intentional project-matrix skips. The disposable operational
+Chromium journey reapplies all ten migrations and the structural seed, then passes its complete
+checkout, TOTP, RBAC, catalog/media/import, inventory, Bizerte Express, delivery, COD, maintenance,
+and technical-gate scenario in 2.2 minutes.
 
 The corresponding container-security follow-up removes unused npm binaries and npm's bundled
 dependency tree from the final API and worker images. Both services already start directly with
@@ -55,7 +73,7 @@ The lockfile, not this summary, resolves transitive versions. Before controlled 
 | 1. Foundation                     | pnpm workspace, React, NestJS, worker, configuration, Docker, CI              | Implemented/local pass         | Frozen gate, production builds, healthy full Compose stack                       |
 | 2. Database                       | Complete Prisma model, migration, structural Tunisia/RBAC seed, indexes       | Implemented; gate refresh open | Fresh 10-migration integration; repeat seed at 24/279/2,082; recovery still open |
 | 3. Authentication and RBAC        | Separate customer/admin authentication, sessions, 2FA, permissions, admin CLI | Implemented/local pass         | Realm/CSRF/TOTP/RBAC positive and negative tests                                 |
-| 4. Catalog                        | Products, variants, taxonomy, suppliers, images, admin CRUD, storefront       | Implemented; browser gate open | API 97/407; web 24/129; variant guard 14/14; real integration                    |
+| 4. Catalog                        | Products, variants, taxonomy, suppliers, images, admin CRUD, storefront       | Implemented; browser gate open | API 97/408; web 24/130; variant guard 14/14; real integration                    |
 | 5. Inventory                      | Locations, movements, reservations, batch/expiry, concurrency                 | Implemented/local pass         | Receipt/adjustment/transfer plus full-target final-unit race                     |
 | 6. Geography and delivery pricing | Tunisia hierarchy, zones, rates, pickup, deterministic resolver               | Implemented; focused pass      | INS hierarchy/rules plus fresh real-service integration (3 files/19 tests)       |
 | 7. Cart and checkout              | Customer carts, authoritative totals, COD, reservations and idempotency       | Implemented/local pass         | Real browser checkout/replay and 50-checkout/20-replay load                      |
@@ -67,7 +85,7 @@ The lockfile, not this summary, resolves transitive versions. Before controlled 
 
 Do not change a status to complete based on unrecorded local results. Link CI runs, test reports, migration checks, restore evidence, and human sign-offs in this file or the readiness report.
 
-The 2026-07-27 through 2026-08-04 geography, delivery-metadata, catalog-consistency, administrator-workspace, settings-feedback, checkout-feedback, and dependency-security follow-up has current API unit (97 files/407 tests), web unit (24 files/129 tests plus a focused 5-test media-manager pass), worker unit (6 files/30 tests), security (2 files/6 tests), static, and six-workspace production-build evidence. It also has a live Compose migration-10 deployment, repeat-seed proof at 24/279/2,082, a fresh real-MySQL/Redis integration pass (3 files/19 tests), and fast Playwright evidence with 8 passes and 2 intentional project-matrix skips. The delivery lifecycle controller now explicitly returns the documented HTTP 200 for all eight activate/deactivate actions, with focused metadata coverage, while resource-creation routes retain HTTP 201. On 2026-08-04 the disposable operational browser scenario applied all ten migrations, ran the structural seed without commerce/demo accounts, built the production web bundle, and passed its complete real-service scenario in 1.6 minutes. Its stale closed-disclosure, receipt-form, and read-only postal-code interactions were corrected, and the media manager now serializes owner-version mutations and avoids overlapping list invalidation through a broad product-query prefix. The current full Compose smoke, representative upgrade, and migration-10 backup/restore drill still require exact-worktree refresh. The 2026-07-23 complete release evidence is historical.
+The 2026-07-27 through 2026-08-04 geography, delivery-metadata, catalog-consistency, administrator-workspace, settings-feedback, checkout-feedback, and dependency-security follow-up has current API unit (97 files/408 tests), web unit (24 files/130 tests plus a focused 5-test media-manager pass), worker unit (6 files/30 tests), security (2 files/6 tests), static, and six-workspace production-build evidence. It also has a live Compose migration-10 deployment, repeat-seed proof at 24/279/2,082, a fresh real-MySQL/Redis integration pass (3 files/19 tests), and fast Playwright evidence with 8 passes and 2 intentional project-matrix skips. The delivery lifecycle controller now explicitly returns the documented HTTP 200 for all eight activate/deactivate actions, with focused metadata coverage, while resource-creation routes retain HTTP 201. On 2026-08-04 the disposable operational browser scenario applied all ten migrations, ran the structural seed without commerce/demo accounts, built the production web bundle, and passed its complete real-service scenario in 1.6 minutes. Its stale closed-disclosure, receipt-form, and read-only postal-code interactions were corrected, and the media manager now serializes owner-version mutations and avoids overlapping list invalidation through a broad product-query prefix. The current full Compose smoke, representative upgrade, and migration-10 backup/restore drill still require exact-worktree refresh. The 2026-07-23 complete release evidence is historical.
 
 The shared worktree contains the complete operational slices for separated authentication and account lifecycle, writable catalog/media/taxonomy, transactional inventory and reservations, Tunisia geography and manual delivery, customer carts/accounts, authoritative atomic COD checkout, guarded order/delivery transitions, COD custody/reconciliation, settings, notifications, durable outbox processing, dependency readiness, and encrypted backup/restore. The recorded local evidence now includes MySQL 8.4/Redis integration, real-browser order-to-cash coverage, the full 500-browser/50-checkout load target, an isolated encrypted restore drill, production builds, non-root container builds, and a healthy full Compose smoke. Purchaser provider credentials and target-environment acceptance remain deployment work, not missing application behavior.
 
