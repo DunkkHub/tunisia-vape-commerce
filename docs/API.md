@@ -26,6 +26,10 @@ Customer and admin authentication have separate controllers and trust boundaries
 | ------ | -------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------ |
 | POST   | /api/v1/auth/customer/register               | Anonymous + customer throttle       | Create customer account                                            |
 | POST   | /api/v1/auth/customer/login                  | Anonymous + customer login throttle | Rotate/create customer session                                     |
+| POST   | /api/v1/auth/customer/google/start           | Anonymous + origin/throttle         | Create customer-only state, nonce, PKCE and authorization URL      |
+| GET    | /api/v1/auth/customer/google/callback        | Exact Google navigation callback    | Consume state/code; sign in, link, or create onboarding state      |
+| GET    | /api/v1/auth/customer/google/onboarding      | Pending HttpOnly onboarding cookie  | Return the bounded CREATE/LINK onboarding presentation             |
+| POST   | /api/v1/auth/customer/google/complete        | Pending cookie + origin/throttle    | Complete profile or password-confirmed link and rotate session     |
 | POST   | /api/v1/auth/customer/password-reset         | Anonymous + reset throttle          | Generic reset response                                             |
 | POST   | /api/v1/auth/customer/password-reset/confirm | Anonymous + token throttle          | Consume every outstanding customer reset token and revoke sessions |
 | GET    | /api/v1/auth/customer/session                | Customer                            | Current safe customer principal                                    |
@@ -47,6 +51,8 @@ Customer and admin authentication have separate controllers and trust boundaries
 | POST   | /api/v1/auth/admin/sessions/revoke-all | Full admin + CSRF                  | Revoke every administrator session                |
 
 Customer UI login is /login. Admin UI login is /admin/login. The API never accepts a customer cookie in an admin credential extractor, never grants a pending challenge general access, and never treats a role value supplied by React as authority.
+
+Google OAuth is customer-only and disabled unless its complete validated environment tuple is configured. The browser receives only a provider authorization URL. Authorization state, browser binding, nonce, PKCE verifier, and onboarding state are encrypted, short-lived, single-use Redis records; only a stable hashed provider subject is persisted under `CustomerProfile`. Provider tokens are neither stored nor returned. A matching active customer with an already verified local email is linked instead of duplicated; an unverified matching local account must confirm its current password. Any administrator-email match, inactive/suspended customer, replayed state, unsafe return path, or conflicting provider subject is denied without creating a customer session.
 
 When an administrator must enroll TOTP, `POST /api/v1/auth/admin/login` returns the pending challenge plus an `otpauth://` enrollment URI and manual-entry key. The admin UI creates the QR code locally; it does not send TOTP material to an external QR service. Repeating the password step reuses the existing encrypted, unverified seed so a QR already scanned by the administrator remains valid until enrollment succeeds or an authorized reset replaces it.
 

@@ -6,7 +6,7 @@ Security is deny-by-default and layered across Nginx, NestJS guards/validation, 
 
 ## Customer and administrator login separation
 
-- Customer endpoints: /api/v1/auth/customer/register, login, logout, reset, verify, sessions, and revoke.
+- Customer endpoints: /api/v1/auth/customer/register, login, Google start/callback/onboarding/complete, logout, reset, sessions, and revoke.
 - Administrator endpoints: /api/v1/auth/admin/login, totp/verify, recovery/verify, logout, sessions, revoke, and recent-auth.
 - Customer UI: /login. Administrator UI: /admin/login.
 - Cookie names, signing/encryption context, Redis prefixes, CSRF state, rate limits, timeouts, and guards must differ.
@@ -26,6 +26,14 @@ Production cookies are host-only, Secure, HttpOnly, SameSite=Lax unless a docume
 - Generate enrollment QR codes locally from the server-issued `otpauth://` URI. Keep an encrypted, unverified seed stable across password retries so a scanned enrollment cannot be invalidated implicitly; replace it only after verification or through an authorized reset flow.
 - Hash individual recovery codes, show them once, consume atomically, and notify/log their use.
 - Rotate the session on login, MFA completion, password change, privilege change, and recent-auth completion.
+
+### Customer Google OAuth and recovery
+
+Google sign-in uses the authorization-code flow with PKCE S256, cryptographically random state and nonce, an exact registered callback, and the official Google verification library. Issuer, audience, authorized presenter, expiry, issued-at time, nonce, subject, and verified-email claims are checked before account lookup. State and onboarding records are encrypted in Redis, bound to HttpOnly SameSite=Lax cookies, consumed once, and retained for at most the validated short TTL. OAuth codes, access/refresh tokens, raw provider subjects, PKCE material, state, nonce, and cookies are never persisted or logged; request logging strips all query strings before serialization.
+
+External identities belong to `CustomerProfile`, not `User`, so an administrator cannot acquire Google customer authentication. The callback accepts only the exact customer path and cannot redirect to `/admin`, `/api`, another origin, a protocol-relative URL, or a backslash-normalized URL. Existing verified customer email is linked transactionally; an unverified local-email match requires the existing password. Provider-only customers have no synthetic password. The database still requires every `ADMIN` user to have a password hash, and admin login remains password plus mandatory TOTP.
+
+Password-reset requests always return the same response and execute the same Argon2 timing baseline. Per-IP and per-account Redis buckets are independent and fail closed. Local-password resets use configurable short-lived random tokens stored only as hashes; notifications carry only an encrypted token for worker-side rendering. Google-only accounts receive coalesced provider sign-in guidance instead of a fake reset link. Successful reset atomically consumes all outstanding customer reset tokens and revokes customer sessions only.
 
 ## Authorization
 

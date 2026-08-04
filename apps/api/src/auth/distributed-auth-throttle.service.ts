@@ -16,6 +16,8 @@ export class DistributedAuthThrottleService {
       | 'customer-registration'
       | 'customer-password-reset'
       | 'customer-password-reset-confirm'
+      | 'customer-google-start'
+      | 'customer-google-complete'
       | 'admin-login',
     identifier: string,
     request: Request,
@@ -23,18 +25,27 @@ export class DistributedAuthThrottleService {
     windowSeconds: number,
   ): Promise<void> {
     const ipAddress = request.ip ?? request.socket.remoteAddress ?? 'unknown';
-    const discriminator = this.crypto.hashToken(
-      `${scope}:${ipAddress}:${identifier.trim().toLocaleLowerCase('en-US')}`,
+    const ipDiscriminator = this.crypto.hashToken(`${scope}:ip:${ipAddress}`);
+    const accountDiscriminator = this.crypto.hashToken(
+      `${scope}:account:${identifier.trim().toLocaleLowerCase('en-US')}`,
     );
     try {
       if (this.redis.client.status === 'wait') await this.redis.connect();
-      const count = await this.redis.client.eval(
-        "local n=redis.call('incr',KEYS[1]); if n==1 then redis.call('expire',KEYS[1],ARGV[1]) end; return n",
-        1,
-        `auth:rate:${discriminator}`,
+      const counts = await this.redis.client.eval(
+        "local a=redis.call('incr',KEYS[1]); if a==1 then redis.call('expire',KEYS[1],ARGV[1]) end; local b=redis.call('incr',KEYS[2]); if b==1 then redis.call('expire',KEYS[2],ARGV[1]) end; return {a,b}",
+        2,
+        `auth:rate:${ipDiscriminator}`,
+        `auth:rate:${accountDiscriminator}`,
         String(windowSeconds),
       );
-      if (typeof count !== 'number' || count > limit) {
+      if (
+        !Array.isArray(counts) ||
+        counts.length !== 2 ||
+        counts.some((count) => !Number.isSafeInteger(Number(count)))
+      ) {
+        throw new Error('Invalid authentication throttle response');
+      }
+      if (counts.some((count) => Number(count) > limit)) {
         throw new HttpException(
           {
             code: 'AUTH_RATE_LIMITED',

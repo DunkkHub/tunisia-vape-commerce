@@ -1,8 +1,10 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Prisma } from '@prisma/client';
 import type { Request } from 'express';
 import { createNotificationWithOutbox } from '../common/outbox/notification-outbox';
 import { CryptoService } from '../common/security/crypto.service';
+import type { Environment } from '../config/environment';
 import { PrismaService } from '../database/prisma.service';
 import type { CreateCustomerNoteDto } from './dto/customer-management.dto';
 
@@ -20,6 +22,7 @@ export class CustomerManagementService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly crypto: CryptoService,
+    private readonly config: ConfigService<Environment, true>,
   ) {}
 
   async detail(id: string) {
@@ -250,7 +253,13 @@ export class CustomerManagementService {
         select: {
           userId: true,
           locale: true,
-          user: { select: { emailNormalized: true } },
+          user: {
+            select: {
+              emailNormalized: true,
+              passwordHash: true,
+            },
+          },
+          externalIdentities: { select: { provider: true } },
         },
       });
       if (!customer) throw this.notFound();
@@ -260,6 +269,22 @@ export class CustomerManagementService {
           message: 'The customer does not have a verified reset destination.',
         });
       }
+      if (
+        !customer.user.passwordHash &&
+        customer.externalIdentities.some(({ provider }) => provider === 'GOOGLE')
+      ) {
+        throw new ConflictException({
+          code: 'CUSTOMER_USES_EXTERNAL_PROVIDER',
+          message: 'This customer signs in with Google and has no local password to reset.',
+        });
+      }
+      if (!customer.user.passwordHash) {
+        throw new ConflictException({
+          code: 'CUSTOMER_LOCAL_PASSWORD_UNAVAILABLE',
+          message: 'This customer does not have a local password to reset.',
+        });
+      }
+      const expiresInMinutes = this.config.get('PASSWORD_RESET_TTL_MINUTES', { infer: true });
       await transaction.passwordResetToken.updateMany({
         where: { userId: customer.userId, audience: 'CUSTOMER', consumedAt: null },
         data: { consumedAt: now },
@@ -270,7 +295,7 @@ export class CustomerManagementService {
           audience: 'CUSTOMER',
           tokenHash,
           requestedIp: requestMetadata(request).ipAddress,
-          expiresAt: new Date(now.getTime() + 30 * 60_000),
+          expiresAt: new Date(now.getTime() + expiresInMinutes * 60_000),
         },
       });
       await createNotificationWithOutbox(transaction, {
@@ -281,8 +306,9 @@ export class CustomerManagementService {
         encryptedRecipient: this.crypto.encrypt(customer.user.emailNormalized),
         locale: customer.locale,
         payload: {
+          kind: 'PASSWORD_RESET',
           encryptedResetToken: this.crypto.encrypt(token),
-          expiresInMinutes: 30,
+          expiresInMinutes,
         },
         status: 'QUEUED',
       });

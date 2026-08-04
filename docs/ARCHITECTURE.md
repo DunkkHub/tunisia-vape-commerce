@@ -48,6 +48,8 @@ Customer and admin login are intentionally not variants of one endpoint.
 
 The admin password step issues only a short-lived, narrowly scoped pending challenge. It is not an admin session and cannot call protected admin endpoints. Successful TOTP rotates the identifier and creates a full admin session. Logout, password change, suspension, role-critical events, and explicit revocation invalidate the relevant realm's sessions.
 
+The customer realm optionally supports Google authorization code plus PKCE. Provider state lives only as encrypted, cookie-bound, expiring Redis records. Persistent `CustomerExternalIdentity` rows belong to `CustomerProfile`, contain a stable hashed subject and normalized presentation email, and contain no provider token. A verified-email match links to an eligible customer; it never crosses into `AdminProfile`. Provider-only customers may have a null local password, while a MySQL check and the administrator services continue to require an administrator password. Completing either password or Google authentication rotates an existing same-realm session cookie.
+
 For staging/production, use different storefront and admin hostnames with host-only Secure cookies. At a minimum, cookie names and server-side credential extraction remain distinct; an admin guard never falls back to a customer cookie. Nginx may deny /admin on the storefront host, but that edge rule supplements rather than replaces API authorization.
 
 ## Module boundaries

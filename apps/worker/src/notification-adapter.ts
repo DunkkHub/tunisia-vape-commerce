@@ -12,6 +12,7 @@ export interface PreparedNotificationMessage {
   recipient: string;
   subject?: string;
   body: string;
+  html?: string;
   providerIdempotencyKey: string;
 }
 
@@ -162,6 +163,7 @@ export class ProviderNeutralNotificationAdapter implements NotificationAdapter {
         to: message.recipient,
         subject: message.subject,
         text: message.body,
+        ...(message.html ? { html: message.html } : {}),
         messageId: deterministicMessageId,
         headers: {
           'X-Idempotency-Key': message.providerIdempotencyKey,

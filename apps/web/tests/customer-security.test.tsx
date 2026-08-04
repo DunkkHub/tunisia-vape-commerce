@@ -1,7 +1,10 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { RouterProvider } from 'react-router/dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { AppProviders } from '../src/app/providers';
+import { createAppRouter } from '../src/app/router';
 import { json, renderRoute, requestUrl, statusPayload, unauthorized } from './test-app';
 
 const customerSession = {
@@ -40,6 +43,16 @@ function noContent() {
   return new Response(null, { status: 204 });
 }
 
+function renderTrackedRoute(path: string) {
+  const router = createAppRouter([path]);
+  render(
+    <AppProviders>
+      <RouterProvider router={router} />
+    </AppProviders>,
+  );
+  return router;
+}
+
 describe('customer account security', () => {
   beforeEach(() => {
     document.cookie = 'vape_customer_csrf=customer-csrf; Path=/';
@@ -62,9 +75,14 @@ describe('customer account security', () => {
     );
 
     const user = userEvent.setup();
-    renderRoute(`/password-reset/confirm?token=${token}`);
+    const router = renderTrackedRoute(`/password-reset/confirm#token=${token}`);
     await screen.findByRole('heading', { name: 'Choisir un nouveau mot de passe' });
     expect(screen.queryByText(token)).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(router.state.location.hash).toBe('');
+      expect(router.state.location.search).toBe('');
+      expect(router.state.historyAction).toBe('REPLACE');
+    });
 
     await user.type(screen.getByLabelText('Nouveau mot de passe'), 'weak');
     await user.type(screen.getByLabelText('Confirmer le nouveau mot de passe'), 'different');
@@ -105,6 +123,32 @@ describe('customer account security', () => {
     });
     expect(setItem).not.toHaveBeenCalled();
     setItem.mockRestore();
+  });
+
+  it('retains legacy query reset links while replacing the token-bearing history entry', async () => {
+    const token = 'legacy-query-reset-token'.padEnd(32, 'x');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL): Promise<Response> => {
+        const url = requestUrl(input);
+        if (url.includes('/storefront/status')) return Promise.resolve(json(statusPayload));
+        if (url.includes('/auth/customer/session')) return Promise.resolve(unauthorized());
+        if (url.includes('/cart/summary')) return Promise.resolve(json({ itemCount: 0 }));
+        return Promise.resolve(json({}));
+      }),
+    );
+
+    const router = renderTrackedRoute(`/password-reset/confirm?token=${token}`);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Choisir un nouveau mot de passe' }),
+    ).toBeVisible();
+    expect(screen.queryByText(token)).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(router.state.location.search).toBe('');
+      expect(router.state.location.hash).toBe('');
+      expect(router.state.historyAction).toBe('REPLACE');
+    });
   });
 
   it('defaults missing confirmation flags to required and hides disabled confirmations', async () => {

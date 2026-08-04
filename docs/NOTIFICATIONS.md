@@ -70,7 +70,7 @@ docker compose up -d --build migrate api worker web nginx
 - Storefront/gateway: `http://localhost:8080`
 - Mailpit UI: `http://localhost:8025`
 
-Request a password reset for an existing active customer and verify the localized email and `/password-reset/confirm?token=...` link in Mailpit. Do not paste the token into logs, tickets, screenshots, or test fixtures. Local `smtp` mode labels SMS simulations as `console-development`; it does not claim an SMS was delivered.
+Request a password reset for an existing active customer and verify the localized email and `/password-reset/confirm#token=...` link in Mailpit. Do not paste the token into logs, tickets, screenshots, or test fixtures. Local `smtp` mode labels SMS simulations as `console-development`; it does not claim an SMS was delivered.
 
 ## Production SMTP
 
@@ -125,6 +125,23 @@ HTTP 429/5xx, timeout/unavailability, 4xx rejection, and malformed response use 
 ## Templates
 
 The worker renders French or Arabic from the stored locale and an allowlisted event/payload shape. It supports password reset; internal security and low-stock alerts; internal new-order alerts; and these customer order events: received, confirmed, on hold, preparing, handed to courier, out for delivery, attempted, rescheduled, delivered, refused, failed, cancelled, and return update.
+
+Password-reset email is sent as multipart plain text and branded HTML. HTML is constructed only from
+static worker copy plus escaped, validated values; notification rows cannot inject arbitrary markup.
+The legacy reset payload without a `kind` discriminator remains supported so a deployment does not
+dead-letter reset messages queued by the previous release. A versioned `PASSWORD_RESET` payload has
+the same behavior. The worker also recognizes the token-free `PROVIDER_SIGN_IN` / `GOOGLE` payload
+and renders guidance to use Google on the storefront login page; API account policy remains responsible
+for deciding when that payload is queued.
+
+The reset URL appears in both MIME alternatives and carries the token only in the URL fragment as
+`/password-reset/confirm#token=...`; it never places the token in the query string. Browsers do not
+send a fragment in the HTTP request target, so the token does not reach web-server or reverse-proxy
+access logs. The storefront must read and remove the fragment client-side before submitting the token
+in the reset-confirmation request body. The worker never logs the URL or token. `EMAIL_FROM_NAME`
+provides the bounded display brand and is HTML-escaped together with every other dynamic value. The
+HTML contains no remote images, scripts, tracking resources, or database-supplied HTML. Plain text
+remains the authoritative fallback for clients that disable HTML.
 
 Operational recipients and locale are validated settings: `notifications.security_alert_email`, `notifications.low_stock_alert_email`, `notifications.order_alert_email`, and `notifications.operational_alert_locale`. The structural seed leaves all three recipients empty so a fresh installation never sends internal data to a fabricated address. The operator publishes real recipients through the guarded settings workflow.
 

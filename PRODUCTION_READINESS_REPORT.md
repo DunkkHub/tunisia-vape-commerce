@@ -11,10 +11,13 @@ The only overall verdict issued by this report is `NOT READY`.
 The 2026-07-23 software release candidate implemented and locally verified the required storefront,
 customer account, atomic COD checkout, catalog/media, inventory, order, manual delivery, cash
 custody, settings, notification, administrator, localization, backup, load, and deployment
-workflows. The current worktree adds geography, delivery-metadata, and catalog-consistency changes
-with focused verification only; its complete release-gate refresh remains open. Customer and
-administrator authentication remain separate security realms and no administrator, customer,
-product, stock, order, or credential is created by the structural seed.
+workflows. The current worktree adds customer-only Google OAuth, provider-safe account linking,
+password-recovery email presentation, session rotation, and a token-free external-identity schema.
+Formatting, linting, type checks, Prisma validation, unit/integration/security/operations tests,
+production builds, and standard Playwright tests pass locally; container rebuild/scan and the
+remaining feature/recovery gates are still open. Customer and administrator authentication remain
+separate security realms and no administrator, customer, product, stock, order, or credential is
+created by the structural seed.
 
 The current overall verdict remains **NOT READY** for a purchaser's live deployment. The 2026-07-27
 follow-up still requires the complete release and recovery gates. Remaining target-environment and
@@ -31,20 +34,20 @@ or engineering-verdict inputs. No legal opinion or approval is asserted.
 
 ## Launch and checkout state
 
-| Input or derived result                 | Final value                                         | Source/evidence                                                        |
-| --------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------- |
-| `CHECKOUT_ENABLED`                      | `true`                                              | API environment schema, Compose, examples                              |
-| `checkout.enabled`                      | `true`                                              | Structural seed; existing operator values are preserved                |
-| effective `CHECKOUT_DISABLED`           | `false`                                             | Derived; there is no executable `CHECKOUT_DISABLED` environment input  |
-| `MAINTENANCE_MODE` / `maintenance.mode` | `false`                                             | Environment default and structural seed                                |
-| `PRELAUNCH_MODE` / `prelaunch.mode`     | `false`                                             | Environment default and structural seed                                |
-| `LEGAL_REVIEW_REQUIRED`                 | `false`                                             | Removed from executable configuration/policy                           |
-| legal approval                          | recorded complete outside runtime evaluation        | Operator instruction; not used by application readiness                |
-| `LEGAL_DOCUMENTS_MISSING`               | not a blocker                                       | Absent from the checkout blocker vocabulary                            |
-| additional legal documents              | not required by software                            | No document-count readiness gate                                       |
-| minimum purchase age                    | `18`                                                | Configurable structural default                                        |
-| repository migration head               | `20260727090000_delivery_zone_operational_metadata` | Tenth migration directory in the current worktree                      |
-| configured readiness migration          | `20260727090000_delivery_zone_operational_metadata` | Environment/runtime defaults synchronized; live Compose schema current |
+| Input or derived result                 | Final value                                  | Source/evidence                                                       |
+| --------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------- |
+| `CHECKOUT_ENABLED`                      | `true`                                       | API environment schema, Compose, examples                             |
+| `checkout.enabled`                      | `true`                                       | Structural seed; existing operator values are preserved               |
+| effective `CHECKOUT_DISABLED`           | `false`                                      | Derived; there is no executable `CHECKOUT_DISABLED` environment input |
+| `MAINTENANCE_MODE` / `maintenance.mode` | `false`                                      | Environment default and structural seed                               |
+| `PRELAUNCH_MODE` / `prelaunch.mode`     | `false`                                      | Environment default and structural seed                               |
+| `LEGAL_REVIEW_REQUIRED`                 | `false`                                      | Removed from executable configuration/policy                          |
+| legal approval                          | recorded complete outside runtime evaluation | Operator instruction; not used by application readiness               |
+| `LEGAL_DOCUMENTS_MISSING`               | not a blocker                                | Absent from the checkout blocker vocabulary                           |
+| additional legal documents              | not required by software                     | No document-count readiness gate                                      |
+| minimum purchase age                    | `18`                                         | Configurable structural default                                       |
+| repository migration head               | `20260804090000_customer_google_identity`    | Eleventh migration directory in the current worktree                  |
+| configured readiness migration          | `20260804090000_customer_google_identity`    | Environment/runtime defaults and local database synchronized          |
 
 In the recorded 2026-07-23 release candidate, after a clean migration plus structural seed, the live Compose smoke reported:
 
@@ -58,7 +61,9 @@ Those two blockers remain intentional in the current structural seed: it does no
 identity, delivery coverage, delivery price, pickup, product, or stock. Once an operator configures
 them, checkout is still subject to authoritative address, customer, catalog, promotion, inventory,
 consent, idempotency, transaction, and COD validation. The 2026-07-23 smoke predates the current
-geography/delivery migration and is not evidence that migration 10 has been applied.
+geography/delivery migration. The current migration 11 was subsequently applied to the local
+database and to a clean disposable MySQL 8.4 database; that does not replace a production-shaped
+existing-data rehearsal and restore drill.
 
 ## Implemented technical guarantees
 
@@ -76,6 +81,16 @@ geography/delivery migration and is not evidence that migration 10 has been appl
   where sensitive.
 - Customer/admin cookies, Redis prefixes, CSRF contexts, throttles, guards, timeouts, TOTP flows,
   revocation, and login routes remain separate.
+- Optional Google OAuth exists only in the customer realm. It uses authorization code plus PKCE,
+  state, nonce, an exact storefront callback, official signed-token verification, single-use
+  encrypted Redis records, safe verified-email/password linking, and a customer-profile-only
+  external identity that contains no provider token. A database constraint continues to require a
+  password hash for every administrator.
+- Password-reset requests use generic responses, independent IP/account Redis buckets and a common
+  Argon2 timing baseline. Local reset tokens are random, short-lived, stored only as hashes,
+  consumed atomically and delivered through escaped multipart email. Provider-only customers
+  receive coalesced Google sign-in guidance. Email links place the token in the browser fragment and
+  the storefront removes it from history before use.
 - Product media validates MIME, signature, exact container boundaries, decoding, dimensions,
   animation, metadata, checksums, ownership, and storage boundaries; accepted rasters are safely
   re-encoded and durable deletion supports local and S3-compatible storage.
@@ -123,6 +138,14 @@ geography/delivery migration and is not evidence that migration 10 has been appl
   publication remains advisory and checkout remains authoritative.
 
 ## Release verification evidence
+
+The 2026-08-04 customer-authentication change passed repository-wide formatting and linting; all
+six workspace type checks and production builds; Prisma validation; 104 API files/497 tests, 25 web
+files/140 tests, and 6 worker files/33 tests; 4 disposable-MySQL integration files/21 tests after a
+clean 11-migration install and repeated structural seed; 2 security files/6 tests; 26 operations
+tests; and standard Chromium/mobile Playwright with 8 passes and 2 intentional viewport skips.
+`pnpm audit --audit-level=low` reported no known vulnerability. Google-provider staging acceptance,
+fresh container scans, and the complete release/recovery matrix remain required.
 
 The following is the last complete release-gate evidence and predates the 2026-07-27 geography,
 delivery-metadata, and catalog-consistency follow-up. The 2026-07-23 local `pnpm verify:release`
@@ -187,8 +210,8 @@ smoke, and the subsequent complete 14-stage release rerun all passed.
 
 Focused follow-up checks passed for delivery configuration, geography projection, checkout metadata
 sanitization, catalog publication policy, product editor/media, and the last-sellable-variant guard.
-The latest exact-worktree package results are 97 API unit files/408 tests, 24 web unit files/130 tests,
-6 worker unit files/30 tests, and 2 security files/6 tests, all passing. The checkout regression set
+The pre-authentication-change package results were 97 API unit files/408 tests, 24 web unit files/130
+tests, 6 worker unit files/30 tests, and 2 security files/6 tests, all passing. The checkout regression set
 includes courier order creation without an unconfigured postal code, automatic use of a configured
 locality code, server validation of every submitted code, safe error mapping, and request-reference
 feedback. Formatting, linting,
@@ -282,7 +305,7 @@ the complete real-service scenario in 1.6 minutes. Registration/login, administr
 creation/editing/publication, product-media lifecycle, stock receipt, authoritative COD checkout and
 replay, Bizerte Express supported/unsupported locality boundaries, delivery, cash remittance and
 reconciliation, permission denial, checkout gate, and maintenance gate all passed. The exact-worktree
-Compose rebuild/smoke, representative existing-data upgrade, and migration-10 backup/restore drill
+Compose rebuild/smoke, representative existing-data upgrade, and migration-11 backup/restore drill
 remain required before promotion. The overall verdict remains **NOT READY**.
 
 ## Catalog import and media evidence
@@ -423,8 +446,8 @@ MySQL 8.4 release path and must not be imported into the application database.
 
 ## Remaining target-environment configuration
 
-1. Rehearse migration 10 against a representative existing-data upgrade and record a fresh
-   migration-10 backup/restore drill plus the complete release-gate evidence for the promoted commit.
+1. Rehearse migration 11 against a representative existing-data upgrade and record a fresh
+   migration-11 backup/restore drill plus the complete release-gate evidence for the promoted commit.
 2. Configure real store name, phone, email, and address.
 3. Configure and activate at least one complete delivery method/coverage path with valid pricing;
    then verify `GET /api/v1/checkout/policy` has no blocker.
@@ -434,7 +457,9 @@ MySQL 8.4 release path and must not be imported into the application database.
    supported TOTP process, rotate any exposed credential, and create the requested named
    least-privilege administrator through the protected UI/API. Do not insert or seed an account.
 5. Inject unique production database/Redis/browser/session/cookie/encryption/object-storage/SMTP
-   secrets from managed custody; configure distinct storefront/admin HTTPS hosts and trusted proxy.
+   and optional Google OAuth secrets from managed custody; configure distinct storefront/admin HTTPS
+   hosts and trusted proxy. Keep Google disabled until its exact storefront callback and staging
+   acceptance are complete.
 6. For any imported Wotofo drafts, enter verified integer-millime selling prices, supplier/batch
    data, and on-hand stock, then complete publication readiness. For other catalog records, configure
    real products, variants, approved media, prices, batches, stock, and thresholds. Manual delivery
@@ -482,7 +507,7 @@ operators must also follow `docs/CATALOG_IMPORT_AND_MEDIA.md`.
 
 **NOT READY**
 
-This verdict remains until the current migration-10 candidate passes the complete release and
+This verdict remains until the current migration-11 candidate passes the complete release and
 recovery gates, the requested administrator is created through a fully TOTP-authenticated protected
 flow, purchaser target operational configuration is supplied, and all mandatory CI/security checks
 pass for the promoted commit. Legal approval is not an engineering readiness gate.

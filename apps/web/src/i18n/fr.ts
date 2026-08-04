@@ -258,6 +258,49 @@ export const fr = {
       resetRequestAnother: 'Demander un nouveau lien',
       resetServiceError: 'La demande n’a pas pu aboutir. Vérifiez votre connexion puis réessayez.',
       genericError: 'Connexion impossible. Vérifiez vos informations ou réessayez plus tard.',
+      googleContinue: 'Continuer avec Google',
+      googleStarting: 'Ouverture de Google…',
+      googleDivider: 'ou avec vos informations',
+      googleStartError:
+        'La connexion Google n’a pas pu démarrer. Vérifiez votre connexion puis réessayez.',
+      googleErrorAccessDenied: 'La connexion Google a été annulée. Aucun compte n’a été modifié.',
+      googleErrorAccountConflict:
+        'Ce compte Google ne peut pas être associé à ce profil. Utilisez une autre adresse ou contactez le support.',
+      googleErrorAccountUnavailable:
+        'Ce compte client n’est pas disponible. Contactez le support si vous pensez qu’il s’agit d’une erreur.',
+      googleErrorUnavailable: 'La connexion Google est temporairement indisponible.',
+      googleErrorProvider: 'Google n’a pas pu confirmer votre identité. Recommencez la connexion.',
+      googleErrorExpired: 'La demande Google a expiré. Recommencez la connexion.',
+      googleErrorGeneric: 'La connexion Google n’a pas pu être terminée. Recommencez.',
+      googleOnboardingEyebrow: 'Compte client Google',
+      googleCreateTitle: 'Finaliser votre compte',
+      googleCreateBody:
+        'Google a confirmé votre adresse e-mail. Complétez les informations nécessaires à votre compte client.',
+      googleLinkTitle: 'Associer votre compte existant',
+      googleLinkBody:
+        'Un compte client utilise déjà cette adresse. Confirmez son mot de passe pour associer Google en toute sécurité.',
+      googleVerifiedEmail: 'Adresse confirmée par Google',
+      googleCurrentPassword: 'Mot de passe actuel du compte client',
+      googleLinkPasswordHint:
+        'Ce mot de passe sert uniquement à confirmer que ce compte client vous appartient.',
+      googleCreateComplete: 'Créer mon compte client',
+      googleLinkComplete: 'Associer Google et me connecter',
+      googleCompleting: 'Finalisation…',
+      googleLinkInvalid: 'Le mot de passe du compte client est incorrect.',
+      googleOnboardingRestart:
+        'Cette demande ne peut plus être utilisée. Recommencez la connexion avec Google.',
+      googleOnboardingExpired:
+        'La vérification Google est absente ou a expiré. Recommencez depuis la page de connexion.',
+      googleOnboardingServiceError:
+        'Le service d’authentification ne répond pas pour le moment. Réessayez plus tard.',
+      googleUnavailableTitle: 'Connexion Google indisponible',
+      googleUnavailableBody:
+        'La connexion Google n’est pas activée pour cette boutique. Utilisez la connexion client habituelle.',
+      googleOnboardingLoadingTitle: 'Vérification de votre compte',
+      googleOnboardingLoadingBody:
+        'Nous récupérons uniquement les informations confirmées nécessaires pour continuer.',
+      googleOnboardingErrorTitle: 'Impossible de poursuivre',
+      googleRestart: 'Revenir à la connexion',
       logout: 'Se déconnecter',
     },
     validation: {

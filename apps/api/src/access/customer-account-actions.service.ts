@@ -116,6 +116,9 @@ export class CustomerAccountActionsService {
             where: { recipientHash: { in: recipientHashes } },
             data: { encryptedRecipient: null },
           }),
+          transaction.customerExternalIdentity.deleteMany({
+            where: { customerId: target.id },
+          }),
           transaction.address.updateMany({
             where: { customerId: target.id },
             data: {

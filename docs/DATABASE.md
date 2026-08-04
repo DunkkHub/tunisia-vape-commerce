@@ -271,6 +271,8 @@ Never run `prisma migrate dev`, `prisma db push`, or automatic destructive reset
 
 `20260727090000_delivery_zone_operational_metadata` adds minute ETA fields and the optional COD payment, manual assignment, and WhatsApp/phone communication enums to `DeliveryZone`. Database checks require a complete 1–10,080-minute pair, ordered minimum/maximum values, and mutual exclusion between day and minute estimates. It also constrains `DeliveryRate.feeMillimes` to 0–1,000,000; the service accepts zero only when the owning zone explicitly configures a zero free-delivery threshold. The migration adds metadata and constraints without inventing or activating a delivery profile.
 
+`20260804090000_customer_google_identity` makes `User.passwordHash` nullable only so a customer created through Google can remain provider-only; a database check continues to require every `ADMIN` user to have a password hash. It adds `CustomerExternalIdentity` below `CustomerProfile`, with unique provider-subject and one-provider-per-customer constraints. The relation makes an administrator ineligible at the database relationship boundary. Provider access or refresh tokens, authorization codes, state, nonce, PKCE material, cookies, and raw Google subject identifiers are not persisted. Existing customer and administrator password hashes are unchanged.
+
 ## Structural seed safety
 
 `prisma/seed.ts` is idempotent and contains only:

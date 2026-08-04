@@ -756,6 +756,7 @@ export class OutboxProcessor {
       payload: work.payload,
       webUrl: this.environment.WEB_URL,
       encryptionKey: this.environment.FIELD_ENCRYPTION_KEY,
+      brandName: this.environment.EMAIL_FROM_NAME,
     });
     return {
       notificationId: work.notificationId,

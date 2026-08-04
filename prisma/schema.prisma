@@ -22,6 +22,10 @@ enum UserStatus {
   ANONYMIZED
 }
 
+enum ExternalIdentityProvider {
+  GOOGLE
+}
+
 enum SessionStatus {
   ACTIVE
   REVOKED
@@ -45,7 +49,7 @@ model User {
   audience            AuthAudience
   email               String?               @db.VarChar(320)
   emailNormalized     String?               @unique @db.VarChar(320)
-  passwordHash        String                @db.VarChar(255)
+  passwordHash        String?               @db.VarChar(255)
   status              UserStatus            @default(PENDING_VERIFICATION)
   emailVerifiedAt     DateTime?             @db.DateTime(3)
   phoneVerifiedAt     DateTime?             @db.DateTime(3)
@@ -108,10 +112,28 @@ model CustomerProfile {
   consentRecords        ConsentRecord[]
   ageVerificationEvents AgeVerificationEvent[]
   returnRequests        ReturnRequest[]
+  externalIdentities    CustomerExternalIdentity[]
 
   @@index([phoneSearch])
   @@index([lastName, firstName])
   @@index([suspendedAt])
+}
+
+model CustomerExternalIdentity {
+  id                  String                   @id @default(cuid()) @db.VarChar(30)
+  customerId          String                   @db.VarChar(30)
+  provider            ExternalIdentityProvider
+  providerSubjectHash String                   @db.Char(64)
+  emailNormalized     String                   @db.VarChar(320)
+  linkedAt            DateTime                 @default(now()) @db.DateTime(3)
+  lastAuthenticatedAt DateTime?                @db.DateTime(3)
+  createdAt           DateTime                 @default(now()) @db.DateTime(3)
+  updatedAt           DateTime                 @updatedAt @db.DateTime(3)
+  customer            CustomerProfile          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerSubjectHash])
+  @@unique([customerId, provider])
+  @@index([emailNormalized])
 }
 
 model AdminProfile {
@@ -1356,17 +1378,17 @@ model PostalCode {
 }
 
 model DeliveryZone {
-  id                            String                 @id @default(cuid()) @db.VarChar(30)
-  code                          String                 @unique @db.VarChar(80)
-  nameFr                        String                 @db.VarChar(160)
-  nameAr                        String                 @db.VarChar(160)
-  priority                      Int                    @default(0)
-  active                        Boolean                @default(true)
-  supported                     Boolean                @default(true)
-  temporarilySuspended          Boolean                @default(false)
-  phoneConfirmationRequired     Boolean                @default(false)
-  manualReviewRequired          Boolean                @default(false)
-  manualQuoteAllowed            Boolean                @default(false)
+  id                            String                        @id @default(cuid()) @db.VarChar(30)
+  code                          String                        @unique @db.VarChar(80)
+  nameFr                        String                        @db.VarChar(160)
+  nameAr                        String                        @db.VarChar(160)
+  priority                      Int                           @default(0)
+  active                        Boolean                       @default(true)
+  supported                     Boolean                       @default(true)
+  temporarilySuspended          Boolean                       @default(false)
+  phoneConfirmationRequired     Boolean                       @default(false)
+  manualReviewRequired          Boolean                       @default(false)
+  manualQuoteAllowed            Boolean                       @default(false)
   minOrderMillimes              Int?
   maxCodMillimes                Int?
   freeDeliveryThresholdMillimes Int?
@@ -1378,8 +1400,8 @@ model DeliveryZone {
   assignmentMode                DeliveryAssignmentMode?
   driverCommunication           DeliveryCommunicationChannel?
   availableDays                 Json?
-  createdAt                     DateTime               @default(now()) @db.DateTime(3)
-  updatedAt                     DateTime               @updatedAt @db.DateTime(3)
+  createdAt                     DateTime                      @default(now()) @db.DateTime(3)
+  updatedAt                     DateTime                      @updatedAt @db.DateTime(3)
   localities                    DeliveryZoneLocality[]
   rates                         DeliveryRate[]
   timeWindows                   DeliveryTimeWindow[]

@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { AtSign, LockKeyhole, Phone, UserRound } from 'lucide-react';
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router';
@@ -12,6 +12,8 @@ import { useCustomerAuth } from '../../auth/customer-auth-context';
 import { useStorefrontStatus } from '../../components/compliance/storefront-status-context';
 import { Button } from '../../components/ui/button';
 import { CheckboxField, FormField } from '../../components/ui/form-field';
+import { GoogleAuthControl } from './customer-google-auth';
+import { googleOAuthFailureMessageKey } from './customer-google-auth-utils';
 
 function destination(state: unknown) {
   if (
@@ -46,12 +48,39 @@ function resetCompleted(state: unknown) {
   );
 }
 
+function capturePasswordResetToken(pathname: string, search: string, hash: string) {
+  const query = new URLSearchParams(search);
+  const fragment = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+  return {
+    token: (fragment.get('token') ?? query.get('token') ?? '').trim(),
+    confirmationRequested:
+      pathname.endsWith('/confirm') || fragment.has('token') || query.has('token'),
+  };
+}
+
+function locationWithoutPasswordResetToken(search: string, hash: string) {
+  const query = new URLSearchParams(search);
+  const fragment = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+  const containedToken = query.has('token') || fragment.has('token');
+  query.delete('token');
+  fragment.delete('token');
+  const cleanSearch = query.toString();
+  const cleanHash = fragment.toString();
+  return {
+    containedToken,
+    search: cleanSearch ? `?${cleanSearch}` : '',
+    hash: cleanHash ? `#${cleanHash}` : '',
+  };
+}
+
 export function CustomerLoginPage() {
   const { t } = useTranslation();
   const { user, login } = useCustomerAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [serverError, setServerError] = useState(false);
+  const googleFailureMessageKey = googleOAuthFailureMessageKey(searchParams.get('oauthError'));
   const schema = z.object({
     emailOrPhone: z.string().trim().min(3, t('validation.required')),
     password: z.string().min(1, t('validation.required')),
@@ -82,6 +111,12 @@ export function CustomerLoginPage() {
           <h1>{t('auth.loginTitle')}</h1>
           <p>{t('auth.loginBody')}</p>
         </div>
+        {googleFailureMessageKey ? (
+          <p className="form-banner form-banner--error auth-google__callback-error" role="alert">
+            {t(googleFailureMessageKey)}
+          </p>
+        ) : null}
+        <GoogleAuthControl intent="LOGIN" returnTo={destination(location.state)} />
         <form onSubmit={(event) => void submit(event)} noValidate>
           {serverError ? (
             <p className="form-banner form-banner--error" role="alert">
@@ -186,6 +221,7 @@ export function RegisterPage() {
           <h1>{t('auth.registerTitle')}</h1>
           <p>{t('auth.registerBody')}</p>
         </div>
+        <GoogleAuthControl intent="REGISTER" />
         <form onSubmit={(event) => void submit(event)} noValidate>
           {serverError ? (
             <p className="form-banner form-banner--error" role="alert">
@@ -263,7 +299,21 @@ export function PasswordResetPage() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [{ token, confirmationRequested }] = useState(() =>
+    capturePasswordResetToken(location.pathname, location.search, location.hash),
+  );
+  useLayoutEffect(() => {
+    const cleanLocation = locationWithoutPasswordResetToken(location.search, location.hash);
+    if (!cleanLocation.containedToken) return;
+    void navigate(
+      {
+        pathname: location.pathname,
+        search: cleanLocation.search,
+        hash: cleanLocation.hash,
+      },
+      { replace: true },
+    );
+  }, [location.hash, location.pathname, location.search, navigate]);
   const [sent, setSent] = useState(false);
   const [requestError, setRequestError] = useState(false);
   const [completionError, setCompletionError] = useState<'invalid' | 'service' | null>(null);
@@ -289,8 +339,6 @@ export function PasswordResetPage() {
     handleSubmit: handleCompletionSubmit,
     formState: { errors: completionErrors, isSubmitting: completionPending },
   } = useForm<CompletionValues>({ resolver: zodResolver(completionSchema) });
-  const token = searchParams.get('token')?.trim() ?? '';
-  const confirmationRequested = location.pathname.endsWith('/confirm') || searchParams.has('token');
   const validToken = token.length >= 32 && token.length <= 256;
   const completed = resetCompleted(location.state);
   const requestSubmit = handleRequestSubmit(async ({ email }) => {
