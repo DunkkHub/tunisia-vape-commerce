@@ -395,6 +395,14 @@ export function AdminCourierWorkspace({
     ]);
   };
 
+  const selectDeliveryForManagement = (id: string) => {
+    setSelectedAssignmentCourierId('');
+    setAcknowledgedWarnings([]);
+    setWhatsappPreview(null);
+    selectedDeliveryIdRef.current = id;
+    setSelectedDeliveryId(id);
+  };
+
   const queryError =
     courierRecords.isError || deliveries.isError || delivery.isError || assignmentOptions.isError;
   const actionError = operation.error ?? whatsapp.error;
@@ -661,28 +669,51 @@ export function AdminCourierWorkspace({
                   const status = recordText(item, 'status');
                   const id = recordText(item, 'id');
                   const selectable = status === 'ASSIGNED_TO_COURIER' && canAssignSensitive;
+                  const manifestDisabledReason = !canAssignSensitive
+                    ? t('admin.deliveryOps.manifestPermissionRequired')
+                    : status === 'ASSIGNED_TO_COURIER'
+                      ? ''
+                      : t('admin.deliveryOps.manifestRequiresAssignment');
                   return (
                     <tr key={id}>
                       <td>
-                        <label className="checkbox">
-                          <input
-                            type="checkbox"
-                            disabled={!selectable || operation.isPending}
-                            checked={selectedDeliveryIds.includes(id)}
-                            onChange={(event) =>
-                              setSelectedDeliveryIds((current) =>
-                                event.target.checked
-                                  ? [...current, id]
-                                  : current.filter((selectedId) => selectedId !== id),
-                              )
-                            }
-                          />
-                          <span className="sr-only">
-                            {t('admin.deliveryOps.selectDelivery', { id: trackingNumber })}
-                          </span>
-                        </label>
+                        <div className="admin-manifest-checkbox">
+                          <label className="checkbox">
+                            <input
+                              type="checkbox"
+                              title={selectable ? undefined : manifestDisabledReason}
+                              disabled={!selectable || operation.isPending}
+                              checked={selectedDeliveryIds.includes(id)}
+                              onChange={(event) =>
+                                setSelectedDeliveryIds((current) =>
+                                  event.target.checked
+                                    ? [...current, id]
+                                    : current.filter((selectedId) => selectedId !== id),
+                                )
+                              }
+                            />
+                            <span className="sr-only">
+                              {t('admin.deliveryOps.selectDelivery', { id: trackingNumber })}
+                            </span>
+                          </label>
+                          {!selectable ? (
+                            <span className="admin-table-help">{manifestDisabledReason}</span>
+                          ) : null}
+                        </div>
                       </td>
-                      <td>{trackingNumber}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="admin-table-link"
+                          disabled={delivery.isFetching}
+                          aria-label={t('admin.deliveryOps.manageDeliveryAria', {
+                            id: trackingNumber,
+                          })}
+                          onClick={() => selectDeliveryForManagement(id)}
+                        >
+                          {trackingNumber}
+                        </button>
+                      </td>
                       <td>{recordText(item, 'zoneName') || '—'}</td>
                       <td>{recordText(item, 'courierName') || '—'}</td>
                       <td>{t(`admin.deliveryOps.statuses.${status}`, { defaultValue: status })}</td>
@@ -691,13 +722,7 @@ export function AdminCourierWorkspace({
                           type="button"
                           variant="ghost"
                           disabled={delivery.isFetching}
-                          onClick={() => {
-                            setSelectedAssignmentCourierId('');
-                            setAcknowledgedWarnings([]);
-                            setWhatsappPreview(null);
-                            selectedDeliveryIdRef.current = id;
-                            setSelectedDeliveryId(id);
-                          }}
+                          onClick={() => selectDeliveryForManagement(id)}
                         >
                           {t('admin.deliveryOps.manage')}
                         </Button>
