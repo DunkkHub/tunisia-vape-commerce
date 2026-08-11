@@ -80,7 +80,10 @@ and batch sizes have validated `OUTBOX_*`, `WORKER_*`, and `RESERVATION_*` varia
 ## Operations and limitations
 
 Apply every migration through `pnpm prisma:migrate:deploy` before starting this worker. The API
-readiness check expects `20260727090000_delivery_zone_operational_metadata` by default.
+readiness check expects `20260811170000_product_image_renditions` by default. This is the
+fourteenth migration in the current repository; the immediately preceding migrations add
+collection-scoped cash discrepancies and the manual-courier operational fields consumed by API
+outbox and notification work.
 Monitor `RETRY`, expired leases, oldest available event age, `DEAD_LETTER`, and heartbeat age. This
 foundation has no dead-letter replay UI or health-record retention job, and it has no proof of
 multi-instance/final-unit/provider behavior against production-shaped MySQL, Redis, SMTP, and SMS

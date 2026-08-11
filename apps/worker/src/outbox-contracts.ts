@@ -32,22 +32,32 @@ const notificationDispatchPayloadSchema = z.strictObject({
     .regex(/^[A-Za-z0-9_-]+$/),
 });
 
-const mediaObjectDeletePayloadSchema = z.strictObject({
-  bucket: z
-    .string()
-    .min(3)
-    .max(63)
-    .regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/),
-  objectKey: z
-    .string()
-    .min(1)
-    .max(1_024)
-    .regex(/^[a-zA-Z0-9][a-zA-Z0-9/_.-]*$/),
+const mediaBucketSchema = z
+  .string()
+  .min(3)
+  .max(63)
+  .regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/);
+const mediaObjectKeySchema = z
+  .string()
+  .min(1)
+  .max(1_024)
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9/_.-]*$/);
+
+const mediaObjectDeleteV1PayloadSchema = z.strictObject({
+  bucket: mediaBucketSchema,
+  objectKey: mediaObjectKeySchema,
+});
+
+const mediaObjectDeleteV2PayloadSchema = z.strictObject({
+  bucket: mediaBucketSchema,
+  objectKeys: z.array(mediaObjectKeySchema).min(1).max(17),
 });
 
 export type ReservationExpiryPayload = z.infer<typeof reservationExpiryPayloadSchema>;
 export type NotificationDispatchPayload = z.infer<typeof notificationDispatchPayloadSchema>;
-export type MediaObjectDeletePayload = z.infer<typeof mediaObjectDeletePayloadSchema>;
+export type MediaObjectDeletePayload =
+  | z.infer<typeof mediaObjectDeleteV1PayloadSchema>
+  | z.infer<typeof mediaObjectDeleteV2PayloadSchema>;
 
 export class WorkerDomainError extends Error {
   constructor(readonly safeCode: string) {
@@ -57,7 +67,7 @@ export class WorkerDomainError extends Error {
 
 export const parseStoredJson = (payload: unknown): unknown => {
   if (typeof payload !== 'string') return payload;
-  if (payload.length > 8_192) throw new WorkerDomainError('EVENT_PAYLOAD_TOO_LARGE');
+  if (payload.length > 12_288) throw new WorkerDomainError('EVENT_PAYLOAD_TOO_LARGE');
   try {
     return JSON.parse(payload) as unknown;
   } catch {
@@ -66,22 +76,29 @@ export const parseStoredJson = (payload: unknown): unknown => {
 };
 
 export const parseEventPayload = (eventType: string, eventVersion: number, payload: unknown) => {
-  if (eventVersion !== 1) throw new WorkerDomainError('EVENT_VERSION_UNSUPPORTED');
   switch (eventType) {
     case OUTBOX_EVENT_TYPES.RESERVATION_EXPIRY:
+      if (eventVersion !== 1) throw new WorkerDomainError('EVENT_VERSION_UNSUPPORTED');
       return {
         eventType,
         payload: reservationExpiryPayloadSchema.parse(payload),
       } as const;
     case OUTBOX_EVENT_TYPES.NOTIFICATION_DISPATCH:
+      if (eventVersion !== 1) throw new WorkerDomainError('EVENT_VERSION_UNSUPPORTED');
       return {
         eventType,
         payload: notificationDispatchPayloadSchema.parse(payload),
       } as const;
     case OUTBOX_EVENT_TYPES.MEDIA_OBJECT_DELETE:
+      if (eventVersion !== 1 && eventVersion !== 2) {
+        throw new WorkerDomainError('EVENT_VERSION_UNSUPPORTED');
+      }
       return {
         eventType,
-        payload: mediaObjectDeletePayloadSchema.parse(payload),
+        payload:
+          eventVersion === 1
+            ? mediaObjectDeleteV1PayloadSchema.parse(payload)
+            : mediaObjectDeleteV2PayloadSchema.parse(payload),
       } as const;
     default:
       throw new WorkerDomainError('EVENT_TYPE_UNSUPPORTED');

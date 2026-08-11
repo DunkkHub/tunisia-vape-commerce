@@ -52,7 +52,7 @@ The application exposes the following independent operator-controlled booleans. 
 
 `minimum_purchase_age` is required only when an enabled age control needs it. These settings express operator choices; they do not establish legality or approval. Disabling one does not bypass customer/admin realm separation, CSRF, permissions, server-authoritative pricing, delivery pricing, idempotency, stock locking, order-state validation, COD controls, or audit.
 
-Settings are changed through the protected administrator settings API with the required permission, recent authentication, explicit confirmation, reason, optimistic version, and audit event. The current migration `20260720010000_configurable_checkout_consent` makes `Order.ageConfirmedAt` nullable so disabling checkout self-attestation does not require false evidence.
+Settings are changed through the protected administrator settings API with the required permission, recent authentication, explicit confirmation, reason, optimistic version, and audit event. Migration `20260720010000_configurable_checkout_consent` makes `Order.ageConfirmedAt` nullable so disabling checkout self-attestation does not require false evidence.
 
 ## Executable checkout boundary
 

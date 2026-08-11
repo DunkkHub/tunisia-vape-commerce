@@ -82,4 +82,37 @@ describe('product media access policy', () => {
     );
     expect(guard.canActivate(executionContext(['products.update']))).toBe(true);
   });
+
+  it.each([
+    ['image/avif,image/webp,image/apng,*/*;q=0.8', 'webp'],
+    ['image/jpeg,*/*;q=0.8', 'jpeg'],
+    ['image/webp;q=0,image/jpeg;q=1', 'jpeg'],
+  ] as const)(
+    'content-negotiates a modern rendition with a JPEG fallback',
+    async (accept, format) => {
+      const bytes = Buffer.from('rendition');
+      const media = {
+        readPublicRendition: vi.fn().mockResolvedValue({
+          bytes,
+          byteSize: bytes.length,
+          contentType: format === 'webp' ? 'image/webp' : 'image/jpeg',
+        }),
+      };
+      const response = { setHeader: vi.fn() };
+      const controller = new PublicProductMediaController(media as never);
+
+      await controller.getRendition(
+        { objectKeyHash: 'a'.repeat(64), rendition: 'card', profileVersion: 1 },
+        { get: vi.fn().mockReturnValue(accept) } as never,
+        response as never,
+      );
+
+      expect(media.readPublicRendition).toHaveBeenCalledWith('a'.repeat(64), 'card', format, 1);
+      expect(response.setHeader).toHaveBeenCalledWith('Vary', 'Accept');
+      expect(response.setHeader).toHaveBeenCalledWith(
+        'Content-Type',
+        format === 'webp' ? 'image/webp' : 'image/jpeg',
+      );
+    },
+  );
 });

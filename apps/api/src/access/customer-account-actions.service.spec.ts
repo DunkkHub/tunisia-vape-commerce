@@ -138,6 +138,7 @@ describe('customer account lifecycle service', () => {
       session: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
       verificationToken: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
       passwordResetToken: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      customerExternalIdentity: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
       notification: { updateMany: vi.fn().mockResolvedValue({ count: 2 }) },
       address: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
       customerDeletionRequest: { create: vi.fn().mockResolvedValue({ id: 'deletion-1' }) },
@@ -190,6 +191,9 @@ describe('customer account lifecycle service', () => {
       }),
     );
     expect(transaction.address.updateMany).toHaveBeenCalledOnce();
+    expect(transaction.customerExternalIdentity.deleteMany).toHaveBeenCalledWith({
+      where: { customerId: target.id },
+    });
     expect(transaction.customerDeletionRequest.create).toHaveBeenCalledOnce();
     expect('update' in transaction.order).toBe(false);
   });

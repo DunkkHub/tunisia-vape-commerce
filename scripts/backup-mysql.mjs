@@ -130,8 +130,11 @@ const migrationState = migrationStateOutput.split(/\r?\n/).map((line) => {
 if (migrationState.length === 0) throw new Error('Database has no completed migrations');
 const countQuery = [
   "SELECT 'User', COUNT(*) FROM `User`",
+  "UNION ALL SELECT 'CustomerExternalIdentity', COUNT(*) FROM `CustomerExternalIdentity`",
+  "UNION ALL SELECT 'PasswordResetToken', COUNT(*) FROM `PasswordResetToken`",
   "UNION ALL SELECT 'Product', COUNT(*) FROM `Product`",
   "UNION ALL SELECT 'ProductVariant', COUNT(*) FROM `ProductVariant`",
+  "UNION ALL SELECT 'ProductImage', COUNT(*) FROM `ProductImage`",
   "UNION ALL SELECT 'InventoryItem', COUNT(*) FROM `InventoryItem`",
   "UNION ALL SELECT 'StockReservation', COUNT(*) FROM `StockReservation`",
   "UNION ALL SELECT 'StockMovement', COUNT(*) FROM `StockMovement`",
@@ -139,13 +142,21 @@ const countQuery = [
   "UNION ALL SELECT 'OrderItem', COUNT(*) FROM `OrderItem`",
   "UNION ALL SELECT 'OrderAddressSnapshot', COUNT(*) FROM `OrderAddressSnapshot`",
   "UNION ALL SELECT 'OrderConsentSnapshot', COUNT(*) FROM `OrderConsentSnapshot`",
+  "UNION ALL SELECT 'DeliveryZone', COUNT(*) FROM `DeliveryZone`",
+  "UNION ALL SELECT 'Courier', COUNT(*) FROM `Courier`",
+  "UNION ALL SELECT 'CourierDeliveryZone', COUNT(*) FROM `CourierDeliveryZone`",
   "UNION ALL SELECT 'Delivery', COUNT(*) FROM `Delivery`",
+  "UNION ALL SELECT 'DeliveryAttempt', COUNT(*) FROM `DeliveryAttempt`",
   "UNION ALL SELECT 'DeliveryEvent', COUNT(*) FROM `DeliveryEvent`",
   "UNION ALL SELECT 'CashCollection', COUNT(*) FROM `CashCollection`",
   "UNION ALL SELECT 'CashRemittance', COUNT(*) FROM `CashRemittance`",
+  "UNION ALL SELECT 'CashRemittanceItem', COUNT(*) FROM `CashRemittanceItem`",
+  "UNION ALL SELECT 'CashDiscrepancy', COUNT(*) FROM `CashDiscrepancy`",
+  "UNION ALL SELECT 'CashReconciliationEvent', COUNT(*) FROM `CashReconciliationEvent`",
   "UNION ALL SELECT 'AuditLog', COUNT(*) FROM `AuditLog`",
   "UNION ALL SELECT 'OutboxEvent', COUNT(*) FROM `OutboxEvent`",
   "UNION ALL SELECT 'Notification', COUNT(*) FROM `Notification`",
+  "UNION ALL SELECT 'NotificationDeliveryAttempt', COUNT(*) FROM `NotificationDeliveryAttempt`",
 ].join(' ');
 const rowCountOutput = await capture(
   mysqlBinary,

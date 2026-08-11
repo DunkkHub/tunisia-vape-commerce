@@ -29,7 +29,7 @@ corepack pnpm prisma:seed
 corepack pnpm admin:create
 ```
 
-The latest expected migration is `20260727090000_delivery_zone_operational_metadata`. Prove clean installation and a representative upgrade containing existing orders, inventory, deliveries, cash records, catalog/media, and an import receipt. The seed creates structure only and preserves existing setting values on rerun.
+The latest expected migration is `20260811170000_product_image_renditions`. It adds immutable, versioned rendition metadata without rewriting image bytes; pre-existing approved images are backfilled through a bounded, checksum-verified first read. The preceding migration links collection-level discrepancies and append-only reconciliation events to the exact collection without rewriting recorded cash, while ambiguous legacy rows remain unlinked. Prove clean installation and a representative upgrade containing rendition metadata/backfill, valid event-based recovery, conflicting and ambiguous fail-closed fixtures, existing customers, orders, inventory, deliveries, cash records, catalog/media, and an import receipt. The seed creates structure only and preserves existing setting values on rerun.
 
 ## 3. Configure the store
 

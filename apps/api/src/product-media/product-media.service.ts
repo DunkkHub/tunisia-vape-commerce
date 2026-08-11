@@ -21,10 +21,22 @@ import type {
   UploadProductImageDto,
 } from './dto/product-media.dto';
 import {
+  PRODUCT_IMAGE_MAX_RENDITION_BYTES,
+  PRODUCT_IMAGE_RENDITION_DIMENSIONS,
+  PRODUCT_IMAGE_RENDITION_NAMES,
   ProductImageValidatorService,
+  type ProductImageRenditionFormat,
+  type ProductImageRenditionName,
   type UploadedProductImage,
   type ValidatedProductImage,
+  type ValidatedProductImageRendition,
 } from './product-image-validator.service';
+import {
+  hasCompleteCurrentRenditionManifest,
+  PRODUCT_IMAGE_RENDITION_FORMATS,
+  PRODUCT_IMAGE_RENDITION_PROFILE_VERSION,
+  type ProductImageRenditionCoordinate,
+} from './product-image-rendition-profile';
 import { PRODUCT_MEDIA_STORAGE, type MediaStorage } from './storage/media-storage';
 
 const MAX_IMAGES_PER_OWNER = 20;
@@ -82,6 +94,12 @@ const adminImageSelect = {
   deletedAt: true,
   product: { select: { id: true, version: true } },
   variant: { select: { id: true, productId: true, version: true } },
+  renditions: {
+    where: { profileVersion: PRODUCT_IMAGE_RENDITION_PROFILE_VERSION },
+    orderBy: [{ name: 'asc' as const }, { format: 'asc' as const }],
+    take: 9,
+    select: { name: true, format: true, profileVersion: true },
+  },
 } satisfies Prisma.ProductImageSelect;
 
 type AdminImageRecord = Prisma.ProductImageGetPayload<{ select: typeof adminImageSelect }>;
@@ -89,9 +107,46 @@ type AdminImageRecord = Prisma.ProductImageGetPayload<{ select: typeof adminImag
 export const publicProductImageUrl = (objectKeyHash: string): string =>
   `/api/v1/media/${objectKeyHash}`;
 
+export const publicProductImageRenditionUrl = (
+  objectKeyHash: string,
+  rendition: ProductImageRenditionName,
+): string =>
+  `/api/v1/media/${objectKeyHash}/${rendition}/v${PRODUCT_IMAGE_RENDITION_PROFILE_VERSION}`;
+
+interface StoredProductImageObjectSet {
+  objectKey: string;
+  objectKeyHash: string;
+  renditions: Array<
+    ValidatedProductImageRendition & {
+      objectKey: string;
+    }
+  >;
+}
+
+interface StoredRenditionRecord {
+  productImageId: string;
+  name: string;
+  format: string;
+  profileVersion: number;
+  byteSize: number;
+  checksumSha256: string;
+  width: number;
+  height: number;
+}
+
+interface PublicStoredImageRecord {
+  id: string;
+  objectKey: string;
+  contentType: string;
+  byteSize: number;
+  checksumSha256: string;
+  renditions: StoredRenditionRecord[];
+}
+
 @Injectable()
 export class ProductMediaService {
   private readonly logger = new Logger(ProductMediaService.name);
+  private mediaProcessingTail: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -146,6 +201,17 @@ export class ProductMediaService {
     file: UploadedProductImage | undefined,
     context: ProductMediaMutationContext,
   ) {
+    return this.withMediaProcessingSlot(() =>
+      this.uploadWithinSlot(productId, input, file, context),
+    );
+  }
+
+  private async uploadWithinSlot(
+    productId: string,
+    input: UploadProductImageDto,
+    file: UploadedProductImage | undefined,
+    context: ProductMediaMutationContext,
+  ) {
     const image = await this.validator.validate(file);
     const preflightOwner = await this.resolveOwner(this.prisma, productId, input.variantId);
     this.assertVersion(preflightOwner.version, input.expectedOwnerVersion);
@@ -179,6 +245,7 @@ export class ProductMediaService {
             checksumSha256: image.checksumSha256,
             width: image.width,
             height: image.height,
+            renditions: { create: this.renditionCreateData(stored) },
             altTextFr: input.altTextFr,
             altTextAr: input.altTextAr,
             sortOrder: (aggregate._max.sortOrder ?? -1) + 1,
@@ -212,12 +279,24 @@ export class ProductMediaService {
       });
       return { data: this.serialize(record, input.expectedOwnerVersion + 1) };
     } catch (error) {
-      await this.cleanupFailedWrite(stored.objectKey);
+      await this.cleanupFailedWrite(stored);
       throw error;
     }
   }
 
   async uploadImported(
+    productId: string,
+    input: UploadProductImageDto,
+    file: UploadedProductImage | undefined,
+    provenance: ImportedProductImageProvenance,
+    context: ProductMediaMutationContext,
+  ) {
+    return this.withMediaProcessingSlot(() =>
+      this.uploadImportedWithinSlot(productId, input, file, provenance, context),
+    );
+  }
+
+  private async uploadImportedWithinSlot(
     productId: string,
     input: UploadProductImageDto,
     file: UploadedProductImage | undefined,
@@ -292,6 +371,7 @@ export class ProductMediaService {
               checksumSha256: image.checksumSha256,
               width: image.width,
               height: image.height,
+              renditions: { create: this.renditionCreateData(stored) },
               altTextFr: input.altTextFr,
               altTextAr: input.altTextAr,
               sortOrder: (aggregate._max.sortOrder ?? -1) + 1,
@@ -415,7 +495,7 @@ export class ProductMediaService {
         productVersion: result.productVersion,
       };
     } catch (error) {
-      await this.cleanupFailedWrite(stored.objectKey);
+      await this.cleanupFailedWrite(stored);
       throw error;
     }
   }
@@ -680,6 +760,18 @@ export class ProductMediaService {
     file: UploadedProductImage | undefined,
     context: ProductMediaMutationContext,
   ) {
+    return this.withMediaProcessingSlot(() =>
+      this.replaceWithinSlot(productId, imageId, input, file, context),
+    );
+  }
+
+  private async replaceWithinSlot(
+    productId: string,
+    imageId: string,
+    input: ReplaceProductImageDto,
+    file: UploadedProductImage | undefined,
+    context: ProductMediaMutationContext,
+  ) {
     const image = await this.validator.validate(file);
     const preflight = await this.findScopedImage(this.prisma, productId, imageId);
     const preflightOwner = this.ownerFromImage(preflight);
@@ -719,6 +811,7 @@ export class ProductMediaService {
             checksumSha256: image.checksumSha256,
             width: image.width,
             height: image.height,
+            renditions: { create: this.renditionCreateData(stored) },
             altTextFr: input.altTextFr ?? current.altTextFr,
             altTextAr: input.altTextAr ?? current.altTextAr,
             sortOrder: current.sortOrder,
@@ -756,10 +849,10 @@ export class ProductMediaService {
         replacedObjectKey = current.objectKey;
         return created;
       });
-      if (replacedObjectKey) await this.deleteStoredObject(replacedObjectKey);
+      if (replacedObjectKey) await this.deleteStoredObjects(replacedObjectKey);
       return { data: this.serialize(replacement, input.expectedOwnerVersion + 1) };
     } catch (error) {
-      await this.cleanupFailedWrite(stored.objectKey);
+      await this.cleanupFailedWrite(stored);
       throw error;
     }
   }
@@ -815,7 +908,7 @@ export class ProductMediaService {
       objectKey = current.objectKey;
       return { id: current.id, deleted: true as const, ownerVersion: owner.version + 1 };
     });
-    if (objectKey) await this.deleteStoredObject(objectKey);
+    if (objectKey) await this.deleteStoredObjects(objectKey);
     return { data: result };
   }
 
@@ -826,9 +919,130 @@ export class ProductMediaService {
 
   async readPublic(objectKeyHash: string) {
     if (!HASH_PATTERN.test(objectKeyHash)) throw this.publicImageNotFound();
+    const image = await this.findPublicImage(objectKeyHash);
+    if (!image) throw this.publicImageNotFound();
+    return this.readStoredImage(image);
+  }
+
+  async readPublicRendition(
+    objectKeyHash: string,
+    rendition: ProductImageRenditionName,
+    format: ProductImageRenditionFormat,
+    profileVersion = PRODUCT_IMAGE_RENDITION_PROFILE_VERSION,
+  ) {
+    if (
+      !HASH_PATTERN.test(objectKeyHash) ||
+      !PRODUCT_IMAGE_RENDITION_NAMES.includes(rendition) ||
+      profileVersion !== PRODUCT_IMAGE_RENDITION_PROFILE_VERSION
+    ) {
+      throw this.publicImageNotFound();
+    }
+    const image = await this.findPublicImage(objectKeyHash);
+    if (!image) throw this.publicImageNotFound();
+    if (!hasCompleteCurrentRenditionManifest(image.renditions)) {
+      throw this.publicImageNotFound();
+    }
+    const metadata = this.findRenditionRecord(image.renditions, rendition, format);
+    if (!metadata) throw this.publicImageNotFound();
+    const cached = await this.readVerifiedRendition(image, metadata, rendition, format);
+    if (!cached) throw this.publicImageNotFound();
+    return cached;
+  }
+
+  private async readVerifiedRendition(
+    image: PublicStoredImageRecord,
+    metadata: StoredRenditionRecord,
+    rendition: ProductImageRenditionName,
+    format: ProductImageRenditionFormat,
+  ) {
+    this.assertRenditionRecord(image.id, metadata, rendition, format);
+    const objectKey = productImageRenditionObjectKey(
+      image.objectKey,
+      rendition,
+      format,
+      metadata.profileVersion,
+    );
+    let bytes: Buffer;
+    try {
+      bytes = await this.storage.get(objectKey, metadata.byteSize);
+    } catch (error) {
+      if (isMissingStorageObject(error)) return null;
+      throw this.mediaStorageUnavailable();
+    }
+    const checksum = createHash('sha256').update(bytes).digest('hex');
+    if (bytes.length !== metadata.byteSize || checksum !== metadata.checksumSha256) {
+      throw this.mediaIntegrityFailure();
+    }
+    return this.renditionResponse(bytes, format);
+  }
+
+  private findRenditionRecord(
+    rows: StoredRenditionRecord[],
+    name: ProductImageRenditionName,
+    format: ProductImageRenditionFormat,
+  ): StoredRenditionRecord | undefined {
+    return rows.find(
+      (row) =>
+        row.name === name &&
+        row.format === format &&
+        row.profileVersion === PRODUCT_IMAGE_RENDITION_PROFILE_VERSION,
+    );
+  }
+
+  private assertRenditionRecord(
+    productImageId: string,
+    row: StoredRenditionRecord,
+    name: ProductImageRenditionName,
+    format: ProductImageRenditionFormat,
+  ): void {
+    if (
+      row.productImageId !== productImageId ||
+      row.name !== name ||
+      row.format !== format ||
+      !PRODUCT_IMAGE_RENDITION_NAMES.includes(row.name) ||
+      !PRODUCT_IMAGE_RENDITION_FORMATS.includes(row.format) ||
+      row.profileVersion !== PRODUCT_IMAGE_RENDITION_PROFILE_VERSION ||
+      !Number.isSafeInteger(row.byteSize) ||
+      row.byteSize < 1 ||
+      row.byteSize > PRODUCT_IMAGE_MAX_RENDITION_BYTES ||
+      !HASH_PATTERN.test(row.checksumSha256) ||
+      !Number.isSafeInteger(row.width) ||
+      !Number.isSafeInteger(row.height) ||
+      row.width < 1 ||
+      row.height < 1 ||
+      row.width > PRODUCT_IMAGE_RENDITION_DIMENSIONS[name] ||
+      row.height > PRODUCT_IMAGE_RENDITION_DIMENSIONS[name]
+    ) {
+      throw this.mediaIntegrityFailure();
+    }
+  }
+
+  private renditionResponse(bytes: Buffer, format: ProductImageRenditionFormat) {
+    return {
+      bytes,
+      contentType: format === 'webp' ? ('image/webp' as const) : ('image/jpeg' as const),
+      byteSize: bytes.length,
+    };
+  }
+
+  private async withMediaProcessingSlot<T>(work: () => Promise<T>): Promise<T> {
+    const previous = this.mediaProcessingTail;
+    let release!: () => void;
+    this.mediaProcessingTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+    }
+  }
+
+  private findPublicImage(objectKeyHash: string) {
     const now = new Date();
     const publicProduct = buildPublicProductWhere({}, now);
-    const image = await this.prisma.productImage.findFirst({
+    return this.prisma.productImage.findFirst({
       where: {
         objectKeyHash,
         bucket: this.storage.bucket,
@@ -851,14 +1065,28 @@ export class ProductMediaService {
         ],
       },
       select: {
+        id: true,
         objectKey: true,
         contentType: true,
         byteSize: true,
         checksumSha256: true,
+        renditions: {
+          where: { profileVersion: PRODUCT_IMAGE_RENDITION_PROFILE_VERSION },
+          orderBy: [{ name: 'asc' }, { format: 'asc' }],
+          take: 9,
+          select: {
+            productImageId: true,
+            name: true,
+            format: true,
+            profileVersion: true,
+            byteSize: true,
+            checksumSha256: true,
+            width: true,
+            height: true,
+          },
+        },
       },
     });
-    if (!image) throw this.publicImageNotFound();
-    return this.readStoredImage(image);
   }
 
   private async readStoredImage(
@@ -1071,17 +1299,45 @@ export class ProductMediaService {
     });
   }
 
-  private storedObject(owner: MediaOwner, image: ValidatedProductImage) {
+  private storedObject(
+    owner: MediaOwner,
+    image: ValidatedProductImage,
+  ): StoredProductImageObjectSet {
     const randomName = randomBytes(18).toString('hex');
     const ownerPath = owner.kind === 'product' ? 'product' : `variants/${owner.id}`;
     const objectKey = `products/${owner.productId}/${ownerPath}/${randomName}.${image.extension}`;
     return {
       objectKey,
       objectKeyHash: createHash('sha256').update(objectKey).digest('hex'),
+      renditions: image.renditions.map((rendition) => ({
+        ...rendition,
+        objectKey: productImageRenditionObjectKey(
+          objectKey,
+          rendition.name,
+          rendition.format,
+          PRODUCT_IMAGE_RENDITION_PROFILE_VERSION,
+        ),
+      })),
     };
   }
 
-  private async store(stored: { objectKey: string }, image: ValidatedProductImage): Promise<void> {
+  private renditionCreateData(stored: StoredProductImageObjectSet) {
+    return stored.renditions.map((rendition) => ({
+      name: rendition.name,
+      format: rendition.format,
+      profileVersion: PRODUCT_IMAGE_RENDITION_PROFILE_VERSION,
+      byteSize: rendition.byteSize,
+      checksumSha256: rendition.checksumSha256,
+      width: rendition.width,
+      height: rendition.height,
+    }));
+  }
+
+  private async store(
+    stored: StoredProductImageObjectSet,
+    image: ValidatedProductImage,
+  ): Promise<void> {
+    const writtenKeys: string[] = [];
     try {
       await this.storage.put({
         objectKey: stored.objectKey,
@@ -1089,7 +1345,21 @@ export class ProductMediaService {
         checksumSha256: image.checksumSha256,
         bytes: image.bytes,
       });
+      writtenKeys.push(stored.objectKey);
+      for (const rendition of stored.renditions) {
+        await this.storage.put({
+          objectKey: rendition.objectKey,
+          contentType: rendition.contentType,
+          checksumSha256: rendition.checksumSha256,
+          bytes: rendition.bytes,
+        });
+        writtenKeys.push(rendition.objectKey);
+      }
     } catch {
+      await this.deleteObjectKeys(
+        writtenKeys,
+        'A partially staged media set could not be removed.',
+      );
       throw new ServiceUnavailableException({
         code: 'MEDIA_STORAGE_UNAVAILABLE',
         message: 'The product media service is temporarily unavailable.',
@@ -1097,30 +1367,32 @@ export class ProductMediaService {
     }
   }
 
-  private async cleanupFailedWrite(objectKey: string): Promise<void> {
-    try {
-      await this.storage.delete(objectKey);
-    } catch {
-      this.logger.warn(
-        'A staged product image could not be removed after a failed database write.',
-      );
-    }
+  private cleanupFailedWrite(stored: StoredProductImageObjectSet): Promise<void> {
+    return this.deleteObjectKeys(
+      [stored.objectKey, ...stored.renditions.map((rendition) => rendition.objectKey)],
+      'A staged product-image media set could not be removed after a failed database write.',
+    );
   }
 
-  private async deleteStoredObject(objectKey: string): Promise<void> {
-    try {
-      await this.storage.delete(objectKey);
-    } catch {
-      // The transaction has already written a durable outbox event; the worker will retry safely.
-      this.logger.warn('A soft-deleted product image remains queued for object-storage cleanup.');
-    }
+  private deleteStoredObjects(objectKey: string): Promise<void> {
+    return this.deleteObjectKeys(
+      productImageObjectKeys(objectKey),
+      'A soft-deleted product-image media set remains queued for object-storage cleanup.',
+    );
+  }
+
+  private async deleteObjectKeys(objectKeys: string[], warning: string): Promise<void> {
+    const results = await Promise.allSettled(
+      objectKeys.map((objectKey) => this.storage.delete(objectKey)),
+    );
+    if (results.some((result) => result.status === 'rejected')) this.logger.warn(warning);
   }
 
   private enqueueObjectDeletion(
     transaction: Prisma.TransactionClient,
     image: Pick<AdminImageRecord, 'id' | 'objectKey' | 'bucket'>,
   ) {
-    const deterministicKey = `media-object-delete:v1:${image.id}`;
+    const deterministicKey = `media-object-delete:v2:${image.id}`;
     return transaction.outboxEvent.upsert({
       where: { deterministicKey },
       update: {},
@@ -1129,8 +1401,11 @@ export class ProductMediaService {
         aggregateType: 'ProductImage',
         aggregateId: image.id,
         eventType: 'media.object.delete.requested',
-        eventVersion: 1,
-        payload: { objectKey: image.objectKey, bucket: image.bucket },
+        eventVersion: 2,
+        payload: {
+          objectKeys: productImageObjectKeys(image.objectKey),
+          bucket: image.bucket,
+        },
         maxAttempts: 8,
       },
     });
@@ -1138,11 +1413,17 @@ export class ProductMediaService {
 
   private serialize(record: AdminImageRecord, ownerVersion?: number) {
     const owner = this.ownerFromImage(record);
+    const authenticatedOriginalUrl = `/api/v1/admin/products/${owner.productId}/images/${record.id}/content`;
     return {
       id: record.id,
       productId: record.productId,
       variantId: record.variantId,
-      url: `/api/v1/admin/products/${owner.productId}/images/${record.id}/content`,
+      url: authenticatedOriginalUrl,
+      renditions: publicProductImageRenditionUrls(
+        record.objectKeyHash,
+        record.renditions,
+        authenticatedOriginalUrl,
+      ),
       contentType: record.contentType,
       originalFilename: record.originalFilename,
       byteSize: record.byteSize,
@@ -1206,6 +1487,20 @@ export class ProductMediaService {
     });
   }
 
+  private mediaIntegrityFailure(): ServiceUnavailableException {
+    return new ServiceUnavailableException({
+      code: 'MEDIA_INTEGRITY_FAILURE',
+      message: 'The stored product image failed its integrity check.',
+    });
+  }
+
+  private mediaStorageUnavailable(): ServiceUnavailableException {
+    return new ServiceUnavailableException({
+      code: 'MEDIA_STORAGE_UNAVAILABLE',
+      message: 'The product media service is temporarily unavailable.',
+    });
+  }
+
   private versionConflict(): ConflictException {
     return new ConflictException({
       code: 'PRODUCT_MEDIA_VERSION_CONFLICT',
@@ -1222,6 +1517,60 @@ const auditMetadata = (context: ProductMediaMutationContext) => ({
   ...(context.ipAddress ? { ipAddress: context.ipAddress } : {}),
   ...(context.userAgent ? { userAgent: context.userAgent } : {}),
 });
+
+const productImageRenditionObjectKey = (
+  objectKey: string,
+  rendition: ProductImageRenditionName,
+  format: ProductImageRenditionFormat,
+  profileVersion: number,
+): string =>
+  `${objectKey}.renditions/v${profileVersion}/${rendition}.${format === 'jpeg' ? 'jpg' : 'webp'}`;
+
+const legacyProductImageRenditionObjectKey = (
+  objectKey: string,
+  rendition: ProductImageRenditionName,
+  format: ProductImageRenditionFormat,
+): string => `${objectKey}.renditions/${rendition}.${format === 'jpeg' ? 'jpg' : 'webp'}`;
+
+const productImageObjectKeys = (objectKey: string): string[] => [
+  objectKey,
+  ...PRODUCT_IMAGE_RENDITION_NAMES.flatMap((rendition) =>
+    PRODUCT_IMAGE_RENDITION_FORMATS.map((format) =>
+      productImageRenditionObjectKey(
+        objectKey,
+        rendition,
+        format,
+        PRODUCT_IMAGE_RENDITION_PROFILE_VERSION,
+      ),
+    ),
+  ),
+  ...PRODUCT_IMAGE_RENDITION_NAMES.flatMap((rendition) =>
+    PRODUCT_IMAGE_RENDITION_FORMATS.map((format) =>
+      legacyProductImageRenditionObjectKey(objectKey, rendition, format),
+    ),
+  ),
+];
+
+export const publicProductImageRenditionUrls = (
+  objectKeyHash: string,
+  manifest: readonly ProductImageRenditionCoordinate[] | null | undefined,
+  originalUrl = publicProductImageUrl(objectKeyHash),
+) => {
+  if (!hasCompleteCurrentRenditionManifest(manifest)) {
+    return {
+      thumbnail: originalUrl,
+      card: originalUrl,
+      detail: originalUrl,
+      highResolution: originalUrl,
+    };
+  }
+  return {
+    thumbnail: publicProductImageRenditionUrl(objectKeyHash, 'thumbnail'),
+    card: publicProductImageRenditionUrl(objectKeyHash, 'card'),
+    detail: publicProductImageRenditionUrl(objectKeyHash, 'detail'),
+    highResolution: publicProductImageRenditionUrl(objectKeyHash, 'high-resolution'),
+  };
+};
 
 const isMissingStorageObject = (error: unknown): boolean => {
   if (typeof error !== 'object' || error === null) return false;

@@ -25,6 +25,14 @@ describe('administrator delivery access policy', () => {
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const reassign = AdminDeliveriesController.prototype.reassign;
     // eslint-disable-next-line @typescript-eslint/unbound-method
+    const unassign = AdminDeliveriesController.prototype.unassign;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const recordCourierContact = AdminDeliveriesController.prototype.recordCourierContact;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const updateInternalNotes = AdminDeliveriesController.prototype.updateInternalNotes;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const courierWhatsApp = AdminDeliveriesController.prototype.courierWhatsApp;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     const transition = AdminDeliveriesController.prototype.transition;
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const recordAttempt = AdminDeliveriesController.prototype.recordAttempt;
@@ -50,7 +58,15 @@ describe('administrator delivery access policy', () => {
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, couriers)).toEqual(['deliveries.read']);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, assign)).toEqual(['deliveries.assign']);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, transition)).toEqual(['deliveries.update']);
-    for (const handler of [assign, reassign, transition, recordAttempt]) {
+    for (const handler of [
+      assign,
+      reassign,
+      unassign,
+      recordCourierContact,
+      updateInternalNotes,
+      transition,
+      recordAttempt,
+    ]) {
       expect(Reflect.getMetadata(GUARDS_METADATA, handler)).toEqual([
         CsrfGuard,
         RecentAuthenticationGuard,
@@ -77,6 +93,19 @@ describe('administrator delivery access policy', () => {
       ]);
     }
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, createCourier)).toEqual(['deliveries.update']);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, unassign)).toEqual(['deliveries.assign']);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, recordCourierContact)).toEqual([
+      'deliveries.update',
+    ]);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, updateInternalNotes)).toEqual([
+      'deliveries.update',
+    ]);
+    expect(Reflect.getMetadata(PERMISSIONS_METADATA, courierWhatsApp)).toEqual([
+      'deliveries.update',
+    ]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, courierWhatsApp)).toEqual([
+      RecentAuthenticationGuard,
+    ]);
     expect(Reflect.getMetadata(PERMISSIONS_METADATA, createManifest)).toEqual([
       'deliveries.assign',
     ]);

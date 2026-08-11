@@ -6,7 +6,7 @@ Security is deny-by-default and layered across Nginx, NestJS guards/validation, 
 
 ## Customer and administrator login separation
 
-- Customer endpoints: /api/v1/auth/customer/register, login, logout, reset, verify, sessions, and revoke.
+- Customer endpoints: /api/v1/auth/customer/register, login, Google start/callback/onboarding/complete, logout, reset, sessions, and revoke.
 - Administrator endpoints: /api/v1/auth/admin/login, totp/verify, recovery/verify, logout, sessions, revoke, and recent-auth.
 - Customer UI: /login. Administrator UI: /admin/login.
 - Cookie names, signing/encryption context, Redis prefixes, CSRF state, rate limits, timeouts, and guards must differ.
@@ -26,6 +26,14 @@ Production cookies are host-only, Secure, HttpOnly, SameSite=Lax unless a docume
 - Generate enrollment QR codes locally from the server-issued `otpauth://` URI. Keep an encrypted, unverified seed stable across password retries so a scanned enrollment cannot be invalidated implicitly; replace it only after verification or through an authorized reset flow.
 - Hash individual recovery codes, show them once, consume atomically, and notify/log their use.
 - Rotate the session on login, MFA completion, password change, privilege change, and recent-auth completion.
+
+### Customer Google OAuth and recovery
+
+Google sign-in uses the authorization-code flow with PKCE S256, cryptographically random state and nonce, an exact registered callback, and the official Google verification library. Issuer, audience, authorized presenter, expiry, issued-at time, nonce, subject, and verified-email claims are checked before account lookup. State and onboarding records are encrypted in Redis, bound to HttpOnly SameSite=Lax cookies, consumed once, and retained for at most the validated short TTL. OAuth codes, access/refresh tokens, raw provider subjects, PKCE material, state, nonce, and cookies are never persisted or logged; request logging strips all query strings before serialization.
+
+External identities belong to `CustomerProfile`, not `User`, so an administrator cannot acquire Google customer authentication. The callback accepts only the exact customer path and cannot redirect to `/admin`, `/api`, another origin, a protocol-relative URL, or a backslash-normalized URL. Existing verified customer email is linked transactionally; an unverified local-email match requires the existing password. Provider-only customers have no synthetic password. The database still requires every `ADMIN` user to have a password hash, and admin login remains password plus mandatory TOTP.
+
+Password-reset requests always return the same response and execute the same Argon2 timing baseline. Per-IP and per-account Redis buckets are independent and fail closed. Local-password resets use configurable short-lived random tokens stored only as hashes; notifications carry only an encrypted token for worker-side rendering. Google-only accounts receive coalesced provider sign-in guidance instead of a fake reset link. Successful reset atomically consumes all outstanding customer reset tokens and revokes customer sessions only.
 
 ## Authorization
 
@@ -82,7 +90,7 @@ Production Redis uses authentication, TLS/private networking, eviction policy th
 
 ## Uploads and object storage
 
-Uploads use random server keys and a private storage boundary. Validate declared MIME, signature, exact container boundary, decoded format, dimensions/pixel count, size, page count, and allowed extensions; reject SVG, executables, animation, corruption, and appended/polyglot content. Auto-orient and re-encode accepted JPEG, PNG, WebP, or supported AVIF bytes, retain only the color profile needed for fidelity, strip EXIF/XMP/comments and path data, sanitize the original filename for audit display, and record uploader/time/hash. Each image has exactly one product or variant owner, duplicate checksums are owner-scoped, and replacement/deletion uses optimistic versions plus durable cleanup. Downloads use the age-gated checksum-verifying media proxy. Bucket versioning and lifecycle rules are enabled.
+Uploads use random server keys and a private storage boundary. Validate declared MIME, signature, exact container boundary, decoded format, dimensions/pixel count, size, page count, and allowed extensions; reject SVG, executables, animation, corruption, and appended/polyglot content. Auto-orient and re-encode accepted JPEG, PNG, WebP, or supported AVIF bytes, retain only the color profile needed for fidelity, strip EXIF/XMP/comments and path data, sanitize the original filename for audit display, and record uploader/time/hash. Generate only bounded server-controlled WebP/JPEG storefront renditions from those sanitized pixels. Libvips concurrency/cache and the application media-processing slot bound near-limit upload memory. Each image has exactly one product or variant owner, duplicate checksums are owner-scoped, and replacement/deletion uses optimistic versions plus a bounded versioned outbox media-set cleanup. Downloads use the age-gated media proxy. Originals are checked against persisted byte count and SHA-256. Rendition cache hits require a complete immutable current-profile manifest and are checked directly against persisted byte count, SHA-256, and dimensions. A missing manifest or object fails with the safe public not-found response; the public request path never decodes the original, invokes Sharp, writes storage/metadata, or queues repair. Catalog and administrator DTOs fall back to their checksum-verifying original route unless the full eight-row manifest exists. Random server keys, a strict key grammar, and fixed rendition names prevent client-selected storage paths or traversal. Bucket versioning and lifecycle rules are enabled.
 
 ## Catalog import and external-source safety
 
@@ -101,7 +109,8 @@ Uploads use random server keys and a private storage boundary. Validate declared
 - Scope and uniquely constrain checkout idempotency; lock inventory in stable order; calculate available stock from authoritative state.
 - Persist commercial/consent/address/warning snapshots with the order.
 - Enforce delivery state transitions and assignments server-side. A failed age check cannot become delivered.
-- COD collection and remittance are distinct. Reconciliation requires elevated permission, recent auth, evidence/reason, audit, and ideally separate approver.
+- Courier WhatsApp handoff is administrator-only and manual: the API validates the courier's E.164 number, substitutes only allowlisted server snapshots into a bounded template, URL-encodes the message, and returns an HTTPS `wa.me` preview. It never sends automatically or stores rendered customer data in audit metadata. Operators must treat opening WhatsApp as an authorized disclosure to that courier and configure only the minimum template fields required for delivery.
+- COD collection and remittance are distinct. Reconciliation requires elevated permission, recent auth, evidence/reason, audit, and a separate approver for discrepancy closure. Collection corrections append a scoped adjustment event; original recorded cash is not overwritten and ambiguous legacy scopes fail closed.
 
 ## Logging and detection
 

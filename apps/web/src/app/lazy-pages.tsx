@@ -21,6 +21,9 @@ export const CustomerLoginPage = lazy(async () => ({
 export const RegisterPage = lazy(async () => ({
   default: (await import('../pages/store/auth-pages')).RegisterPage,
 }));
+export const GoogleOnboardingPage = lazy(async () => ({
+  default: (await import('../pages/store/customer-google-auth')).GoogleOnboardingPage,
+}));
 export const PasswordResetPage = lazy(async () => ({
   default: (await import('../pages/store/auth-pages')).PasswordResetPage,
 }));

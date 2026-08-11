@@ -22,6 +22,10 @@ enum UserStatus {
   ANONYMIZED
 }
 
+enum ExternalIdentityProvider {
+  GOOGLE
+}
+
 enum SessionStatus {
   ACTIVE
   REVOKED
@@ -45,7 +49,7 @@ model User {
   audience            AuthAudience
   email               String?               @db.VarChar(320)
   emailNormalized     String?               @unique @db.VarChar(320)
-  passwordHash        String                @db.VarChar(255)
+  passwordHash        String?               @db.VarChar(255)
   status              UserStatus            @default(PENDING_VERIFICATION)
   emailVerifiedAt     DateTime?             @db.DateTime(3)
   phoneVerifiedAt     DateTime?             @db.DateTime(3)
@@ -108,10 +112,28 @@ model CustomerProfile {
   consentRecords        ConsentRecord[]
   ageVerificationEvents AgeVerificationEvent[]
   returnRequests        ReturnRequest[]
+  externalIdentities    CustomerExternalIdentity[]
 
   @@index([phoneSearch])
   @@index([lastName, firstName])
   @@index([suspendedAt])
+}
+
+model CustomerExternalIdentity {
+  id                  String                   @id @default(cuid()) @db.VarChar(30)
+  customerId          String                   @db.VarChar(30)
+  provider            ExternalIdentityProvider
+  providerSubjectHash String                   @db.Char(64)
+  emailNormalized     String                   @db.VarChar(320)
+  linkedAt            DateTime                 @default(now()) @db.DateTime(3)
+  lastAuthenticatedAt DateTime?                @db.DateTime(3)
+  createdAt           DateTime                 @default(now()) @db.DateTime(3)
+  updatedAt           DateTime                 @updatedAt @db.DateTime(3)
+  customer            CustomerProfile          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerSubjectHash])
+  @@unique([customerId, provider])
+  @@index([emailNormalized])
 }
 
 model AdminProfile {
@@ -686,34 +708,51 @@ model ProductVariant {
 }
 
 model ProductImage {
-  id               String                @id @default(cuid()) @db.VarChar(30)
-  productId        String?               @db.VarChar(30)
-  variantId        String?               @db.VarChar(30)
-  objectKey        String                @db.VarChar(1024)
-  objectKeyHash    String                @unique @db.Char(64)
-  bucket           String                @db.VarChar(120)
-  contentType      String                @db.VarChar(100)
-  originalFilename String?               @db.VarChar(255)
+  id               String                  @id @default(cuid()) @db.VarChar(30)
+  productId        String?                 @db.VarChar(30)
+  variantId        String?                 @db.VarChar(30)
+  objectKey        String                  @db.VarChar(1024)
+  objectKeyHash    String                  @unique @db.Char(64)
+  bucket           String                  @db.VarChar(120)
+  contentType      String                  @db.VarChar(100)
+  originalFilename String?                 @db.VarChar(255)
   byteSize         Int
-  checksumSha256   String                @db.Char(64)
+  checksumSha256   String                  @db.Char(64)
   width            Int?
   height           Int?
-  altTextFr        String                @db.VarChar(300)
-  altTextAr        String                @db.VarChar(300)
-  sortOrder        Int                   @default(0)
-  isPrimary        Boolean               @default(false)
-  moderationStatus ImageModerationStatus @default(PENDING)
-  createdAt        DateTime              @default(now()) @db.DateTime(3)
-  updatedAt        DateTime              @updatedAt @db.DateTime(3)
-  deletedAt        DateTime?             @db.DateTime(3)
-  product          Product?              @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  variant          ProductVariant?       @relation(fields: [variantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  altTextFr        String                  @db.VarChar(300)
+  altTextAr        String                  @db.VarChar(300)
+  sortOrder        Int                     @default(0)
+  isPrimary        Boolean                 @default(false)
+  moderationStatus ImageModerationStatus   @default(PENDING)
+  createdAt        DateTime                @default(now()) @db.DateTime(3)
+  updatedAt        DateTime                @updatedAt @db.DateTime(3)
+  deletedAt        DateTime?               @db.DateTime(3)
+  product          Product?                @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  variant          ProductVariant?         @relation(fields: [variantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  renditions       ProductImageRendition[]
   sourceRecords    CatalogSourceRecord[]
 
   @@index([productId, sortOrder])
   @@index([variantId, sortOrder])
   @@index([checksumSha256])
   @@index([moderationStatus, createdAt])
+}
+
+model ProductImageRendition {
+  productImageId String       @db.VarChar(30)
+  name           String       @db.VarChar(32)
+  format         String       @db.VarChar(8)
+  profileVersion Int
+  byteSize       Int
+  checksumSha256 String       @db.Char(64)
+  width          Int
+  height         Int
+  createdAt      DateTime     @default(now()) @db.DateTime(3)
+  productImage   ProductImage @relation(fields: [productImageId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([productImageId, name, format, profileVersion])
+  @@index([productImageId, profileVersion])
 }
 
 model CatalogImportBatch {
@@ -1356,17 +1395,17 @@ model PostalCode {
 }
 
 model DeliveryZone {
-  id                            String                 @id @default(cuid()) @db.VarChar(30)
-  code                          String                 @unique @db.VarChar(80)
-  nameFr                        String                 @db.VarChar(160)
-  nameAr                        String                 @db.VarChar(160)
-  priority                      Int                    @default(0)
-  active                        Boolean                @default(true)
-  supported                     Boolean                @default(true)
-  temporarilySuspended          Boolean                @default(false)
-  phoneConfirmationRequired     Boolean                @default(false)
-  manualReviewRequired          Boolean                @default(false)
-  manualQuoteAllowed            Boolean                @default(false)
+  id                            String                        @id @default(cuid()) @db.VarChar(30)
+  code                          String                        @unique @db.VarChar(80)
+  nameFr                        String                        @db.VarChar(160)
+  nameAr                        String                        @db.VarChar(160)
+  priority                      Int                           @default(0)
+  active                        Boolean                       @default(true)
+  supported                     Boolean                       @default(true)
+  temporarilySuspended          Boolean                       @default(false)
+  phoneConfirmationRequired     Boolean                       @default(false)
+  manualReviewRequired          Boolean                       @default(false)
+  manualQuoteAllowed            Boolean                       @default(false)
   minOrderMillimes              Int?
   maxCodMillimes                Int?
   freeDeliveryThresholdMillimes Int?
@@ -1378,13 +1417,14 @@ model DeliveryZone {
   assignmentMode                DeliveryAssignmentMode?
   driverCommunication           DeliveryCommunicationChannel?
   availableDays                 Json?
-  createdAt                     DateTime               @default(now()) @db.DateTime(3)
-  updatedAt                     DateTime               @updatedAt @db.DateTime(3)
+  createdAt                     DateTime                      @default(now()) @db.DateTime(3)
+  updatedAt                     DateTime                      @updatedAt @db.DateTime(3)
   localities                    DeliveryZoneLocality[]
   rates                         DeliveryRate[]
   timeWindows                   DeliveryTimeWindow[]
   blackoutDates                 DeliveryBlackoutDate[]
   orders                        Order[]
+  couriers                      CourierDeliveryZone[]
 
   @@index([active, supported, priority])
   @@index([temporarilySuspended])
@@ -1759,6 +1799,11 @@ enum CourierStatus {
   ARCHIVED
 }
 
+enum CourierAvailabilityStatus {
+  AVAILABLE
+  OFF_DUTY
+}
+
 enum CourierIntegrationType {
   MANUAL
   API
@@ -1814,25 +1859,47 @@ enum ManifestStatus {
 }
 
 model Courier {
-  id              String               @id @default(cuid()) @db.VarChar(30)
-  code            String               @unique @db.VarChar(80)
-  name            String               @db.VarChar(200)
-  status          CourierStatus        @default(ACTIVE)
-  contactName     String?              @db.VarChar(160)
-  phoneE164       String?              @db.VarChar(16)
-  email           String?              @db.VarChar(320)
-  feeRules        Json?
-  notes           String?              @db.Text
-  createdAt       DateTime             @default(now()) @db.DateTime(3)
-  updatedAt       DateTime             @updatedAt @db.DateTime(3)
-  users           CourierUser[]
-  integrations    CourierIntegration[]
-  deliveries      Delivery[]
-  manifests       DeliveryManifest[]
-  cashCollections CashCollection[]
-  cashRemittances CashRemittance[]
+  id                      String                    @id @default(cuid()) @db.VarChar(30)
+  code                    String                    @unique @db.VarChar(80)
+  name                    String                    @db.VarChar(200)
+  companyName             String?                   @db.VarChar(200)
+  status                  CourierStatus             @default(ACTIVE)
+  availabilityStatus      CourierAvailabilityStatus @default(AVAILABLE)
+  contactName             String?                   @db.VarChar(160)
+  phoneE164               String?                   @db.VarChar(16)
+  whatsappPhoneE164       String?                   @db.VarChar(16)
+  email                   String?                   @db.VarChar(320)
+  defaultFeeMillimes      Int?
+  maximumActiveDeliveries Int?
+  whatsappTemplate        String?                   @db.Text
+  feeRules                Json?
+  notes                   String?                   @db.Text
+  createdAt               DateTime                  @default(now()) @db.DateTime(3)
+  updatedAt               DateTime                  @updatedAt @db.DateTime(3)
+  users                   CourierUser[]
+  integrations            CourierIntegration[]
+  deliveryZones           CourierDeliveryZone[]
+  deliveries              Delivery[]
+  manifests               DeliveryManifest[]
+  cashCollections         CashCollection[]
+  cashRemittances         CashRemittance[]
 
-  @@index([status, name])
+  @@index([status, availabilityStatus, name])
+}
+
+model CourierDeliveryZone {
+  courierId      String       @db.VarChar(30)
+  deliveryZoneId String       @db.VarChar(30)
+  active         Boolean      @default(true)
+  feeMillimes    Int?
+  createdAt      DateTime     @default(now()) @db.DateTime(3)
+  updatedAt      DateTime     @updatedAt @db.DateTime(3)
+  courier        Courier      @relation(fields: [courierId], references: [id], onDelete: Cascade)
+  deliveryZone   DeliveryZone @relation(fields: [deliveryZoneId], references: [id], onDelete: Restrict)
+
+  @@id([courierId, deliveryZoneId])
+  @@index([deliveryZoneId, active])
+  @@index([courierId, active])
 }
 
 model CourierUser {
@@ -2048,26 +2115,28 @@ enum CashReconciliationEventType {
 }
 
 model CashCollection {
-  id                       String               @id @default(cuid()) @db.VarChar(30)
-  orderId                  String               @db.VarChar(30)
-  deliveryId               String?              @db.VarChar(30)
-  courierId                String?              @db.VarChar(30)
-  status                   CashCollectionStatus @default(EXPECTED)
+  id                       String                    @id @default(cuid()) @db.VarChar(30)
+  orderId                  String                    @db.VarChar(30)
+  deliveryId               String?                   @db.VarChar(30)
+  courierId                String?                   @db.VarChar(30)
+  status                   CashCollectionStatus      @default(EXPECTED)
   expectedMillimes         Int
-  collectedMillimes        Int                  @default(0)
-  collectedByUserId        String?              @db.VarChar(30)
-  collectedAt              DateTime?            @db.DateTime(3)
-  method                   String               @default("CASH") @db.VarChar(40)
-  evidenceObjectKey        String?              @db.VarChar(1024)
-  note                     String?              @db.VarChar(1000)
-  recordIdempotencyKeyHash String?              @unique(map: "CashCollection_recordIdempotencyKeyHash_key") @db.Char(64)
-  recordRequestHash        String?              @db.Char(64)
-  createdAt                DateTime             @default(now()) @db.DateTime(3)
-  updatedAt                DateTime             @updatedAt @db.DateTime(3)
-  order                    Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  delivery                 Delivery?            @relation(fields: [deliveryId], references: [id], onDelete: Restrict)
-  courier                  Courier?             @relation(fields: [courierId], references: [id], onDelete: Restrict)
+  collectedMillimes        Int                       @default(0)
+  collectedByUserId        String?                   @db.VarChar(30)
+  collectedAt              DateTime?                 @db.DateTime(3)
+  method                   String                    @default("CASH") @db.VarChar(40)
+  evidenceObjectKey        String?                   @db.VarChar(1024)
+  note                     String?                   @db.VarChar(1000)
+  recordIdempotencyKeyHash String?                   @unique(map: "CashCollection_recordIdempotencyKeyHash_key") @db.Char(64)
+  recordRequestHash        String?                   @db.Char(64)
+  createdAt                DateTime                  @default(now()) @db.DateTime(3)
+  updatedAt                DateTime                  @updatedAt @db.DateTime(3)
+  order                    Order                     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  delivery                 Delivery?                 @relation(fields: [deliveryId], references: [id], onDelete: Restrict)
+  courier                  Courier?                  @relation(fields: [courierId], references: [id], onDelete: Restrict)
   remittanceItems          CashRemittanceItem[]
+  discrepancy              CashDiscrepancy?
+  reconciliationEvents     CashReconciliationEvent[]
 
   @@index([orderId, status])
   @@index([courierId, status, collectedAt])
@@ -2116,6 +2185,7 @@ model CashRemittanceItem {
 model CashDiscrepancy {
   id                 String                @id @default(cuid()) @db.VarChar(30)
   remittanceId       String?               @db.VarChar(30)
+  cashCollectionId   String?               @unique @db.VarChar(30)
   orderId            String?               @db.VarChar(30)
   status             CashDiscrepancyStatus @default(OPEN)
   expectedMillimes   Int
@@ -2128,8 +2198,9 @@ model CashDiscrepancy {
   openedAt           DateTime              @default(now()) @db.DateTime(3)
   resolvedAt         DateTime?             @db.DateTime(3)
   evidenceObjectKey  String?               @db.VarChar(1024)
-  remittance         CashRemittance?       @relation(fields: [remittanceId], references: [id], onDelete: Restrict)
-  order              Order?                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  remittance         CashRemittance?       @relation(fields: [remittanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cashCollection     CashCollection?       @relation(fields: [cashCollectionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  order              Order?                @relation(fields: [orderId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([status, openedAt])
   @@index([remittanceId, status])
@@ -2137,18 +2208,21 @@ model CashDiscrepancy {
 }
 
 model CashReconciliationEvent {
-  id             String                      @id @default(cuid()) @db.VarChar(30)
-  remittanceId   String?                     @db.VarChar(30)
-  type           CashReconciliationEventType
-  amountMillimes Int?
-  actorUserId    String                      @db.VarChar(30)
-  summary        String                      @db.VarChar(500)
-  metadata       Json?
-  requestId      String?                     @db.VarChar(100)
-  occurredAt     DateTime                    @default(now()) @db.DateTime(3)
-  remittance     CashRemittance?             @relation(fields: [remittanceId], references: [id], onDelete: Restrict)
+  id               String                      @id @default(cuid()) @db.VarChar(30)
+  remittanceId     String?                     @db.VarChar(30)
+  cashCollectionId String?                     @db.VarChar(30)
+  type             CashReconciliationEventType
+  amountMillimes   Int?
+  actorUserId      String                      @db.VarChar(30)
+  summary          String                      @db.VarChar(500)
+  metadata         Json?
+  requestId        String?                     @db.VarChar(100)
+  occurredAt       DateTime                    @default(now()) @db.DateTime(3)
+  remittance       CashRemittance?             @relation(fields: [remittanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cashCollection   CashCollection?             @relation(fields: [cashCollectionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([remittanceId, occurredAt])
+  @@index([cashCollectionId, occurredAt])
   @@index([type, occurredAt])
 }
 

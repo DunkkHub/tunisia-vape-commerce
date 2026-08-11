@@ -195,6 +195,15 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: .
+          file: docker/Dockerfile.api
+          target: migration
+          push: false
+          tags: vape-migration:ci
+          cache-from: type=gha,scope=migration
+          cache-to: type=gha,mode=max,scope=migration
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
           file: docker/Dockerfile.worker
           target: runtime
           push: false

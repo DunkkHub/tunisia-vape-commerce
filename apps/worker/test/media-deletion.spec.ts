@@ -146,4 +146,69 @@ describe('media deletion outbox processing', () => {
 
     expect(repository.scheduleRetry).toHaveBeenCalledWith(event.id, 'MEDIA_OBJECT_DELETE_FAILED');
   });
+
+  it('deletes every bounded rendition in a version-2 media-set event', async () => {
+    const mediaSetEvent = {
+      ...event,
+      deterministicKey: 'media-object-delete:v2:image-1',
+      eventVersion: 2,
+      payload: {
+        bucket: 'local-media',
+        objectKeys: [
+          'products/product-1/image.png',
+          'products/product-1/image.png.renditions/card.webp',
+        ],
+      },
+    };
+    const claimTransaction = {
+      $queryRaw: vi.fn().mockResolvedValue([mediaSetEvent]),
+      outboxEvent: { update: vi.fn().mockResolvedValue({}) },
+    };
+    const completeTransaction = {
+      $queryRaw: vi.fn().mockResolvedValue([
+        {
+          status: 'PROCESSING',
+          eventType: mediaSetEvent.eventType,
+          eventVersion: mediaSetEvent.eventVersion,
+        },
+      ]),
+      outboxEvent: { update: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      $transaction: vi
+        .fn()
+        .mockImplementationOnce((callback: (value: typeof claimTransaction) => unknown) =>
+          callback(claimTransaction),
+        )
+        .mockImplementationOnce((callback: (value: typeof completeTransaction) => unknown) =>
+          callback(completeTransaction),
+        ),
+    };
+    const media = {
+      deleteObject: vi.fn().mockResolvedValue(undefined),
+    } satisfies MediaDeletionAdapter;
+    const processor = new OutboxProcessor(
+      prisma as never,
+      { scheduleRetry: vi.fn() } as never,
+      environment(),
+      { info: vi.fn(), warn: vi.fn() } as never,
+      undefined,
+      media,
+    );
+
+    await processor.process({
+      outboxEventId: mediaSetEvent.id,
+      eventType: mediaSetEvent.eventType,
+      eventVersion: 2,
+    });
+
+    expect(media.deleteObject).toHaveBeenNthCalledWith(1, {
+      bucket: 'local-media',
+      objectKey: mediaSetEvent.payload.objectKeys[0],
+    });
+    expect(media.deleteObject).toHaveBeenNthCalledWith(2, {
+      bucket: 'local-media',
+      objectKey: mediaSetEvent.payload.objectKeys[1],
+    });
+  });
 });

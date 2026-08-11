@@ -141,13 +141,40 @@ const requestDescriptor = (descriptor, scenarioName) => {
   for (const [name, value] of Object.entries(headers)) {
     assertScenario(typeof value === 'string', `${scenarioName} header ${name} must be a string.`);
   }
-  return { ...descriptor, method, headers };
+  const diagnosticLabel = descriptor.diagnosticLabel;
+  assertScenario(
+    diagnosticLabel === undefined || safeExceptionValue(diagnosticLabel) !== null,
+    `${scenarioName} diagnosticLabel must be a bounded safe token.`,
+  );
+  return { ...descriptor, method, headers, diagnosticLabel };
 };
 
 const responseErrorCode = (body) => {
   if (!isRecord(body)) return null;
   if (typeof body.code === 'string') return body.code;
   return isRecord(body.error) && typeof body.error.code === 'string' ? body.error.code : null;
+};
+
+const safeExceptionValue = (value) =>
+  typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(value) ? value : null;
+
+const requestException = (error) => {
+  const signatures = [];
+  let current = error;
+  for (let depth = 0; depth < 3 && isRecord(current); depth += 1) {
+    const signature = [
+      safeExceptionValue(current.name),
+      safeExceptionValue(current.code),
+      safeExceptionValue(current.syscall),
+    ].filter(Boolean);
+    if (signature.length > 0) signatures.push(signature.join(':'));
+    current = current.cause;
+  }
+  const timeout = signatures.some((signature) => signature.includes('TimeoutError'));
+  return {
+    failure: timeout ? 'timeout' : 'network-error',
+    failureDetail: signatures.join('<-') || 'Error:UNCLASSIFIED',
+  };
 };
 
 const joinTarget = (baseUrl, requestPath) => {
@@ -227,6 +254,10 @@ const performRequest = async (
       failure: null,
     };
   } catch (error) {
+    const exception = requestException(error);
+    if (descriptor.diagnosticLabel) {
+      exception.failureDetail = `${exception.failureDetail}@${descriptor.diagnosticLabel}`;
+    }
     return {
       matched: false,
       status: null,
@@ -234,7 +265,7 @@ const performRequest = async (
       identity: undefined,
       body: undefined,
       durationMs: performance.now() - started,
-      failure: error?.name === 'TimeoutError' ? 'timeout' : 'network-error',
+      ...exception,
     };
   }
 };
@@ -296,6 +327,14 @@ const requestStatistics = (results) => {
           ).length,
         ]),
     ),
+    failureDetailsByKind: Object.fromEntries(
+      [...new Set(failures.map((result) => result.failureDetail).filter(Boolean))]
+        .sort()
+        .map((detail) => [
+          detail,
+          failures.filter((result) => result.failureDetail === detail).length,
+        ]),
+    ),
   };
 };
 
@@ -336,7 +375,7 @@ const standardLoad = async ({
   assertScenario(
     statistics.errorRate < maximumErrorRate ||
       (maximumErrorRate === 0 && statistics.errorRate === 0),
-    `${name} error rate ${statistics.errorRate.toFixed(4)} did not remain below ${maximumErrorRate.toFixed(4)} (failures: ${JSON.stringify(statistics.failuresByKind)}).`,
+    `${name} error rate ${statistics.errorRate.toFixed(4)} did not remain below ${maximumErrorRate.toFixed(4)} (failures: ${JSON.stringify(statistics.failuresByKind)}; details: ${JSON.stringify(statistics.failureDetailsByKind)}).`,
   );
   return {
     target,

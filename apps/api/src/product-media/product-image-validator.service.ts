@@ -3,6 +3,23 @@ import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import type { Environment } from '../config/environment';
+import {
+  PRODUCT_IMAGE_RENDITION_NAMES,
+  type ProductImageRenditionFormat,
+  type ProductImageRenditionName,
+} from './product-image-rendition-profile';
+
+export {
+  PRODUCT_IMAGE_RENDITION_FORMATS,
+  PRODUCT_IMAGE_RENDITION_NAMES,
+  type ProductImageRenditionFormat,
+  type ProductImageRenditionName,
+} from './product-image-rendition-profile';
+
+// The API container has a single CPU and a 768 MiB memory ceiling. Keep libvips from retaining a
+// large process-wide cache or decoding multiple near-limit administrator uploads concurrently.
+sharp.cache({ memory: 32, files: 0, items: 16 });
+sharp.concurrency(1);
 
 export interface UploadedProductImage {
   buffer: Buffer;
@@ -20,6 +37,19 @@ export interface ValidatedProductImage {
   checksumSha256: string;
   width: number;
   height: number;
+  renditions: ValidatedProductImageRendition[];
+}
+
+export interface ValidatedProductImageRendition {
+  name: ProductImageRenditionName;
+  format: ProductImageRenditionFormat;
+  contentType: 'image/webp' | 'image/jpeg';
+  extension: 'webp' | 'jpg';
+  bytes: Buffer;
+  byteSize: number;
+  checksumSha256: string;
+  width: number;
+  height: number;
 }
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -32,6 +62,13 @@ const SAFE_TYPES = {
 
 type SafeFormat = keyof typeof SAFE_TYPES;
 const AVIF_SUPPORTED = Boolean(sharp.format.heif?.input.buffer && sharp.format.heif.output.buffer);
+export const PRODUCT_IMAGE_MAX_RENDITION_BYTES = 10 * 1_024 * 1_024;
+export const PRODUCT_IMAGE_RENDITION_DIMENSIONS = {
+  thumbnail: 160,
+  card: 720,
+  detail: 1_200,
+  'high-resolution': 1_920,
+} as const satisfies Record<ProductImageRenditionName, number>;
 
 @Injectable()
 export class ProductImageValidatorService {
@@ -148,6 +185,8 @@ export class ProductImageValidatorService {
       });
     }
 
+    const renditions = await this.createRenditions(encoded);
+
     return {
       bytes: encoded,
       contentType: expected.contentType,
@@ -157,7 +196,111 @@ export class ProductImageValidatorService {
       checksumSha256: createHash('sha256').update(encoded).digest('hex'),
       width: output.width,
       height: output.height,
+      renditions,
     };
+  }
+
+  async createRendition(
+    source: Buffer,
+    name: ProductImageRenditionName,
+    format: ProductImageRenditionFormat,
+  ): Promise<ValidatedProductImageRendition> {
+    const maximumPixels = this.config.get('UPLOAD_MAX_PIXELS', { infer: true });
+    try {
+      let pipeline = sharp(source, {
+        animated: false,
+        failOn: 'error',
+        limitInputPixels: maximumPixels,
+        sequentialRead: true,
+      })
+        .rotate()
+        .resize({
+          width: PRODUCT_IMAGE_RENDITION_DIMENSIONS[name],
+          height: PRODUCT_IMAGE_RENDITION_DIMENSIONS[name],
+          fit: 'inside',
+          withoutEnlargement: true,
+        });
+      pipeline =
+        format === 'webp'
+          ? pipeline.webp({ quality: 84, effort: 5 })
+          : pipeline
+              .flatten({ background: { r: 255, g: 255, b: 255 } })
+              .jpeg({ quality: 88, mozjpeg: true, progressive: true });
+      const result = await pipeline.toBuffer({ resolveWithObject: true });
+      if (result.data.length < 1 || result.data.length > PRODUCT_IMAGE_MAX_RENDITION_BYTES) {
+        throw new PayloadTooLargeException({
+          code: 'IMAGE_RENDITION_TOO_LARGE',
+          message: `A generated product-image rendition must not exceed ${PRODUCT_IMAGE_MAX_RENDITION_BYTES} bytes.`,
+        });
+      }
+      const expectedFormat = format === 'jpeg' ? 'jpeg' : 'webp';
+      if (
+        result.info.format !== expectedFormat ||
+        !Number.isSafeInteger(result.info.width) ||
+        !Number.isSafeInteger(result.info.height) ||
+        result.info.width < 1 ||
+        result.info.height < 1 ||
+        result.info.width > PRODUCT_IMAGE_RENDITION_DIMENSIONS[name] ||
+        result.info.height > PRODUCT_IMAGE_RENDITION_DIMENSIONS[name]
+      ) {
+        throw new Error('rendition metadata mismatch');
+      }
+      return {
+        name,
+        format,
+        contentType: format === 'webp' ? 'image/webp' : 'image/jpeg',
+        extension: format === 'webp' ? 'webp' : 'jpg',
+        bytes: result.data,
+        byteSize: result.data.length,
+        checksumSha256: createHash('sha256').update(result.data).digest('hex'),
+        width: result.info.width,
+        height: result.info.height,
+      };
+    } catch (error) {
+      if (error instanceof PayloadTooLargeException) throw error;
+      throw this.decodeFailed();
+    }
+  }
+
+  async assertStoredRendition(
+    bytes: Buffer,
+    name: ProductImageRenditionName,
+    format: ProductImageRenditionFormat,
+  ): Promise<void> {
+    const safeFormat: SafeFormat = format === 'jpeg' ? 'jpeg' : 'webp';
+    if (detectFormat(bytes) !== safeFormat || !hasExactContainerBoundary(bytes, safeFormat)) {
+      throw this.decodeFailed();
+    }
+    try {
+      const metadata = await sharp(bytes, {
+        animated: true,
+        failOn: 'error',
+        limitInputPixels: this.config.get('UPLOAD_MAX_PIXELS', { infer: true }),
+        sequentialRead: true,
+      }).metadata();
+      if (
+        !metadataFormatMatches(metadata.format, safeFormat) ||
+        !metadata.width ||
+        !metadata.height ||
+        (metadata.pages ?? 1) !== 1 ||
+        metadata.width > PRODUCT_IMAGE_RENDITION_DIMENSIONS[name] ||
+        metadata.height > PRODUCT_IMAGE_RENDITION_DIMENSIONS[name]
+      ) {
+        throw new Error('rendition metadata mismatch');
+      }
+    } catch {
+      throw this.decodeFailed();
+    }
+  }
+
+  async createRenditions(source: Buffer): Promise<ValidatedProductImageRendition[]> {
+    const renditions: ValidatedProductImageRendition[] = [];
+    for (const name of PRODUCT_IMAGE_RENDITION_NAMES) {
+      for (const format of ['webp', 'jpeg'] as const) {
+        renditions.push(await this.createRendition(source, name, format));
+      }
+    }
+    return renditions;
   }
 
   private unsupportedType(): BadRequestException {

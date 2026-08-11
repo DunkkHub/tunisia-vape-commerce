@@ -12,7 +12,6 @@ import {
   RefreshCw,
   Route,
   Truck,
-  Users,
 } from 'lucide-react';
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,7 +19,6 @@ import { useTranslation } from 'react-i18next';
 import { adminDataClient } from '../../api/admin-data-client';
 import { ApiError } from '../../api/http';
 import type {
-  AdminCourierStatus,
   AdminCsvDownload,
   AdminDeliveryZoneConfig,
   AdminDeliveryRateConfig,
@@ -33,6 +31,7 @@ import { Button } from '../../components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
 import { CheckboxField, FormField, SelectField } from '../../components/ui/form-field';
 import { LocalDate, Price } from '../../components/ui/price';
+import { AdminCourierWorkspace } from './admin-courier-workspace';
 
 const deliveryStatuses = [
   'PENDING_CONFIRMATION',
@@ -52,18 +51,6 @@ const deliveryStatuses = [
   'RETURN_TO_SENDER',
   'RETURNED',
   'CANCELLED',
-] as const;
-
-const operationalDeliveryTargets = [
-  'ON_HOLD',
-  'CONFIRMED',
-  'PREPARING',
-  'READY_FOR_PICKUP',
-  'ASSIGNED_TO_COURIER',
-  'HANDED_TO_COURIER',
-  'IN_TRANSIT',
-  'OUT_FOR_DELIVERY',
-  'RETURN_TO_SENDER',
 ] as const;
 
 const manifestTargets: Record<AdminDeliveryManifestStatus, AdminDeliveryManifestStatus[]> = {
@@ -705,7 +692,6 @@ export function AdminDeliveryPage() {
   const canAssignSensitive = canAssign && hasRecentAuthentication;
   const canUpdateSensitive = canUpdate && hasRecentAuthentication;
   const canExportSensitive = canExport && hasRecentAuthentication;
-  const [selectedDeliveryId, setSelectedDeliveryId] = useState('');
   const [workspace, setWorkspace] = useState<DeliveryWorkspace>('configuration');
   const [selectedDeliveryIds, setSelectedDeliveryIds] = useState<string[]>([]);
   const [selectedManifestId, setSelectedManifestId] = useState('');
@@ -717,10 +703,8 @@ export function AdminDeliveryPage() {
   const [localityId, setLocalityId] = useState('');
   const [feedback, setFeedback] = useState('');
   const [feedbackSection, setFeedbackSection] = useState<DeliveryConfigurationSection | null>(null);
-  const [courierFeedback, setCourierFeedback] = useState('');
   const zoneFormRef = useRef<HTMLFormElement>(null);
   const rateFormRef = useRef<HTMLFormElement>(null);
-  const courierFormRef = useRef<HTMLFormElement>(null);
   const createRateAmountRef = useRef<HTMLInputElement>(null);
   const [createRateAmountTnd, setCreateRateAmountTnd] = useState('');
   const [createRateAmountError, setCreateRateAmountError] = useState('');
@@ -735,10 +719,6 @@ export function AdminDeliveryPage() {
     null,
   );
 
-  const deliveries = useQuery({
-    queryKey: ['admin', 'deliveries', 'page=1&limit=20'],
-    queryFn: () => adminDataClient.list('deliveries', 'page=1&limit=20'),
-  });
   const zones = useQuery({
     queryKey: ['admin', 'delivery-config', 'zones'],
     queryFn: adminDataClient.deliveryZones,
@@ -765,18 +745,9 @@ export function AdminDeliveryPage() {
     queryFn: () => adminDataClient.deliveryGeographyLocalities(delegationId),
     enabled: Boolean(delegationId),
   });
-  const delivery = useQuery({
-    queryKey: ['admin', 'delivery', selectedDeliveryId],
-    queryFn: () => adminDataClient.delivery(selectedDeliveryId),
-    enabled: Boolean(selectedDeliveryId),
-  });
   const couriers = useQuery({
     queryKey: ['admin', 'delivery', 'couriers'],
-    queryFn: adminDataClient.couriers,
-  });
-  const courierRecords = useQuery({
-    queryKey: ['admin', 'delivery-operations', 'couriers'],
-    queryFn: () => adminDataClient.courierRecords(),
+    queryFn: () => adminDataClient.couriers(),
   });
   const manifests = useQuery({
     queryKey: ['admin', 'delivery-operations', 'manifests'],
@@ -791,6 +762,7 @@ export function AdminDeliveryPage() {
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['admin', 'delivery-config'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin', 'courier-workspace'] }),
       queryClient.invalidateQueries({ queryKey: ['admin', 'deliveries'] }),
       queryClient.invalidateQueries({ queryKey: ['admin', 'delivery'] }),
       queryClient.invalidateQueries({ queryKey: ['admin', 'delivery-operations'] }),
@@ -811,25 +783,6 @@ export function AdminDeliveryPage() {
       setFeedback(variables.success);
       setFeedbackSection(variables.section ?? null);
       void refresh();
-    },
-  });
-  const courierCreation = useMutation({
-    mutationFn: adminDataClient.createCourierRecord,
-    onMutate: () => {
-      setCourierFeedback('');
-    },
-    onSuccess: (courier) => {
-      courierFormRef.current?.reset();
-      setCourierFeedback(
-        t('admin.deliveryOps.courierCreatedNamed', {
-          code: courier.code,
-          name: courier.name,
-        }),
-      );
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'delivery', 'couriers'] });
-      void queryClient.invalidateQueries({
-        queryKey: ['admin', 'delivery-operations', 'couriers'],
-      });
     },
   });
   const exportAction = useMutation({
@@ -984,22 +937,6 @@ export function AdminDeliveryPage() {
       section: 'pickup',
     });
   };
-  const createCourier = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const contactName = optionalText(form, 'contactName');
-    const phoneE164 = optionalText(form, 'phoneE164');
-    const email = optionalText(form, 'email');
-    const notes = optionalText(form, 'notes');
-    courierCreation.mutate({
-      code: textEntry(form, 'code'),
-      name: textEntry(form, 'name'),
-      ...(contactName ? { contactName } : {}),
-      ...(phoneE164 ? { phoneE164 } : {}),
-      ...(email ? { email } : {}),
-      ...(notes ? { notes } : {}),
-    });
-  };
   const createManifest = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const element = event.currentTarget;
@@ -1092,30 +1029,20 @@ export function AdminDeliveryPage() {
   };
 
   const allQueries = [
-    deliveries,
     zones,
     rates,
     pickups,
     governorates,
     delegations,
     localities,
-    delivery,
     couriers,
-    courierRecords,
     manifests,
     manifest,
   ];
   const configurationHasError = [zones, rates, pickups, governorates, delegations, localities].some(
     (query) => query.isError,
   );
-  const operationsHasError = [
-    deliveries,
-    delivery,
-    couriers,
-    courierRecords,
-    manifests,
-    manifest,
-  ].some((query) => query.isError);
+  const operationsHasError = [couriers, manifests, manifest].some((query) => query.isError);
   const toolsHaveError = couriers.isError;
   const currentError =
     action.error && !action.variables?.section
@@ -1317,405 +1244,13 @@ export function AdminDeliveryPage() {
               onRetry={() => void refresh()}
             />
           ) : null}
-          <section className="admin-panel">
-            <h2>
-              <Truck aria-hidden="true" size={18} /> {t('admin.deliveryOps.inProgressTitle')}
-            </h2>
-            <p>{t('admin.deliveryOps.inProgressBody')}</p>
-            {deliveries.isPending ? (
-              <LoadingState label={t('common.loading')} tone="admin" />
-            ) : null}
-            {deliveries.data?.items.length === 0 ? (
-              <EmptyState title={t('admin.deliveryOps.noDeliveries')} />
-            ) : null}
-            {deliveries.data?.items.length ? (
-              <div className="admin-table-wrap">
-                <table className="admin-table">
-                  <thead>
-                    <tr>
-                      <th>{t('admin.deliveryOps.manifestSelection')}</th>
-                      <th>{t('admin.deliveryOps.orderTracking')}</th>
-                      <th>{t('admin.deliveryOps.zone')}</th>
-                      <th>{t('admin.deliveryOps.courier')}</th>
-                      <th>{t('common.status')}</th>
-                      <th>{t('common.actions')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {deliveries.data.items.map((item) => {
-                      const trackingNumber =
-                        typeof item.trackingNumber === 'string' ? item.trackingNumber : item.id;
-                      const status = typeof item.status === 'string' ? item.status : '';
-                      const selectable = status === 'ASSIGNED_TO_COURIER' && canAssignSensitive;
-                      return (
-                        <tr key={item.id}>
-                          <td>
-                            <label className="checkbox">
-                              <input
-                                type="checkbox"
-                                disabled={!selectable || action.isPending}
-                                checked={selectedDeliveryIds.includes(item.id)}
-                                onChange={(event) =>
-                                  setSelectedDeliveryIds((current) =>
-                                    event.target.checked
-                                      ? [...current, item.id]
-                                      : current.filter((id) => id !== item.id),
-                                  )
-                                }
-                              />
-                              <span className="sr-only">
-                                {t('admin.deliveryOps.selectDelivery', { id: trackingNumber })}
-                              </span>
-                            </label>
-                          </td>
-                          <td>{trackingNumber}</td>
-                          <td>{typeof item.zoneName === 'string' ? item.zoneName : '—'}</td>
-                          <td>{typeof item.courierName === 'string' ? item.courierName : '—'}</td>
-                          <td>
-                            {t(`admin.deliveryOps.statuses.${status}`, { defaultValue: status })}
-                          </td>
-                          <td>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              disabled={delivery.isFetching}
-                              onClick={() => setSelectedDeliveryId(item.id)}
-                            >
-                              {t('admin.deliveryOps.manage')}
-                            </Button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
-          </section>
-
-          {delivery.isPending && selectedDeliveryId ? (
-            <LoadingState label={t('common.loading')} tone="admin" />
-          ) : null}
-          {delivery.data ? (
-            <section className="admin-panel">
-              <h2>
-                {delivery.data.orderNumber} ·{' '}
-                {t(`admin.deliveryOps.statuses.${delivery.data.status}`, {
-                  defaultValue: delivery.data.status,
-                })}
-              </h2>
-              <p>
-                {t('admin.deliveryOps.expectedCod')}:{' '}
-                <Price millimes={delivery.data.expectedCodMillimes} /> ·{' '}
-                {t('admin.deliveryOps.payment')}:{' '}
-                {t(`account.paymentStatuses.${delivery.data.paymentStatus}`, {
-                  defaultValue: delivery.data.paymentStatus,
-                })}
-              </p>
-              <form
-                className="admin-form-grid"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const courierId = textEntry(new FormData(event.currentTarget), 'courierId');
-                  if (courierId) {
-                    action.mutate({
-                      run: () => adminDataClient.assignDelivery(delivery.data, courierId),
-                      success: t('admin.deliveryOps.deliveryAssigned'),
-                    });
-                  }
-                }}
-              >
-                <SelectField
-                  name="courierId"
-                  label={t('admin.deliveryOps.activeCourier')}
-                  disabled={!canAssign || action.isPending}
-                  required
-                >
-                  <option value="">—</option>
-                  {couriers.data?.map((courier) => (
-                    <option key={courier.id} value={courier.id}>
-                      {courier.code} · {courier.name}
-                    </option>
-                  ))}
-                </SelectField>
-                <Button
-                  type="submit"
-                  variant="admin"
-                  loading={action.isPending}
-                  disabled={!canAssign || action.isPending}
-                >
-                  {t('admin.deliveryOps.assign')}
-                </Button>
-              </form>
-              <form
-                className="admin-form-grid"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const form = new FormData(event.currentTarget);
-                  const target = textEntry(form, 'targetStatus');
-                  if (target) {
-                    action.mutate({
-                      run: () =>
-                        adminDataClient.transitionDelivery(
-                          delivery.data,
-                          target,
-                          optionalText(form, 'explanation'),
-                        ),
-                      success: t('admin.deliveryOps.deliveryTransitioned'),
-                    });
-                  }
-                }}
-              >
-                <SelectField
-                  name="targetStatus"
-                  label={t('admin.deliveryOps.operationalTransition')}
-                  disabled={!canUpdate || action.isPending}
-                  required
-                >
-                  <option value="">—</option>
-                  {operationalDeliveryTargets.map((status) => (
-                    <option key={status} value={status}>
-                      {t(`admin.deliveryOps.statuses.${status}`)}
-                    </option>
-                  ))}
-                </SelectField>
-                <FormField
-                  name="explanation"
-                  label={t('admin.deliveryOps.explanation')}
-                  maxLength={1000}
-                  disabled={!canUpdate || action.isPending}
-                />
-                <Button
-                  type="submit"
-                  variant="admin"
-                  loading={action.isPending}
-                  disabled={!canUpdate || action.isPending}
-                >
-                  {t('admin.deliveryOps.applyTransition')}
-                </Button>
-              </form>
-              <form
-                className="admin-form-grid"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const form = new FormData(event.currentTarget);
-                  const outcome = textEntry(form, 'outcome');
-                  if (outcome) {
-                    action.mutate({
-                      run: () =>
-                        adminDataClient.recordDeliveryAttempt(
-                          delivery.data,
-                          outcome,
-                          textEntry(form, 'explanation'),
-                        ),
-                      success: t('admin.deliveryOps.attemptRecorded'),
-                    });
-                  }
-                }}
-              >
-                <SelectField
-                  name="outcome"
-                  label={t('admin.deliveryOps.attemptOutcome')}
-                  disabled={!canUpdate || action.isPending}
-                  required
-                >
-                  {[
-                    'CUSTOMER_UNAVAILABLE',
-                    'ADDRESS_NOT_FOUND',
-                    'CUSTOMER_REFUSED',
-                    'FAILED_AGE_VERIFICATION',
-                    'PARTIAL_CASH_NOT_ALLOWED',
-                    'RESCHEDULED',
-                    'OTHER_FAILED',
-                  ].map((outcome) => (
-                    <option key={outcome} value={outcome}>
-                      {t(`admin.deliveryOps.outcomes.${outcome}`)}
-                    </option>
-                  ))}
-                </SelectField>
-                <FormField
-                  name="explanation"
-                  label={t('admin.deliveryOps.explanation')}
-                  maxLength={1000}
-                  disabled={!canUpdate || action.isPending}
-                />
-                <Button
-                  type="submit"
-                  variant="admin"
-                  loading={action.isPending}
-                  disabled={!canUpdate || action.isPending}
-                >
-                  {t('admin.deliveryOps.recordAttempt')}
-                </Button>
-              </form>
-              <Button
-                type="button"
-                variant="admin"
-                loading={action.isPending}
-                disabled={
-                  !canUpdateSensitive ||
-                  action.isPending ||
-                  (delivery.data.paymentStatus !== 'CASH_COLLECTED_BY_COURIER' &&
-                    delivery.data.paymentStatus !== 'CASH_COLLECTED_AT_STORE')
-                }
-                onClick={() =>
-                  action.mutate({
-                    run: () =>
-                      adminDataClient.completeDelivery(
-                        delivery.data,
-                        delivery.data.ageVerificationRequired ? 'PASSED' : 'NOT_REQUIRED',
-                      ),
-                    success: t('admin.deliveryOps.deliveryCompleted'),
-                  })
-                }
-              >
-                {t('admin.deliveryOps.completeDelivery')}
-              </Button>
-            </section>
-          ) : null}
-
-          <section className="admin-panel">
-            <h2>
-              <Users aria-hidden="true" size={18} /> {t('admin.deliveryOps.couriersTitle')}
-            </h2>
-            <p>{t('admin.deliveryOps.couriersBody')}</p>
-            <form ref={courierFormRef} className="admin-form-grid" onSubmit={createCourier}>
-              <FormField
-                name="code"
-                label={t('admin.deliveryOps.code')}
-                pattern="[A-Za-z0-9][A-Za-z0-9_-]+"
-                minLength={2}
-                maxLength={80}
-                disabled={!canUpdateSensitive || courierCreation.isPending}
-                error={
-                  courierCreation.error instanceof ApiError &&
-                  courierCreation.error.code === 'COURIER_CODE_CONFLICT'
-                    ? t('admin.deliveryOps.courierCodeConflict')
-                    : undefined
-                }
-                required
-              />
-              <FormField
-                name="name"
-                label={t('admin.deliveryOps.courierName')}
-                minLength={2}
-                maxLength={200}
-                disabled={!canUpdateSensitive || courierCreation.isPending}
-                required
-              />
-              <FormField
-                name="contactName"
-                label={t('admin.deliveryOps.contactName')}
-                maxLength={160}
-                disabled={!canUpdateSensitive || courierCreation.isPending}
-              />
-              <FormField
-                name="phoneE164"
-                label={t('admin.deliveryOps.phoneE164')}
-                placeholder="+21612345678"
-                pattern="\+[1-9][0-9]{7,14}"
-                disabled={!canUpdateSensitive || courierCreation.isPending}
-              />
-              <FormField
-                name="email"
-                type="email"
-                label={t('admin.deliveryOps.email')}
-                maxLength={320}
-                disabled={!canUpdateSensitive || courierCreation.isPending}
-              />
-              <FormField
-                name="notes"
-                label={t('admin.deliveryOps.notes')}
-                maxLength={1000}
-                disabled={!canUpdateSensitive || courierCreation.isPending}
-              />
-              <Button
-                type="submit"
-                variant="admin"
-                loading={courierCreation.isPending}
-                disabled={!canUpdateSensitive || courierCreation.isPending}
-              >
-                <Plus aria-hidden="true" size={17} /> {t('admin.deliveryOps.createCourier')}
-              </Button>
-            </form>
-            {courierFeedback ? (
-              <p className="form-banner form-banner--success" role="status" aria-live="polite">
-                {courierFeedback}
-              </p>
-            ) : null}
-            {courierCreation.error &&
-            !(
-              courierCreation.error instanceof ApiError &&
-              courierCreation.error.code === 'COURIER_CODE_CONFLICT'
-            ) ? (
-              <p className="form-banner form-banner--error" role="alert">
-                {courierCreation.error instanceof ApiError &&
-                courierCreation.error.code === 'RECENT_AUTHENTICATION_REQUIRED'
-                  ? t('admin.deliveryOps.recentAuthenticationRequired')
-                  : courierCreation.error.message}
-              </p>
-            ) : null}
-            {courierRecords.isPending ? (
-              <LoadingState label={t('common.loading')} tone="admin" />
-            ) : null}
-            {courierRecords.data?.items.length === 0 ? (
-              <EmptyState title={t('admin.deliveryOps.noCouriers')} />
-            ) : null}
-            {courierRecords.data?.items.map((courier) => {
-              const externallyManaged = courier.integrations.some(
-                (integration) => integration.type !== 'MANUAL',
-              );
-              const targets: AdminCourierStatus[] =
-                courier.status === 'ACTIVE'
-                  ? ['SUSPENDED', 'ARCHIVED']
-                  : courier.status === 'SUSPENDED'
-                    ? ['ACTIVE', 'ARCHIVED']
-                    : ['ACTIVE'];
-              return (
-                <article className="admin-panel" key={courier.id}>
-                  <h3>
-                    {courier.code} · {courier.name}
-                  </h3>
-                  <p>
-                    {t(`admin.deliveryOps.statuses.${courier.status}`)} ·{' '}
-                    {t('admin.deliveryOps.courierCounts', {
-                      deliveries: courier.deliveryCount,
-                      manifests: courier.manifestCount,
-                    })}
-                  </p>
-                  {courier.contactName || courier.phoneE164 || courier.email ? (
-                    <p>
-                      {[courier.contactName, courier.phoneE164, courier.email]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </p>
-                  ) : null}
-                  {courier.notes ? <p className="admin-courier-notes">{courier.notes}</p> : null}
-                  {externallyManaged ? <p>{t('admin.deliveryOps.externallyManaged')}</p> : null}
-                  <div className="admin-heading-actions">
-                    {targets.map((status) => (
-                      <Button
-                        type="button"
-                        variant={status === 'ARCHIVED' ? 'danger' : 'ghost'}
-                        key={status}
-                        loading={action.isPending}
-                        disabled={!canUpdateSensitive || externallyManaged || action.isPending}
-                        onClick={() =>
-                          action.mutate({
-                            run: () => adminDataClient.updateCourierStatus(courier, status),
-                            success: t('admin.deliveryOps.courierUpdated'),
-                          })
-                        }
-                      >
-                        {t(`admin.deliveryOps.courierActions.${status}`)}
-                      </Button>
-                    ))}
-                  </div>
-                </article>
-              );
-            })}
-          </section>
-
+          <AdminCourierWorkspace
+            zones={zoneItems}
+            canAssignSensitive={canAssignSensitive}
+            canUpdateSensitive={canUpdateSensitive}
+            selectedDeliveryIds={selectedDeliveryIds}
+            setSelectedDeliveryIds={setSelectedDeliveryIds}
+          />
           <section className="admin-panel">
             <h2>
               <ClipboardCheck aria-hidden="true" size={18} />{' '}

@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   AgeVerificationResult,
+  CourierAvailabilityStatus,
   CourierStatus,
   DeliveryAttemptOutcome,
   DeliveryStatus,
@@ -55,19 +56,24 @@ export class AssignDeliveryDto extends DeliveryVersionDto {
   @Length(1, 120)
   trackingNumber?: string;
 
-  @ApiPropertyOptional({ minimum: 0, maximum: 2_000_000_000 })
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(2_000_000_000)
-  courierFeeMillimes?: number;
-
   @ApiPropertyOptional({ maxLength: 1000 })
   @IsOptional()
   @IsString()
   @Length(1, 1000)
   @Matches(/\S/)
   note?: string;
+
+  @ApiPropertyOptional({
+    enum: ['COURIER_OUTSIDE_DELIVERY_ZONE', 'COURIER_CAPACITY_EXCEEDED'],
+    isArray: true,
+    maxItems: 2,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(2)
+  @ArrayUnique()
+  @IsIn(['COURIER_OUTSIDE_DELIVERY_ZONE', 'COURIER_CAPACITY_EXCEEDED'], { each: true })
+  acknowledgedWarnings?: CourierAssignmentWarning[];
 }
 
 export class ReassignDeliveryDto extends AssignDeliveryDto {
@@ -76,6 +82,48 @@ export class ReassignDeliveryDto extends AssignDeliveryDto {
   @Length(4, 1000)
   @Matches(/\S/)
   reason!: string;
+}
+
+export const COURIER_ASSIGNMENT_WARNINGS = [
+  'COURIER_OUTSIDE_DELIVERY_ZONE',
+  'COURIER_CAPACITY_EXCEEDED',
+] as const;
+
+export type CourierAssignmentWarning = (typeof COURIER_ASSIGNMENT_WARNINGS)[number];
+
+export class UnassignDeliveryDto extends DeliveryVersionDto {
+  @ApiProperty({ minLength: 4, maxLength: 1000 })
+  @IsString()
+  @Length(4, 1000)
+  @Matches(/\S/)
+  reason!: string;
+
+  @ApiProperty({ enum: ['UNASSIGN_COURIER'] })
+  @Equals('UNASSIGN_COURIER')
+  confirmation!: 'UNASSIGN_COURIER';
+}
+
+export class UpdateDeliveryInternalNotesDto extends DeliveryVersionDto {
+  @ApiPropertyOptional({ nullable: true, maxLength: 2000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  @Matches(/\S/)
+  internalNotes?: string | null;
+}
+
+export class RecordCourierWhatsAppContactDto extends DeliveryVersionDto {
+  @ApiProperty({ enum: ['RECORD_COURIER_WHATSAPP_CONTACT'] })
+  @Equals('RECORD_COURIER_WHATSAPP_CONTACT')
+  confirmation!: 'RECORD_COURIER_WHATSAPP_CONTACT';
+}
+
+export class CourierOptionsQueryDto {
+  @ApiPropertyOptional({ maxLength: 30 })
+  @IsOptional()
+  @IsString()
+  @Length(1, 30)
+  deliveryId?: string;
 }
 
 export class TransitionDeliveryDto extends DeliveryVersionDto {
@@ -148,9 +196,60 @@ export class AdminCourierOptionDto {
   name!: string;
 }
 
+export class AdminCourierAssignmentOptionDto extends AdminCourierOptionDto {
+  @ApiProperty({ enum: CourierAvailabilityStatus })
+  availabilityStatus!: CourierAvailabilityStatus;
+
+  @ApiProperty({ minimum: 0 })
+  activeDeliveryCount!: number;
+
+  @ApiPropertyOptional({ nullable: true, minimum: 1 })
+  maximumActiveDeliveries!: number | null;
+
+  @ApiProperty()
+  assignable!: boolean;
+
+  @ApiProperty({ description: 'True when an assignment may proceed only after warning review.' })
+  requiresWarningAcknowledgement!: boolean;
+
+  @ApiPropertyOptional({ nullable: true, enum: ['COURIER_OFF_DUTY'] })
+  unavailableReason!: 'COURIER_OFF_DUTY' | null;
+
+  @ApiProperty({
+    enum: COURIER_ASSIGNMENT_WARNINGS,
+    isArray: true,
+  })
+  warnings!: CourierAssignmentWarning[];
+}
+
 export class AdminCourierOptionsResponseDto {
-  @ApiProperty({ type: () => [AdminCourierOptionDto] })
-  data!: AdminCourierOptionDto[];
+  @ApiProperty({ type: () => [AdminCourierAssignmentOptionDto] })
+  data!: AdminCourierAssignmentOptionDto[];
+}
+
+export class AdminCourierWhatsAppPreviewDto {
+  @ApiProperty()
+  courierId!: string;
+
+  @ApiProperty()
+  courierName!: string;
+
+  @ApiProperty({ description: 'Normalized E.164 number selected for manual WhatsApp contact.' })
+  phoneE164!: string;
+
+  @ApiProperty()
+  renderedMessage!: string;
+
+  @ApiProperty({ example: 'https://wa.me/21620123456?text=...' })
+  url!: string;
+
+  @ApiProperty({ enum: [true] })
+  manualOnly!: true;
+}
+
+export class AdminCourierWhatsAppPreviewResponseDto {
+  @ApiProperty({ type: () => AdminCourierWhatsAppPreviewDto })
+  data!: AdminCourierWhatsAppPreviewDto;
 }
 
 export class AdminDeliveryAttemptDto {
@@ -303,6 +402,36 @@ export class ManualCourierListQueryDto {
   @IsOptional()
   @IsEnum(CourierStatus)
   status?: CourierStatus;
+
+  @ApiPropertyOptional({ enum: CourierAvailabilityStatus })
+  @IsOptional()
+  @IsEnum(CourierAvailabilityStatus)
+  availabilityStatus?: CourierAvailabilityStatus;
+
+  @ApiPropertyOptional({ maxLength: 80 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  q?: string;
+}
+
+export class CourierDeliveryZoneInputDto {
+  @ApiProperty({ maxLength: 30 })
+  @IsString()
+  @Length(1, 30)
+  deliveryZoneId!: string;
+
+  @ApiPropertyOptional({ default: true })
+  @IsOptional()
+  @IsBoolean()
+  active?: boolean;
+
+  @ApiPropertyOptional({ nullable: true, minimum: 0, maximum: 1_000_000 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(1_000_000)
+  feeMillimes?: number | null;
 }
 
 export class CreateManualCourierDto {
@@ -318,6 +447,18 @@ export class CreateManualCourierDto {
   @Matches(/\S/)
   name!: string;
 
+  @ApiPropertyOptional({ maxLength: 200 })
+  @IsOptional()
+  @IsString()
+  @Length(2, 200)
+  @Matches(/\S/)
+  companyName?: string;
+
+  @ApiPropertyOptional({ enum: CourierAvailabilityStatus, default: 'AVAILABLE' })
+  @IsOptional()
+  @IsEnum(CourierAvailabilityStatus)
+  availabilityStatus?: CourierAvailabilityStatus;
+
   @ApiPropertyOptional({ maxLength: 160 })
   @IsOptional()
   @IsString()
@@ -331,11 +472,47 @@ export class CreateManualCourierDto {
   @Matches(/^\+[1-9]\d{7,14}$/)
   phoneE164?: string;
 
+  @ApiPropertyOptional({ example: '+21620123456' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\+[1-9]\d{7,14}$/)
+  whatsappPhoneE164?: string;
+
   @ApiPropertyOptional({ maxLength: 320 })
   @IsOptional()
   @IsEmail()
   @MaxLength(320)
   email?: string;
+
+  @ApiPropertyOptional({ minimum: 0, maximum: 1_000_000 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(1_000_000)
+  defaultFeeMillimes?: number;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 10_000 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10_000)
+  maximumActiveDeliveries?: number;
+
+  @ApiPropertyOptional({ maxLength: 2000 })
+  @IsOptional()
+  @IsString()
+  @Length(1, 2000)
+  @Matches(/\S/)
+  whatsappTemplate?: string;
+
+  @ApiPropertyOptional({ type: () => [CourierDeliveryZoneInputDto], maxItems: 50 })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ArrayUnique((item: CourierDeliveryZoneInputDto) => item.deliveryZoneId)
+  @ValidateNested({ each: true })
+  @Type(() => CourierDeliveryZoneInputDto)
+  coverageZones?: CourierDeliveryZoneInputDto[];
 
   @ApiPropertyOptional({ maxLength: 1000 })
   @IsOptional()
@@ -368,6 +545,18 @@ export class UpdateManualCourierDto {
   @Matches(/\S/)
   name?: string;
 
+  @ApiPropertyOptional({ maxLength: 200, nullable: true })
+  @IsOptional()
+  @IsString()
+  @Length(2, 200)
+  @Matches(/\S/)
+  companyName?: string | null;
+
+  @ApiPropertyOptional({ enum: CourierAvailabilityStatus })
+  @IsOptional()
+  @IsEnum(CourierAvailabilityStatus)
+  availabilityStatus?: CourierAvailabilityStatus;
+
   @ApiPropertyOptional({ maxLength: 160, nullable: true })
   @IsOptional()
   @IsString()
@@ -381,11 +570,47 @@ export class UpdateManualCourierDto {
   @Matches(/^\+[1-9]\d{7,14}$/)
   phoneE164?: string | null;
 
+  @ApiPropertyOptional({ nullable: true, example: '+21620123456' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\+[1-9]\d{7,14}$/)
+  whatsappPhoneE164?: string | null;
+
   @ApiPropertyOptional({ maxLength: 320, nullable: true })
   @IsOptional()
   @IsEmail()
   @MaxLength(320)
   email?: string | null;
+
+  @ApiPropertyOptional({ nullable: true, minimum: 0, maximum: 1_000_000 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(1_000_000)
+  defaultFeeMillimes?: number | null;
+
+  @ApiPropertyOptional({ nullable: true, minimum: 1, maximum: 10_000 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10_000)
+  maximumActiveDeliveries?: number | null;
+
+  @ApiPropertyOptional({ nullable: true, maxLength: 2000 })
+  @IsOptional()
+  @IsString()
+  @Length(1, 2000)
+  @Matches(/\S/)
+  whatsappTemplate?: string | null;
+
+  @ApiPropertyOptional({ type: () => [CourierDeliveryZoneInputDto], maxItems: 50 })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ArrayUnique((item: CourierDeliveryZoneInputDto) => item.deliveryZoneId)
+  @ValidateNested({ each: true })
+  @Type(() => CourierDeliveryZoneInputDto)
+  coverageZones?: CourierDeliveryZoneInputDto[];
 
   @ApiPropertyOptional({ maxLength: 1000, nullable: true })
   @IsOptional()

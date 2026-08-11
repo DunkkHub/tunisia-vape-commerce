@@ -105,6 +105,23 @@ real customer or commercial data.
 Never commit a backup. Copy the artifact and manifest together to retention-protected storage and
 verify the reported checksum after transport. Logical dumps containing customer data are sensitive.
 
+## Scheduled backup job
+
+Run `pnpm backup:mysql` from a dedicated scheduler identity and immutable release image, not from an
+API or worker replica. The scheduler must inject only the backup URL, encryption-key version and
+key, destination, retention, TLS, and minimal operating-system variables documented above. Permit
+only one active execution per environment, set a bounded runtime, retain stdout as the non-secret
+job receipt, and alert on a nonzero exit, missing final manifest, stale latest successful manifest,
+or failed copy to retention-protected off-site storage. Treat the artifact and its matching manifest
+as one indivisible unit; a successful local write is not a successful off-site backup.
+
+Use the platform scheduler (for example, a protected Kubernetes CronJob, systemd timer, cloud job,
+or Windows Task Scheduler service account) rather than embedding a scheduler in the API. Run the
+logical job daily and before risky migrations, verify backup freshness continuously, and invoke the
+isolated `pnpm restore:drill` workflow monthly. Store the scheduler definition and alert routing in
+the operator-owned infrastructure repository and record each accepted drill in
+`PRODUCTION_READINESS_REPORT.md`.
+
 ## Isolated restore procedure
 
 1. Declare the restore point, reason, incident/change ID, recovery owner, and required UTC point.
@@ -137,7 +154,12 @@ operator-approved `RESTORE_MAX_PLAINTEXT_BYTES`, and materializes SQL only
 inside a mode-0700 temporary directory. It then proves the target database has zero tables. After
 import it checks the manifest and image migration versions, incomplete migrations, key table counts,
 known foreign-key orphans, nonnegative inventory, active-reservation coverage, order/line money
-equations, and nonnegative cash invariants. Temporary plaintext is removed in `finally`. A failed
+equations, and nonnegative cash invariants. The restored migration head must exactly match
+`EXPECTED_MIGRATION_NAME`; merely containing an older application migration is not sufficient.
+Advisory counts explicitly cover customer provider identities and password-reset tokens, product
+media, courier coverage, delivery attempts/history, COD remittance/discrepancy history, and
+notification attempts in addition to the core commerce tables. Temporary plaintext is removed in
+`finally`. A failed
 logical import can still leave a partially populated target because MySQL DDL is not globally
 transactional; discard and recreate that disposable database before retrying. Never import over the
 source or production database.

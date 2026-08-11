@@ -3,7 +3,6 @@ import {
   ArrowDown,
   ArrowUp,
   CheckCircle2,
-  ImagePlus,
   RefreshCw,
   ShieldCheck,
   Star,
@@ -18,18 +17,14 @@ import { ApiError } from '../../api/http';
 import type { AdminProductImage, AdminProductPublicationStatus } from '../../api/types';
 import { Button } from '../../components/ui/button';
 import { EmptyState, ErrorState, LoadingState } from '../../components/ui/feedback';
-import { CheckboxField, FormField, SelectField } from '../../components/ui/form-field';
+import { CheckboxField, FormField } from '../../components/ui/form-field';
 import { invalidatePublicProductCaches } from './admin-product-cache';
+import { AdminProductMediaReplacement } from './admin-product-media-replacement';
+import { AdminProductMediaUpload } from './admin-product-media-upload';
 
 const formText = (form: FormData, key: string): string => {
   const value = form.get(key);
   return typeof value === 'string' ? value.trim() : '';
-};
-
-const formFile = (form: HTMLFormElement, key: string): File | null => {
-  const control = form.elements.namedItem(key);
-  if (!(control instanceof HTMLInputElement) || control.type !== 'file') return null;
-  return control.files?.item(0) ?? null;
 };
 
 export function AdminProductMediaManager({
@@ -50,20 +45,13 @@ export function AdminProductMediaManager({
   const [reviewQueue, setReviewQueue] = useState(false);
   const [mediaReviewReason, setMediaReviewReason] = useState('');
   const [mediaReviewAcknowledged, setMediaReviewAcknowledged] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
   const [replacementProgress, setReplacementProgress] = useState<{
     imageId: string;
     percentage: number;
   } | null>(null);
-  useEffect(() => {
-    return () => {
-      if (previewUrl && typeof URL.revokeObjectURL === 'function') {
-        URL.revokeObjectURL(previewUrl);
-      }
-    };
-  }, [previewUrl]);
+  const [replacementTargetId, setReplacementTargetId] = useState<string | null>(null);
+  const [replacementResetToken, setReplacementResetToken] = useState(0);
   const images = useQuery({
     queryKey: ['admin', 'product', productId, 'images', page, reviewQueue],
     queryFn: () => adminDataClient.productImages(productId, page, 50, reviewQueue),
@@ -90,24 +78,6 @@ export function AdminProductMediaManager({
     const timeout = window.setTimeout(() => setPage(totalPages), 0);
     return () => window.clearTimeout(timeout);
   }, [images.data?.totalPages, page]);
-  const upload = useMutation({
-    mutationFn: (input: {
-      file: File;
-      expectedOwnerVersion: number;
-      variantId?: string;
-      altTextFr: string;
-      altTextAr: string;
-      isPrimary: boolean;
-    }) => adminDataClient.uploadProductImage(productId, input, setUploadProgress),
-    onSuccess: async () => {
-      setMessage(t('admin.media.uploaded'));
-      await refresh();
-      setSelectedFile(null);
-      setPreviewUrl(null);
-      setUploadProgress(null);
-    },
-    onError: () => setUploadProgress(null),
-  });
   const metadata = useMutation({
     mutationFn: ({
       image,
@@ -132,6 +102,8 @@ export function AdminProductMediaManager({
       setMessage(t('admin.media.replaced'));
       await refresh();
       setReplacementProgress(null);
+      setReplacementTargetId(null);
+      setReplacementResetToken((current) => current + 1);
     },
     onError: () => setReplacementProgress(null),
   });
@@ -157,7 +129,7 @@ export function AdminProductMediaManager({
         const target = kind === 'up' ? index - 1 : index + 1;
         if (index < 0 || target < 0 || target >= ownerImages.length) {
           return {
-            imageIds: ownerImages.map(({ id }) => id),
+            items: ownerImages,
             ownerVersion: image.ownerVersion,
           };
         }
@@ -201,33 +173,6 @@ export function AdminProductMediaManager({
       await refresh();
     },
   });
-  const submitUpload = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setMessage(null);
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const file = formFile(formElement, 'file');
-    const variantId = formText(form, 'variantId');
-    if (!file) return;
-    const ownerVersion = variantId
-      ? variants.data?.items.find((variant) => variant.id === variantId)?.version
-      : productVersion;
-    if (!ownerVersion) return;
-    setUploadProgress(0);
-    try {
-      await upload.mutateAsync({
-        file,
-        expectedOwnerVersion: ownerVersion,
-        ...(variantId ? { variantId } : {}),
-        altTextFr: formText(form, 'altTextFr'),
-        altTextAr: formText(form, 'altTextAr'),
-        isPrimary: form.get('isPrimary') === 'on',
-      });
-      formElement.reset();
-    } catch {
-      // React Query exposes the safe server error below the form.
-    }
-  };
   const submitMetadata = (image: AdminProductImage, event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -237,25 +182,21 @@ export function AdminProductMediaManager({
       altTextAr: formText(form, 'altTextAr'),
     });
   };
-  const submitReplacement = (image: AdminProductImage, event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const file = formFile(event.currentTarget, 'file');
-    if (file) {
-      setReplacementProgress({ imageId: image.id, percentage: 0 });
-      replace.mutate({ image, file });
-    }
+  const submitReplacement = (image: AdminProductImage, file: File) => {
+    setReplacementTargetId(image.id);
+    setReplacementProgress({ imageId: image.id, percentage: 0 });
+    replace.mutate({ image, file });
   };
   const error =
     images.error ??
     variants.error ??
-    upload.error ??
     metadata.error ??
     replace.error ??
     action.error ??
     review.error ??
     completeMediaReview.error;
   const mediaMutationPending =
-    upload.isPending ||
+    uploadBusy ||
     metadata.isPending ||
     replace.isPending ||
     action.isPending ||
@@ -338,82 +279,18 @@ export function AdminProductMediaManager({
         </form>
       ) : null}
 
-      <form className="admin-media-upload" onSubmit={(event) => void submitUpload(event)}>
-        <div className="admin-form-grid">
-          <div className="field">
-            <label htmlFor="product-image-file">{t('admin.media.file')}</label>
-            <input
-              id="product-image-file"
-              name="file"
-              type="file"
-              accept="image/jpeg,image/png,image/webp,image/avif"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.item(0) ?? null;
-                setSelectedFile(file);
-                setPreviewUrl(
-                  file && typeof URL.createObjectURL === 'function'
-                    ? URL.createObjectURL(file)
-                    : null,
-                );
-                setUploadProgress(null);
-                setMessage(null);
-              }}
-              required
-            />
-            <small>{t('admin.media.allowedTypes')}</small>
-          </div>
-          <SelectField name="variantId" label={t('admin.media.owner')}>
-            <option value="">{t('admin.media.productOwner')}</option>
-            {variants.data?.items
-              .filter((variant) => !variant.archivedAt)
-              .map((variant) => (
-                <option key={variant.id} value={variant.id}>
-                  {variant.nameFr} · {variant.sku}
-                </option>
-              ))}
-          </SelectField>
-          <FormField name="altTextFr" label={t('admin.media.altFr')} maxLength={300} required />
-          <FormField
-            name="altTextAr"
-            label={t('admin.media.altAr')}
-            maxLength={300}
-            dir="rtl"
-            required
-          />
-        </div>
-        {selectedFile && previewUrl ? (
-          <figure className="admin-media-preview">
-            <img src={previewUrl} alt={t('admin.media.previewAlt')} />
-            <figcaption>
-              <strong>{selectedFile.name}</strong>
-              <span>
-                {selectedFile.type || t('admin.media.unknownType')} ·{' '}
-                {Math.ceil(selectedFile.size / 1024)} KB
-              </span>
-            </figcaption>
-          </figure>
-        ) : null}
-        <CheckboxField name="isPrimary" label={t('admin.media.makePrimary')} />
-        <Button
-          type="submit"
-          variant="admin"
-          loading={upload.isPending}
-          disabled={mediaMutationPending}
-        >
-          <ImagePlus aria-hidden="true" size={17} />
-          {t('admin.media.upload')}
-        </Button>
-        {upload.isPending && uploadProgress !== null ? (
-          <div className="admin-media-progress" aria-live="polite">
-            <span>{t('admin.media.uploadProgress', { percent: uploadProgress })}</span>
-            <progress
-              aria-label={t('admin.media.uploadProgressLabel')}
-              max={100}
-              value={uploadProgress}
-            />
-          </div>
-        ) : null}
-      </form>
+      <AdminProductMediaUpload
+        productId={productId}
+        productVersion={productVersion}
+        variants={variants.data?.items ?? []}
+        disabled={mediaMutationPending && !uploadBusy}
+        onBusyChange={setUploadBusy}
+        onRefresh={refresh}
+        onUploaded={async (successMessage) => {
+          setMessage(successMessage);
+          await refresh();
+        }}
+      />
 
       <label className="admin-media-review-filter">
         <input
@@ -517,41 +394,19 @@ export function AdminProductMediaManager({
                 </Button>
               </form>
               {image.moderationStatus === 'APPROVED' ? (
-                <form
-                  className="admin-media-replace"
-                  onSubmit={(event) => submitReplacement(image, event)}
-                >
-                  <label htmlFor={`replace-${image.id}`}>{t('admin.media.replace')}</label>
-                  <input
-                    id={`replace-${image.id}`}
-                    name="file"
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/avif"
-                    required
-                  />
-                  <Button
-                    type="submit"
-                    variant="ghost"
-                    loading={replace.isPending && replacementProgress?.imageId === image.id}
-                    disabled={mediaMutationPending}
-                  >
-                    {t('admin.media.replace')}
-                  </Button>
-                  {replace.isPending && replacementProgress?.imageId === image.id ? (
-                    <div className="admin-media-progress" aria-live="polite">
-                      <span>
-                        {t('admin.media.replaceProgress', {
-                          percent: replacementProgress.percentage,
-                        })}
-                      </span>
-                      <progress
-                        aria-label={t('admin.media.replaceProgressLabel')}
-                        max={100}
-                        value={replacementProgress.percentage}
-                      />
-                    </div>
-                  ) : null}
-                </form>
+                <AdminProductMediaReplacement
+                  imageId={image.id}
+                  disabled={mediaMutationPending && replacementTargetId !== image.id}
+                  pending={replace.isPending && replacementTargetId === image.id}
+                  progress={
+                    replacementProgress?.imageId === image.id
+                      ? replacementProgress.percentage
+                      : null
+                  }
+                  failed={replace.isError && replacementTargetId === image.id}
+                  resetToken={replacementResetToken}
+                  onReplace={(file) => submitReplacement(image, file)}
+                />
               ) : null}
               <div className="admin-row-actions">
                 {image.moderationStatus === 'APPROVED' && !reviewQueue ? (

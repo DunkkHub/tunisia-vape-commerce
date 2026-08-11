@@ -44,6 +44,7 @@ import {
   ProductMediaListQueryDto,
   ProductMediaProductParamDto,
   PublicMediaHashParamDto,
+  PublicMediaRenditionParamDto,
   ReorderProductImagesDto,
   ReorderProductImagesResponseDto,
   ReplaceProductImageDto,
@@ -53,8 +54,17 @@ import {
 } from './dto/product-media.dto';
 import { ProductMediaService, type ProductMediaMutationContext } from './product-media.service';
 import type { UploadedProductImage } from './product-image-validator.service';
+import { ProductMediaUploadGateInterceptor } from './product-media-upload-gate.interceptor';
 
-const ABSOLUTE_MULTIPART_LIMIT_BYTES = 25 * 1_024 * 1_024;
+const acceptsWebp = (header: string | undefined): boolean =>
+  (header ?? '').split(',').some((entry) => {
+    const [mediaType, ...parameters] = entry.split(';').map((value) => value.trim().toLowerCase());
+    if (mediaType !== 'image/webp') return false;
+    const quality = parameters.find((parameter) => parameter.startsWith('q='));
+    if (!quality) return true;
+    const value = Number(quality.slice(2));
+    return Number.isFinite(value) && value > 0;
+  });
 
 const mutationContext = (request: Request): ProductMediaMutationContext => {
   const userAgent = request.get('user-agent');
@@ -121,9 +131,7 @@ export class AdminProductMediaController {
   @Post()
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('products.update')
-  @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: ABSOLUTE_MULTIPART_LIMIT_BYTES } }),
-  )
+  @UseInterceptors(ProductMediaUploadGateInterceptor, FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
   @ApiBody(multipartSchema(false))
   @ApiOperation({ summary: 'Validate, sanitize, and upload an approved product or variant image' })
@@ -189,9 +197,7 @@ export class AdminProductMediaController {
   @Post(':imageId/replace')
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('products.update')
-  @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: ABSOLUTE_MULTIPART_LIMIT_BYTES } }),
-  )
+  @UseInterceptors(ProductMediaUploadGateInterceptor, FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
   @ApiBody(multipartSchema(true))
   @ApiOperation({ summary: 'Replace image bytes while preserving ordered metadata and history' })
@@ -254,6 +260,29 @@ export class AdminProductMediaController {
 @Throttle({ default: { limit: 240, ttl: 60_000 } })
 export class PublicProductMediaController {
   constructor(private readonly media: ProductMediaService) {}
+
+  @Get(':objectKeyHash/:rendition/:profileVersion')
+  @ApiOperation({ summary: 'Read an optimized immutable storefront image rendition' })
+  @ApiProduces('image/webp', 'image/jpeg')
+  async getRendition(
+    @Param() parameters: PublicMediaRenditionParamDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const image = await this.media.readPublicRendition(
+      parameters.objectKeyHash,
+      parameters.rendition,
+      acceptsWebp(request.get('accept')) ? 'webp' : 'jpeg',
+      parameters.profileVersion,
+    );
+    response.setHeader('Content-Type', image.contentType);
+    response.setHeader('Content-Length', String(image.byteSize));
+    response.setHeader('Cache-Control', 'private, max-age=86400, immutable');
+    response.setHeader('Content-Disposition', 'inline');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Vary', 'Accept');
+    return new StreamableFile(image.bytes);
+  }
 
   @Get(':objectKeyHash')
   @ApiOperation({ summary: 'Read one approved image belonging to a currently public product' })

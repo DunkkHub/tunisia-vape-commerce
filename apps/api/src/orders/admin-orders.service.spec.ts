@@ -300,6 +300,22 @@ describe('administrator order intake service', () => {
       data: { status: 'VOIDED' },
     });
     expect(inventoryUpdate).not.toHaveBeenCalled();
-    expect(transaction.stockMovement.create).not.toHaveBeenCalled();
+    expect(transaction.stockMovement.create).toHaveBeenCalledOnce();
+    expect(transaction.stockMovement.create).toHaveBeenCalledWith({
+      data: {
+        inventoryItemId: 'inventory-id',
+        locationId: 'location-id',
+        batchId: null,
+        type: 'RESERVATION_RELEASE',
+        quantityDelta: 0,
+        onHandAfter: 5,
+        referenceType: 'Order',
+        referenceId: 'order-id',
+        reasonCode: 'ADMIN_CANCELLED',
+        note: 'Customer requested cancellation.',
+        actorUserId: 'admin-id',
+        requestId: 'request-id',
+      },
+    });
   });
 });

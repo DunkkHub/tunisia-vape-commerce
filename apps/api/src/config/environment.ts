@@ -15,6 +15,9 @@ const optionalBooleanFromEnvironment = z
 const hasUnsafeProductionPlaceholder = (value: string): boolean =>
   /(?:change[_-]?me|development[-_]?only|replace(?:[_-]?with)?|placeholder)/i.test(value);
 
+const emptyStringToUndefined = (value: unknown): unknown =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
+
 const browserOrigin = z.url().refine((value) => {
   const url = new URL(value);
   return (
@@ -70,7 +73,7 @@ const environmentSchema = z
       .min(1)
       .max(200)
       .regex(/^\d{14}_[a-z0-9_]+$/)
-      .default('20260727090000_delivery_zone_operational_metadata'),
+      .default('20260811170000_product_image_renditions'),
     COOKIE_SECRET: z.string().default('development-only-cookie-secret-change-me'),
     FIELD_ENCRYPTION_KEY: z.string().default('development-only-field-key-change-me'),
     CHECKOUT_ENABLED: booleanFromEnvironment('true'),
@@ -84,6 +87,18 @@ const environmentSchema = z
     ADMIN_RECENT_AUTH_MINUTES: z.coerce.number().int().min(1).max(30).default(10),
     CUSTOMER_SESSION_IDLE_MINUTES: z.coerce.number().int().min(30).max(43_200).default(10_080),
     CUSTOMER_SESSION_ABSOLUTE_MINUTES: z.coerce.number().int().min(60).max(129_600).default(43_200),
+    PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(60).default(30),
+    GOOGLE_OAUTH_ENABLED: booleanFromEnvironment('false'),
+    GOOGLE_CLIENT_ID: z.preprocess(
+      emptyStringToUndefined,
+      z.string().trim().min(20).max(512).optional(),
+    ),
+    GOOGLE_CLIENT_SECRET: z.preprocess(
+      emptyStringToUndefined,
+      z.string().trim().min(16).max(2_048).optional(),
+    ),
+    GOOGLE_CALLBACK_URL: z.preprocess(emptyStringToUndefined, z.url().optional()),
+    GOOGLE_OAUTH_STATE_TTL_SECONDS: z.coerce.number().int().min(180).max(900).default(300),
     ADMIN_IP_ALLOWLIST: z.string().optional(),
     MEDIA_STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
     MEDIA_LOCAL_ROOT: z
@@ -119,6 +134,74 @@ const environmentSchema = z
         path: environment.S3_ACCESS_KEY ? ['S3_SECRET_KEY'] : ['S3_ACCESS_KEY'],
         message: 'S3 access and secret keys must be configured together',
       });
+    }
+
+    if (environment.GOOGLE_OAUTH_ENABLED) {
+      for (const name of [
+        'GOOGLE_CLIENT_ID',
+        'GOOGLE_CLIENT_SECRET',
+        'GOOGLE_CALLBACK_URL',
+      ] as const) {
+        if (!environment[name]) {
+          context.addIssue({
+            code: 'custom',
+            path: [name],
+            message: `${name} is required when Google OAuth is enabled`,
+          });
+        }
+      }
+      if (
+        environment.GOOGLE_CLIENT_ID &&
+        (!environment.GOOGLE_CLIENT_ID.endsWith('.apps.googleusercontent.com') ||
+          hasUnsafeProductionPlaceholder(environment.GOOGLE_CLIENT_ID))
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['GOOGLE_CLIENT_ID'],
+          message: 'GOOGLE_CLIENT_ID must be a non-placeholder Google web client ID',
+        });
+      }
+      if (
+        environment.GOOGLE_CLIENT_SECRET &&
+        hasUnsafeProductionPlaceholder(environment.GOOGLE_CLIENT_SECRET)
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['GOOGLE_CLIENT_SECRET'],
+          message: 'GOOGLE_CLIENT_SECRET contains an unsafe placeholder',
+        });
+      }
+      if (environment.GOOGLE_CALLBACK_URL) {
+        const callback = new URL(environment.GOOGLE_CALLBACK_URL);
+        if (
+          callback.username ||
+          callback.password ||
+          callback.pathname !== '/api/v1/auth/customer/google/callback' ||
+          callback.search ||
+          callback.hash
+        ) {
+          context.addIssue({
+            code: 'custom',
+            path: ['GOOGLE_CALLBACK_URL'],
+            message:
+              'GOOGLE_CALLBACK_URL must use the exact customer callback path without credentials, query, or fragment',
+          });
+        }
+        if (callback.origin !== new URL(environment.WEB_URL).origin) {
+          context.addIssue({
+            code: 'custom',
+            path: ['GOOGLE_CALLBACK_URL'],
+            message: 'GOOGLE_CALLBACK_URL must use the storefront origin',
+          });
+        }
+        if (environment.NODE_ENV === 'production' && callback.protocol !== 'https:') {
+          context.addIssue({
+            code: 'custom',
+            path: ['GOOGLE_CALLBACK_URL'],
+            message: 'Production GOOGLE_CALLBACK_URL must use HTTPS',
+          });
+        }
+      }
     }
     if (environment.NODE_ENV !== 'production') return;
 

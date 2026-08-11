@@ -39,13 +39,20 @@ export function ProductCard({
       >
         {product.primaryImage ? (
           <img
-            src={product.primaryImage.url}
+            src={product.primaryImage.renditions?.card ?? product.primaryImage.url}
+            srcSet={
+              product.primaryImage.renditions
+                ? `${product.primaryImage.renditions.thumbnail} 160w, ${product.primaryImage.renditions.card} 720w, ${product.primaryImage.renditions.detail} 1200w`
+                : undefined
+            }
+            sizes="(max-width: 640px) 92vw, (max-width: 1100px) 44vw, 320px"
             alt={
               product.primaryImage.altText ?? t('product.imageAltFallback', { name: product.name })
             }
             width={product.primaryImage.width ?? 720}
             height={product.primaryImage.height ?? 720}
             loading="lazy"
+            decoding="async"
           />
         ) : (
           <span className="product-card__placeholder" aria-hidden="true">

@@ -28,6 +28,8 @@ Product media uses `MEDIA_STORAGE_DRIVER=s3` in the production Compose baseline.
 
 `CATALOG_IMPORT_MEDIA_HOSTS` is an optional comma-separated list of exact DNS hostnames permitted for administrator CSV/JSON image URLs. Leave it empty to disable generic remote-media downloads. Do not enter schemes, paths, wildcard domains, IP literals, user information, or secret query parameters. The API still requires HTTPS, public DNS resolution, redirect revalidation, bounded bodies and full product-image validation. These records remain operator-supplied, non-public, and pending until an administrator explicitly approves or rejects each image. Media execution is limited to 30 candidate images per product, 150 per batch, and three active product groups under renewable batch/global Redis leases. Its two attempts, two redirects per attempt, 10-second request timeout, and five-second maximum synchronous retry delay give a conservative 5,200-second remote-fetch scheduling bound. The supplied Nginx gateway scopes a 7,200-second read timeout to `/api/v1/admin/catalog/imports/:id/media/apply`; all ordinary API routes retain the 30-second limit. Because an object store and MySQL cannot share a transaction, configure bucket versioning, incomplete-upload lifecycle cleanup, inventory, and monitored reconciliation for the narrow upload-before-commit crash window.
 
+Customer Google sign-in is disabled by default. Create a Google OAuth client of type Web application, register only the exact storefront callback `https://<storefront-host>/api/v1/auth/customer/google/callback`, and keep the administrator host absent from its redirect list. Inject `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_CALLBACK_URL` from the secret manager, then set `GOOGLE_OAUTH_ENABLED=true`; startup rejects a partial tuple, placeholder client ID/secret, a callback with credentials/query/fragment, a callback outside the storefront origin, or non-HTTPS production callback. The flow requests only `openid email profile`, uses no offline access, and stores no provider token. Follow Googleâ€™s [web-server OAuth guidance](https://developers.google.com/identity/protocols/oauth2/web-server) for console setup and credential rotation, but keep this repositoryâ€™s stricter exact callback and realm separation.
+
 The API and worker must validate configuration before listening. Production API startup fails for missing/short secrets, placeholder/default credentials, missing/non-HTTPS/same browser origins, origin/edge-host mismatches, wildcard credentialed CORS, insecure cookies, debug/auth bypass, unsafe database credentials, realm cookie/session-prefix collision, or a demonstration administrator.
 
 Interactive Swagger/OpenAPI UI is enabled by default only in development/test. Production leaves it absent unless an operator deliberately sets the strictly validated `OPENAPI_ENABLED=true`; when enabled, route it only through the protected admin host and an additional operator access control. The storefront Nginx virtual host always returns 404 for `/api/docs`, `/api/docs-json`, `/api/docs-yaml`, and related UI assets. Do not enable it as a substitute for a generated CI contract artifact.
@@ -43,6 +45,13 @@ Required secret classes include database runtime/migration credentials, Redis cr
 5. Promote the exact digest between environments; do not rebuild for production.
 6. A protected GitHub environment requires a human approver and provides only environment-scoped credentials.
 
+The security workflow keeps API, worker, and web scan results in distinct SARIF categories. A
+HIGH/CRITICAL fixed vulnerability remains a failing gate; the SARIF upload still runs when Trivy
+produces a report. If image construction fails before scanning, SARIF upload and SBOM generation are
+skipped instead of replacing the primary build error with missing-file or missing-image failures.
+Controlled-staging dispatch evidence is passed to its shell step only through environment variables,
+never by interpolating operator-supplied text into the script body.
+
 Pin base images and CI actions to reviewed versions/digests in a release hardening change. Rebuild promptly for patched base images.
 
 ## Database changes
@@ -56,7 +65,7 @@ Use expand-contract migrations:
 
 Before a risky migration, create and verify a fresh encrypted backup or snapshot. Rehearse against a production-like clone. A dedicated migration job using `DATABASE_MIGRATION_URL` runs `pnpm prisma:migrate:deploy` once; API replicas do not run development migrations or seed on startup.
 
-The current expected migration is `20260727090000_delivery_zone_operational_metadata`. It adds bounded minute-based delivery estimates and operational delivery-zone metadata while constraining persisted delivery fees to integer millimes. The preceding catalog migrations add import/provenance structures, represent unknown imported supplier cost as `NULL`, and keep operator-supplied source URLs explicitly unverified while retaining verified timestamps for official Wotofo sources. The earlier `20260720010000_configurable_checkout_consent` migration makes `Order.ageConfirmedAt` nullable so an operator-disabled checkout self-attestation does not require a fabricated timestamp. Rehearse both an empty-database deploy and a representative existing-data upgrade containing existing catalog/media records before promotion.
+The current expected migration is `20260811170000_product_image_renditions`. It adds the keyed size, SHA-256, dimensions, and profile version for immutable storefront renditions without rewriting stored image bytes. Existing approved images converge through a bounded first-read backfill that verifies the original and all eight generated objects before recording metadata. The preceding migrations link collection-level discrepancies to exact cash collections and add non-destructive manual-courier operations. Rehearse both an empty-database deploy and a representative existing-data upgrade containing media backfill, fail-closed discrepancy fixtures, existing customers, orders, inventory, delivery/COD, courier, and catalog/media records before promotion.
 
 Prisma rollback is usually a forward corrective migration. If an application rollback is needed, confirm its older version remains schema-compatible. Never run migrate reset or destructive development commands outside disposable local databases.
 
@@ -111,6 +120,12 @@ placeholder defaults; maps `DATABASE_MIGRATION_URL` explicitly into the migratio
 `DATABASE_URL`; adds authenticated Redis configuration from a mounted secret; switches API health
 to readiness; checks worker heartbeat age; and adds bounded graceful-stop periods. Base resource
 limits are starting guidance only and must be load-tested on the selected platform.
+
+The local MinIO, MinIO initialization, and Mailpit services are assigned to the disabled-by-default
+`local-dependencies` profile in this overlay. Production API and worker services depend only on the
+migration job and authenticated Redis and use the required external S3 and SMTP settings. Do not
+enable that profile in a real deployment or substitute its development credentials for managed
+object storage and email-provider credentials.
 
 Run `pnpm verify:db-privileges` with the runtime `DATABASE_URL` after database provisioning. It
 performs a randomized, cleaned-up DDL probe and succeeds only when MySQL denies `CREATE` with the

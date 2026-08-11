@@ -122,7 +122,7 @@ describe('AdminCommerceReadsService', () => {
     );
   });
 
-  it('localizes delivery zones and uses the order number before tracking assignment', async () => {
+  it('applies exact courier/status filters, localizes zones, and falls back to the order number', async () => {
     const findMany = vi.fn().mockResolvedValue([
       {
         id: 'delivery-1',
@@ -141,7 +141,15 @@ describe('AdminCommerceReadsService', () => {
     } as unknown as PrismaService;
     const service = new AdminCommerceReadsService(prisma);
 
-    const result = await service.listDeliveries({ page: 1, limit: 20 }, 'ar');
+    const result = await service.listDeliveries(
+      {
+        page: 1,
+        limit: 20,
+        courierId: 'courier-1',
+        status: 'ASSIGNED_TO_COURIER',
+      },
+      'ar',
+    );
 
     expect(result.data.items).toEqual([
       {
@@ -152,6 +160,14 @@ describe('AdminCommerceReadsService', () => {
         status: 'ASSIGNED_TO_COURIER',
       },
     ]);
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          courierId: 'courier-1',
+          status: 'ASSIGNED_TO_COURIER',
+        },
+      }),
+    );
   });
 
   it('aggregates expected allocations without loading unbounded ledger items', async () => {

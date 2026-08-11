@@ -50,6 +50,17 @@ corepack pnpm dev
 
 Run `admin:create` interactively once. It creates no default password, refuses when an administrator already exists, and requires TOTP enrollment at first login.
 
+Google customer login is optional and remains hidden with `GOOGLE_OAUTH_ENABLED=false`. For a local provider test, create a Google Web application client, register the exact callback for the origin you actually open (for example `http://localhost:8080/api/v1/auth/customer/google/callback` for full Compose), and set all four values before starting the API:
+
+```powershell
+$env:GOOGLE_OAUTH_ENABLED = 'true'
+$env:GOOGLE_CLIENT_ID = '<local-web-client>.apps.googleusercontent.com'
+$env:GOOGLE_CLIENT_SECRET = '<local-secret>'
+$env:GOOGLE_CALLBACK_URL = 'http://localhost:8080/api/v1/auth/customer/google/callback'
+```
+
+`GOOGLE_CALLBACK_URL` must share the exact `WEB_URL` origin. Never register `/admin`, expose the secret through `VITE_*`, or commit a populated value. Leaving the feature disabled requires no Google credential and does not affect password login.
+
 ## Option B: Windows without Docker
 
 Install and start:
@@ -111,7 +122,7 @@ URL before applying migrations.
 
 ## Migration state
 
-The latest expected migration is `20260727090000_delivery_zone_operational_metadata`. It adds bounded minute-based delivery estimates and operational delivery-zone metadata while constraining persisted delivery fees to integer millimes. The catalog migrations add reviewed import receipts, flavor/source provenance, product readiness flags, exact image ownership constraints, nullable unknown supplier cost, and an explicit distinction between verified official sources and unverified operator URLs. The earlier `20260720010000_configurable_checkout_consent` migration makes `Order.ageConfirmedAt` nullable when `age_gate.checkout.enabled=false`. None of these migrations creates or requires legal documents, users, products, prices, stock, delivery zones, or delivery rates.
+The latest expected migration is `20260811170000_product_image_renditions`. It records immutable versioned rendition checksums, sizes, and dimensions; existing image bytes are not rewritten and legacy approved images are backfilled on a bounded verified first read. The preceding migrations link collection-level COD discrepancies to exact collections and add optional manual-courier operations without changing customer delivery prices. The earlier identity migration adds customer-only provider binding without creating users, credentials, or an administrator or weakening administrator password-plus-TOTP authentication.
 
 For controlled staging or production, set `DATABASE_URL` to the least-privilege runtime identity and apply migrations only with the migration identity:
 

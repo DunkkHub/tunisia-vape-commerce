@@ -5,6 +5,9 @@ import { AuthEventService } from './auth-event.service';
 import { CustomerAuthController } from './customer-auth.controller';
 import { CustomerAuthService } from './customer-auth.service';
 import { DistributedAuthThrottleService } from './distributed-auth-throttle.service';
+import { GoogleCustomerAuthService } from './google-customer-auth.service';
+import { GoogleIdentityProvider } from './google-identity.provider';
+import { GoogleOAuthStateService } from './google-oauth-state.service';
 import { AdminSessionGuard } from './guards/admin-session.guard';
 import { CsrfGuard } from './guards/csrf.guard';
 import { CustomerSessionGuard } from './guards/customer-session.guard';
@@ -22,6 +25,9 @@ import { CryptoService } from '../common/security/crypto.service';
     AuthEventService,
     SessionService,
     CustomerAuthService,
+    GoogleIdentityProvider,
+    GoogleOAuthStateService,
+    GoogleCustomerAuthService,
     DistributedAuthThrottleService,
     AdminAuthService,
     CustomerSessionGuard,

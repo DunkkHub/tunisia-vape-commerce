@@ -56,6 +56,7 @@ export interface StorefrontStatus {
   maintenanceMode: boolean;
   prelaunchMode: boolean;
   checkoutEnabled: boolean;
+  googleLoginEnabled: boolean;
   minimumAge: number;
   ageGateEnabled: boolean;
   checkoutAgeConfirmationRequired: boolean;
@@ -122,9 +123,17 @@ export interface CatalogFacets {
 export interface ProductImage {
   id: string;
   url: string;
+  renditions?: ProductImageRenditions;
   altText: string | null;
   width?: number;
   height?: number;
+}
+
+export interface ProductImageRenditions {
+  thumbnail: string;
+  card: string;
+  detail: string;
+  highResolution: string;
 }
 
 export interface ProductVariant {
@@ -887,6 +896,9 @@ export interface AdminCashCollection {
   paymentStatus: string;
   expectedMillimes: number;
   collectedMillimes: number;
+  accountableMillimes: number | null;
+  adjustmentMillimes: number | null;
+  discrepancyStatus: 'OPEN' | 'INVESTIGATING' | 'RESOLVED' | 'WRITTEN_OFF' | null;
   collectedAt: string | null;
   createdAt: string;
 }
@@ -898,6 +910,13 @@ export interface AdminCashCollectionDetail extends AdminCashCollection {
   deliveryId: string | null;
   delivery: { id?: string; version?: number } | null;
   courierId: string | null;
+  collectedByUserId: string | null;
+  method: string;
+  note: string | null;
+  allocations: Array<Record<string, unknown>>;
+  discrepancies: AdminCashDiscrepancy[];
+  historyTruncated: boolean;
+  updatedAt: string;
 }
 
 export interface AdminCashRemittance {
@@ -913,12 +932,13 @@ export interface AdminCashRemittance {
 
 export interface AdminCashDiscrepancy {
   id: string;
-  status: 'OPEN' | 'RESOLVED' | 'WRITTEN_OFF';
+  cashCollectionId?: string | null;
+  status: 'OPEN' | 'INVESTIGATING' | 'RESOLVED' | 'WRITTEN_OFF';
   expectedMillimes: number;
   actualMillimes: number;
   differenceMillimes: number;
-  reasonCode: string;
-  reasonDetail: string;
+  reasonCode: string | null;
+  reasonDetail: string | null;
   openedByUserId: string;
   resolvedByUserId: string | null;
   openedAt: string;
@@ -946,17 +966,65 @@ export interface AdminCourierOption {
 
 export type AdminCourierStatus = 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED';
 
+export type AdminCourierAvailabilityStatus = 'AVAILABLE' | 'OFF_DUTY';
+
+export type AdminCourierAssignmentWarning =
+  'COURIER_OUTSIDE_DELIVERY_ZONE' | 'COURIER_CAPACITY_EXCEEDED';
+
+export interface AdminCourierAssignmentOption extends AdminCourierOption {
+  availabilityStatus: AdminCourierAvailabilityStatus;
+  activeDeliveryCount: number;
+  maximumActiveDeliveries: number | null;
+  assignable: boolean;
+  requiresWarningAcknowledgement: boolean;
+  unavailableReason: 'COURIER_OFF_DUTY' | null;
+  warnings: AdminCourierAssignmentWarning[];
+}
+
+export interface AdminCourierCoverageZone {
+  deliveryZoneId: string;
+  code: string;
+  nameFr: string;
+  nameAr: string;
+  active: boolean;
+  zoneActive: boolean;
+  zoneSupported: boolean;
+  zoneTemporarilySuspended: boolean;
+  feeMillimes: number | null;
+  localityCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AdminCourierRecord extends AdminCourierOption {
+  companyName: string | null;
   status: AdminCourierStatus;
+  availabilityStatus: AdminCourierAvailabilityStatus;
   contactName: string | null;
   phoneE164: string | null;
+  whatsappPhoneE164: string | null;
   email: string | null;
+  defaultFeeMillimes: number | null;
+  maximumActiveDeliveries: number | null;
+  whatsappTemplate: string;
   notes: string | null;
   integrations: Array<{ type: string; name: string; active: boolean }>;
+  coverageMode: 'ZONES' | 'UNRESTRICTED';
+  coverageZones: AdminCourierCoverageZone[];
+  activeDeliveryCount: number;
   deliveryCount: number;
   manifestCount: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AdminCourierWhatsAppPreview {
+  courierId: string;
+  courierName: string;
+  phoneE164: string;
+  renderedMessage: string;
+  url: string;
+  manualOnly: true;
 }
 
 export type AdminDeliveryManifestStatus =
@@ -1125,12 +1193,35 @@ export interface AdminDeliveryDetail {
   courier: AdminCourierOption | null;
   trackingNumber: string | null;
   courierFeeMillimes: number | null;
+  assignedAt: string | null;
+  handedToCourierAt: string | null;
+  deliveredAt: string | null;
+  nextAttemptAt: string | null;
+  internalNotes: string | null;
+  customerVisibleNotes: string | null;
   ageVerificationResult: string;
   ageVerificationRequired: boolean;
   cashCollectedResult: boolean | null;
   version: number;
-  attempts: Array<{ id: string; outcome: string; attemptedAt: string }>;
-  events: Array<{ id: string; fromStatus: string | null; toStatus: string; occurredAt: string }>;
+  attempts: Array<{
+    id: string;
+    outcome: string;
+    attemptedAt: string;
+    nextAttemptAt?: string | null;
+    notes?: string | null;
+  }>;
+  events: Array<{
+    id: string;
+    fromStatus: string | null;
+    toStatus: string;
+    occurredAt: string;
+    source?: string;
+    reasonCode?: string | null;
+    note?: string | null;
+  }>;
+  historyTruncated?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type ManagedAccountStatus =
@@ -1281,6 +1372,7 @@ export interface AdminProductImage {
   productId: string | null;
   variantId: string | null;
   url: string;
+  renditions?: ProductImageRenditions;
   contentType: string;
   originalFilename: string | null;
   byteSize: number;

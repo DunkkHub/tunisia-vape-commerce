@@ -258,6 +258,49 @@ export const fr = {
       resetRequestAnother: 'Demander un nouveau lien',
       resetServiceError: 'La demande n’a pas pu aboutir. Vérifiez votre connexion puis réessayez.',
       genericError: 'Connexion impossible. Vérifiez vos informations ou réessayez plus tard.',
+      googleContinue: 'Continuer avec Google',
+      googleStarting: 'Ouverture de Google…',
+      googleDivider: 'ou avec vos informations',
+      googleStartError:
+        'La connexion Google n’a pas pu démarrer. Vérifiez votre connexion puis réessayez.',
+      googleErrorAccessDenied: 'La connexion Google a été annulée. Aucun compte n’a été modifié.',
+      googleErrorAccountConflict:
+        'Ce compte Google ne peut pas être associé à ce profil. Utilisez une autre adresse ou contactez le support.',
+      googleErrorAccountUnavailable:
+        'Ce compte client n’est pas disponible. Contactez le support si vous pensez qu’il s’agit d’une erreur.',
+      googleErrorUnavailable: 'La connexion Google est temporairement indisponible.',
+      googleErrorProvider: 'Google n’a pas pu confirmer votre identité. Recommencez la connexion.',
+      googleErrorExpired: 'La demande Google a expiré. Recommencez la connexion.',
+      googleErrorGeneric: 'La connexion Google n’a pas pu être terminée. Recommencez.',
+      googleOnboardingEyebrow: 'Compte client Google',
+      googleCreateTitle: 'Finaliser votre compte',
+      googleCreateBody:
+        'Google a confirmé votre adresse e-mail. Complétez les informations nécessaires à votre compte client.',
+      googleLinkTitle: 'Associer votre compte existant',
+      googleLinkBody:
+        'Un compte client utilise déjà cette adresse. Confirmez son mot de passe pour associer Google en toute sécurité.',
+      googleVerifiedEmail: 'Adresse confirmée par Google',
+      googleCurrentPassword: 'Mot de passe actuel du compte client',
+      googleLinkPasswordHint:
+        'Ce mot de passe sert uniquement à confirmer que ce compte client vous appartient.',
+      googleCreateComplete: 'Créer mon compte client',
+      googleLinkComplete: 'Associer Google et me connecter',
+      googleCompleting: 'Finalisation…',
+      googleLinkInvalid: 'Le mot de passe du compte client est incorrect.',
+      googleOnboardingRestart:
+        'Cette demande ne peut plus être utilisée. Recommencez la connexion avec Google.',
+      googleOnboardingExpired:
+        'La vérification Google est absente ou a expiré. Recommencez depuis la page de connexion.',
+      googleOnboardingServiceError:
+        'Le service d’authentification ne répond pas pour le moment. Réessayez plus tard.',
+      googleUnavailableTitle: 'Connexion Google indisponible',
+      googleUnavailableBody:
+        'La connexion Google n’est pas activée pour cette boutique. Utilisez la connexion client habituelle.',
+      googleOnboardingLoadingTitle: 'Vérification de votre compte',
+      googleOnboardingLoadingBody:
+        'Nous récupérons uniquement les informations confirmées nécessaires pour continuer.',
+      googleOnboardingErrorTitle: 'Impossible de poursuivre',
+      googleRestart: 'Revenir à la connexion',
       logout: 'Se déconnecter',
     },
     validation: {
@@ -922,6 +965,8 @@ export const fr = {
         subtitle: 'Encaissements, remises et rapprochement en millimes.',
         collectionsTitle: 'Encaissements attendus',
         collected: 'Encaissé',
+        accountable: 'Montant comptable',
+        adjustment: 'ajustement',
         noCollections: 'Aucun encaissement ne correspond aux filtres.',
         collectedMillimes: 'Montant physiquement encaissé (millimes)',
         differenceReason: 'Motif obligatoire si le montant diffère',
@@ -1138,6 +1183,112 @@ export const fr = {
         courierCreatedNamed: 'Livreur créé : {{code}} · {{name}}.',
         courierCodeConflict: 'Ce code de livreur est déjà utilisé.',
         courierUpdated: 'Statut du livreur mis à jour.',
+        courierDirectoryTitle: 'Équipe de livraison',
+        courierDirectoryBody:
+          'Recherchez un livreur, contrôlez sa disponibilité et sa capacité, puis ouvrez sa fiche uniquement lorsque vous devez la modifier.',
+        courierTotal: '{{count}} livreur(s)',
+        createCourierHint: 'Identité, contacts, capacité, zones et modèle WhatsApp',
+        courierFilters: 'Filtres des livreurs',
+        searchCouriers: 'Rechercher un livreur',
+        allCourierStatuses: 'Tous les statuts de compte',
+        availability: 'Disponibilité opérationnelle',
+        allAvailabilities: 'Toutes les disponibilités',
+        availabilityStatuses: {
+          AVAILABLE: 'Disponible',
+          OFF_DUTY: 'Hors service',
+        },
+        applyFilters: 'Appliquer les filtres',
+        clearFilters: 'Effacer',
+        companyName: 'Société',
+        whatsappPhone: 'Numéro WhatsApp',
+        whatsappPhoneHint:
+          'Format international, par exemple +21620123456. Aucun message n’est envoyé automatiquement.',
+        defaultCourierFee: 'Coût interne par défaut (TND)',
+        courierFeeHint:
+          'Coût interne du livreur, distinct du tarif facturé au client. Jusqu’à trois décimales.',
+        maximumActiveDeliveries: 'Capacité maximale active',
+        maximumActiveDeliveriesHint:
+          'Laissez vide pour ne pas définir de limite. Le dépassement exige une confirmation explicite.',
+        coverageTitle: 'Zones couvertes',
+        coverageHint:
+          'Cochez uniquement les zones desservies. Sans zone cochée, le livreur reste sans restriction de couverture.',
+        noDeliveryZones: 'Aucune zone de livraison n’est configurée.',
+        coverageZoneActive: 'zone active',
+        coverageZoneInactive: 'zone inactive',
+        zoneCourierFee: 'Coût interne de cette zone (TND)',
+        useDefaultFee: 'Coût par défaut',
+        whatsappTemplate: 'Modèle de message WhatsApp',
+        whatsappTemplateHint:
+          'Variables autorisées : orderNumber, customerName, customerPhone, deliveryAddress, governorate, delegation, locality, amountToCollect et orderNotes.',
+        courierFeeErrors: {
+          format:
+            'Saisissez un montant TND valide avec des chiffres et un seul séparateur décimal.',
+          precision: 'Le coût ne peut pas contenir plus de trois décimales.',
+          nonNegative: 'Le coût ne peut pas être négatif.',
+          maximum: 'Le coût ne peut pas dépasser 1 000 TND.',
+        },
+        courierProfileUpdated: 'Fiche du livreur mise à jour.',
+        courierAvailabilityUpdated: 'Disponibilité du livreur mise à jour.',
+        currentLoad: 'Charge active',
+        coverageZoneCount: '{{count}} zone(s)',
+        coverageUnrestricted: 'Toutes les zones',
+        deliveryHistory: 'Livraisons historiques',
+        viewCourierDeliveries: 'Voir ses livraisons',
+        setOffDuty: 'Mettre hors service',
+        setAvailable: 'Rendre disponible',
+        editCourier: 'Modifier la fiche',
+        editCourierHint: 'Coordonnées, coûts, capacité, couverture et cycle de vie',
+        saveCourier: 'Enregistrer le livreur',
+        courierLifecycle: 'Actions sur le cycle de vie du livreur',
+        courierDeliveriesTitle: 'Livraisons et affectations',
+        courierDeliveriesBody:
+          'Filtrez les commandes, ouvrez une livraison, puis assignez ou réassignez un livreur avec les contrôles de zone et de capacité.',
+        showAllCouriers: 'Afficher tous les livreurs',
+        deliveryFilters: 'Filtres des livraisons',
+        searchDeliveries: 'Commande, suivi, client, zone ou livreur',
+        allDeliveryStatuses: 'Tous les statuts de livraison',
+        deliveryWorkspace: 'Pilotage de la livraison',
+        currentCourier: 'Livreur actuel',
+        assignmentTitle: 'Affectation du livreur',
+        assignmentHint:
+          'Les livreurs hors service ne peuvent pas être choisis. Les écarts de couverture ou de capacité doivent être reconnus avant validation.',
+        assignmentCapacity: 'Charge prévue : {{active}} livraison(s) active(s) sur {{maximum}}.',
+        assignmentWarnings: 'Confirmation des avertissements',
+        assignmentWarningsHint:
+          'Vérifiez chaque risque opérationnel avant de forcer cette affectation.',
+        assignmentWarningLabels: {
+          COURIER_OUTSIDE_DELIVERY_ZONE:
+            'Je confirme que ce livreur peut exceptionnellement desservir cette zone.',
+          COURIER_CAPACITY_EXCEEDED:
+            'Je confirme le dépassement exceptionnel de la capacité du livreur.',
+        },
+        reassignmentReason: 'Motif obligatoire de la réaffectation',
+        trackingNumberOptional: 'Numéro de suivi (facultatif)',
+        assignmentNoteOptional: 'Note d’affectation (facultative)',
+        reassign: 'Réassigner',
+        unassignmentReason: 'Motif obligatoire du retrait',
+        unassign: 'Retirer le livreur',
+        deliveryReassigned: 'Livraison réassignée.',
+        deliveryUnassigned: 'Livreur retiré de la livraison.',
+        whatsappTitle: 'Contact WhatsApp manuel',
+        whatsappBody:
+          'Prévisualisez le message généré par le serveur. L’ouverture de WhatsApp reste une action manuelle et explicite.',
+        previewWhatsApp: 'Prévisualiser le message',
+        manualOnly: 'Envoi manuel uniquement',
+        copyMessage: 'Copier le message',
+        openWhatsApp: 'Ouvrir WhatsApp',
+        recordWhatsAppContact: 'Marquer le contact effectué',
+        whatsappContactRecorded: 'Contact WhatsApp enregistré dans le journal.',
+        whatsappCopied: 'Message WhatsApp copié.',
+        whatsappCopyFailed: 'Impossible de copier le message. Sélectionnez-le manuellement.',
+        internalNotesTitle: 'Notes opérationnelles internes',
+        internalNotesHint:
+          'Ces notes restent réservées aux administrateurs et ne sont pas affichées au client.',
+        saveInternalNotes: 'Enregistrer les notes',
+        internalNotesSaved: 'Notes internes mises à jour.',
+        deliveryStateTitle: 'État et incidents',
+        deliveryStateHint:
+          'Appliquez les transitions autorisées, consignez les tentatives, puis terminez uniquement après les preuves COD et d’âge requises.',
         manifestsTitle: 'Manifestes de livraison',
         manifestsBody:
           'Regroupez des livraisons assignées au même livreur, puis scellez et remettez le manifeste.',
@@ -1635,6 +1786,55 @@ export const fr = {
           'Images JPEG, PNG, WebP ou AVIF validées et nettoyées par le serveur. Classez-les par produit ou variante et fournissez un texte alternatif bilingue.',
         file: 'Fichier image',
         allowedTypes: 'Formats acceptés : JPEG, PNG, WebP et AVIF.',
+        batch: {
+          allowedTypes:
+            'Sélectionnez jusqu’à 20 images JPEG, PNG, WebP ou AVIF. Chaque fichier reste modifiable avant l’envoi.',
+          tooMany: 'Vous pouvez préparer au maximum 20 images à la fois.',
+          unsupported: 'Certains fichiers ont été ignorés car leur format n’est pas accepté.',
+          ownerUnavailable:
+            'La version du produit ou de la variante est indisponible. Actualisez avant de réessayer.',
+          uploadFailed:
+            'Ce fichier n’a pas pu être téléversé. Corrigez-le ou réessayez ; les fichiers déjà validés ne seront pas renvoyés.',
+          uploaded: 'Toutes les images ont été validées et téléversées.',
+          title: 'Images à préparer',
+          count: '{{count}} image(s) sélectionnée(s)',
+          item: 'Image {{index}}',
+          remove: 'Retirer {{name}} de la sélection',
+          removeShort: 'Retirer',
+          makeFirstPrimary: 'Définir la première image comme principale',
+          retry: 'Réessayer les images restantes',
+          serverValidation:
+            'Le serveur vérifiera encore le type réel, le contenu, les dimensions et la taille de chaque fichier.',
+          replaceFailed:
+            'Le remplacement n’a pas été enregistré. Le fichier reste sélectionné pour une nouvelle tentative.',
+        },
+        editor: {
+          title: 'Recadrer, pivoter, redimensionner ou compresser',
+          description:
+            'Les réglages créent une copie locale. Le fichier original reste intact et peut être restauré avant l’envoi.',
+          cropAspect: 'Format du recadrage',
+          aspectOriginal: 'Format original',
+          rotation: 'Rotation de l’image',
+          rotateLeft: 'Pivoter à gauche',
+          rotateRight: 'Pivoter à droite',
+          focusX: 'Position horizontale du recadrage : {{value}} %',
+          focusY: 'Position verticale du recadrage : {{value}} %',
+          maxWidth: 'Largeur maximale (px)',
+          maxHeight: 'Hauteur maximale (px)',
+          noLimit: 'Aucune limite',
+          outputFormat: 'Format de sortie après modification',
+          quality: 'Qualité de compression : {{value}} %',
+          restoreOriginal: 'Restaurer l’original',
+          processing: 'Préparation de l’aperçu local…',
+          error:
+            'Cette modification ne peut pas être préparée dans ce navigateur. Restaurez l’original ou réessayez.',
+          status: {
+            original: 'Original intact',
+            processing: 'Préparation en cours',
+            edited: 'Copie modifiée prête',
+            error: 'Modification à corriger',
+          },
+        },
         previewAlt: 'Aperçu local de l’image sélectionnée',
         unknownType: 'Type inconnu',
         uploadProgress: 'Téléversement : {{percent}} %',

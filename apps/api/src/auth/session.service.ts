@@ -58,6 +58,11 @@ export class SessionService {
   }> {
     const now = new Date();
     const admin = audience === AUTH_AUDIENCES.ADMIN;
+    const production = this.config.get('NODE_ENV', { infer: true }) === 'production';
+    const names = cookieNames(production);
+    const sessionName = admin ? names.adminSession : names.customerSession;
+    const csrfName = admin ? names.adminCsrf : names.customerCsrf;
+    const previousToken = this.readCookie(request, sessionName);
     const idleMinutes = this.config.get(
       admin ? 'ADMIN_SESSION_IDLE_MINUTES' : 'CUSTOMER_SESSION_IDLE_MINUTES',
       { infer: true },
@@ -72,29 +77,45 @@ export class SessionService {
     const token = this.crypto.randomToken();
     const csrfToken = this.crypto.randomToken();
 
-    const createdSession = await this.prisma.session.create({
-      data: {
-        userId,
-        audience,
-        tokenHash: this.crypto.hashToken(token),
-        csrfTokenHash: this.crypto.hashToken(csrfToken),
-        status: 'ACTIVE',
-        ipAddress: (request.ip ?? request.socket.remoteAddress ?? 'unknown').slice(0, 45),
-        ...(request.get('user-agent')
-          ? { userAgent: request.get('user-agent')!.slice(0, 512) }
-          : {}),
-        authenticatedAt: now,
-        lastSeenAt: now,
-        idleExpiresAt,
-        absoluteExpiresAt,
-        twoFactorVerified,
-      },
+    const createdSession = await this.prisma.$transaction(async (transaction) => {
+      let rotatedFromId: string | undefined;
+      if (previousToken) {
+        const previous = await transaction.session.findUnique({
+          where: { tokenHash: this.crypto.hashToken(previousToken) },
+          select: { id: true, userId: true, audience: true, status: true },
+        });
+        if (previous?.audience === audience && previous.status === 'ACTIVE') {
+          const revoked = await transaction.session.updateMany({
+            where: { id: previous.id, audience, status: 'ACTIVE' },
+            data: {
+              status: 'REVOKED',
+              revokedAt: now,
+              revokedReason: 'session_rotated_after_authentication',
+            },
+          });
+          if (revoked.count === 1 && previous.userId === userId) rotatedFromId = previous.id;
+        }
+      }
+      return transaction.session.create({
+        data: {
+          userId,
+          audience,
+          tokenHash: this.crypto.hashToken(token),
+          csrfTokenHash: this.crypto.hashToken(csrfToken),
+          status: 'ACTIVE',
+          ipAddress: (request.ip ?? request.socket.remoteAddress ?? 'unknown').slice(0, 45),
+          ...(request.get('user-agent')
+            ? { userAgent: request.get('user-agent')!.slice(0, 512) }
+            : {}),
+          authenticatedAt: now,
+          lastSeenAt: now,
+          idleExpiresAt,
+          absoluteExpiresAt,
+          twoFactorVerified,
+          ...(rotatedFromId ? { rotatedFromId } : {}),
+        },
+      });
     });
-
-    const production = this.config.get('NODE_ENV', { infer: true }) === 'production';
-    const names = cookieNames(production);
-    const sessionName = admin ? names.adminSession : names.customerSession;
-    const csrfName = admin ? names.adminCsrf : names.customerCsrf;
     const maxAge = Math.min(idleExpiresAt.getTime(), absoluteExpiresAt.getTime()) - now.getTime();
     response.cookie(sessionName, token, sessionCookieOptions(production, maxAge));
     response.cookie(csrfName, csrfToken, csrfCookieOptions(production, maxAge));

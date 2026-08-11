@@ -81,7 +81,7 @@ type NotificationClaimResult =
     };
 
 type MediaDeletionClaimResult =
-  | { outcome: 'DELETE'; eventType: string; work: MediaObjectDeletion }
+  | { outcome: 'DELETE'; eventType: string; work: MediaObjectDeletion[] }
   | { outcome: 'ALREADY_PROCESSED' | 'TERMINAL'; eventType: string };
 
 export class OutboxProcessor {
@@ -168,14 +168,16 @@ export class OutboxProcessor {
       return;
     }
     try {
-      await this.mediaDeletionAdapter.deleteObject(claim.work);
+      for (const object of claim.work) {
+        await this.mediaDeletionAdapter.deleteObject(object);
+      }
       await this.completeMediaDeletion(job);
       this.logger.info(
         {
           outboxEventId: job.outboxEventId,
           eventType: job.eventType,
           outcome: 'PROCESSED',
-          affectedCount: 1,
+          affectedCount: claim.work.length,
         },
         'Media object cleanup completed',
       );
@@ -217,7 +219,8 @@ export class OutboxProcessor {
     }
     if (
       event.aggregateType !== 'ProductImage' ||
-      event.deterministicKey !== `media-object-delete:v1:${event.aggregateId}`
+      event.deterministicKey !==
+        `media-object-delete:v${String(event.eventVersion)}:${event.aggregateId}`
     ) {
       throw new WorkerDomainError('OUTBOX_MEDIA_AGGREGATE_MISMATCH');
     }
@@ -229,7 +232,13 @@ export class OutboxProcessor {
         leaseExpiresAt: new Date(Date.now() + this.environment.OUTBOX_LEASE_MS),
       },
     });
-    return { outcome: 'DELETE', eventType: event.eventType, work: parsed.payload };
+    const objectKeys =
+      'objectKeys' in parsed.payload ? parsed.payload.objectKeys : [parsed.payload.objectKey];
+    return {
+      outcome: 'DELETE',
+      eventType: event.eventType,
+      work: objectKeys.map((objectKey) => ({ bucket: parsed.payload.bucket, objectKey })),
+    };
   }
 
   private async completeMediaDeletion(job: OutboxJobData): Promise<void> {
@@ -756,6 +765,7 @@ export class OutboxProcessor {
       payload: work.payload,
       webUrl: this.environment.WEB_URL,
       encryptionKey: this.environment.FIELD_ENCRYPTION_KEY,
+      brandName: this.environment.EMAIL_FROM_NAME,
     });
     return {
       notificationId: work.notificationId,

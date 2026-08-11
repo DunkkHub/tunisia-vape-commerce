@@ -31,7 +31,10 @@ describe('launch environment defaults', () => {
       MINIMUM_PURCHASE_AGE: 18,
       HEALTHCHECK_TIMEOUT_MS: 2_000,
       WORKER_HEARTBEAT_MAX_AGE_SECONDS: 60,
-      EXPECTED_MIGRATION_NAME: '20260727090000_delivery_zone_operational_metadata',
+      EXPECTED_MIGRATION_NAME: '20260811170000_product_image_renditions',
+      PASSWORD_RESET_TTL_MINUTES: 30,
+      GOOGLE_OAUTH_ENABLED: false,
+      GOOGLE_OAUTH_STATE_TTL_SECONDS: 300,
       MEDIA_STORAGE_DRIVER: 'local',
       MEDIA_LOCAL_ROOT: 'uploads/media',
       S3_REGION: 'us-east-1',
@@ -46,6 +49,64 @@ describe('launch environment defaults', () => {
 
   it('accepts an operator-selected positive minimum age', () => {
     expect(validateEnvironment({ MINIMUM_PURCHASE_AGE: '16' }).MINIMUM_PURCHASE_AGE).toBe(16);
+  });
+
+  it('validates Google OAuth as an all-or-nothing customer-only configuration', () => {
+    expect(
+      validateEnvironment({
+        GOOGLE_OAUTH_ENABLED: 'true',
+        GOOGLE_CLIENT_ID: '1234567890-example.apps.googleusercontent.com',
+        GOOGLE_CLIENT_SECRET: 'GOCSPX-a-real-looking-local-test-secret',
+        GOOGLE_CALLBACK_URL: 'http://localhost:5173/api/v1/auth/customer/google/callback',
+        PASSWORD_RESET_TTL_MINUTES: '20',
+      }),
+    ).toMatchObject({
+      GOOGLE_OAUTH_ENABLED: true,
+      GOOGLE_OAUTH_STATE_TTL_SECONDS: 300,
+      PASSWORD_RESET_TTL_MINUTES: 20,
+    });
+
+    expect(() => validateEnvironment({ GOOGLE_OAUTH_ENABLED: 'true' })).toThrow();
+    expect(() =>
+      validateEnvironment({
+        GOOGLE_OAUTH_ENABLED: 'true',
+        GOOGLE_CLIENT_ID: 'REPLACE.apps.googleusercontent.com',
+        GOOGLE_CLIENT_SECRET: 'GOCSPX-a-real-looking-local-test-secret',
+        GOOGLE_CALLBACK_URL: 'http://localhost:5173/api/v1/auth/customer/google/callback',
+      }),
+    ).toThrow();
+    expect(() =>
+      validateEnvironment({
+        GOOGLE_OAUTH_ENABLED: 'true',
+        GOOGLE_CLIENT_ID: '1234567890-example.apps.googleusercontent.com',
+        GOOGLE_CLIENT_SECRET: 'GOCSPX-a-real-looking-local-test-secret',
+        GOOGLE_CALLBACK_URL: 'http://localhost:5173/api/v1/auth/customer/google/callback?code=x',
+      }),
+    ).toThrow();
+    expect(() => validateEnvironment({ PASSWORD_RESET_TTL_MINUTES: '61' })).toThrow();
+  });
+
+  it('requires the exact HTTPS storefront callback for Google OAuth in production', () => {
+    const oauthEnvironment = {
+      ...productionEnvironment,
+      GOOGLE_OAUTH_ENABLED: 'true',
+      GOOGLE_CLIENT_ID: '1234567890-example.apps.googleusercontent.com',
+      GOOGLE_CLIENT_SECRET: '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cret',
+      GOOGLE_CALLBACK_URL: 'https://store.example.tn/api/v1/auth/customer/google/callback',
+    };
+    expect(validateEnvironment(oauthEnvironment).GOOGLE_OAUTH_ENABLED).toBe(true);
+    expect(() =>
+      validateEnvironment({
+        ...oauthEnvironment,
+        GOOGLE_CALLBACK_URL: 'https://api.example.tn/api/v1/auth/customer/google/callback',
+      }),
+    ).toThrow();
+    expect(() =>
+      validateEnvironment({
+        ...oauthEnvironment,
+        GOOGLE_CALLBACK_URL: 'http://store.example.tn/api/v1/auth/customer/google/callback',
+      }),
+    ).toThrow();
   });
 
   it('accepts an explicitly configured S3-compatible media backend and upload limits', () => {

@@ -1,4 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
+import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Environment } from '../config/environment';
@@ -101,6 +102,68 @@ describe('ProductImageValidatorService', () => {
     expect(metadata.exif).toBeUndefined();
     expect(metadata.xmp).toBeUndefined();
     expect(metadata.icc).toEqual(sourceMetadata.icc);
+  });
+
+  it('generates bounded WebP and JPEG storefront renditions from sanitized pixels', async () => {
+    const source = await sharp({
+      create: { width: 2_000, height: 1_000, channels: 3, background: '#7e22ce' },
+    })
+      .jpeg()
+      .toBuffer();
+    const result = await new ProductImageValidatorService(configuration()).validate(
+      upload(source, 'image/jpeg'),
+    );
+
+    expect(result.renditions).toHaveLength(8);
+    expect(result.renditions.map(({ name, format }) => `${name}:${format}`).sort()).toEqual(
+      [
+        'thumbnail:webp',
+        'thumbnail:jpeg',
+        'card:webp',
+        'card:jpeg',
+        'detail:webp',
+        'detail:jpeg',
+        'high-resolution:webp',
+        'high-resolution:jpeg',
+      ].sort(),
+    );
+    for (const rendition of result.renditions) {
+      expect(rendition.checksumSha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(rendition.byteSize).toBe(rendition.bytes.length);
+      expect((await sharp(rendition.bytes).metadata()).format).toBe(rendition.format);
+    }
+    expect(
+      result.renditions.find(
+        (rendition) => rendition.name === 'high-resolution' && rendition.format === 'webp',
+      ),
+    ).toMatchObject({ width: 1_920, height: 960, contentType: 'image/webp' });
+  });
+
+  it('generates the eight high-memory rendition pipelines serially', async () => {
+    const service = new ProductImageValidatorService(configuration());
+    let active = 0;
+    let maximumActive = 0;
+    vi.spyOn(service, 'createRendition').mockImplementation(async (_source, name, format) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      const bytes = Buffer.from(`${name}:${format}`);
+      return {
+        name,
+        format,
+        contentType: format === 'webp' ? 'image/webp' : 'image/jpeg',
+        extension: format === 'webp' ? 'webp' : 'jpg',
+        bytes,
+        byteSize: bytes.length,
+        checksumSha256: createHash('sha256').update(bytes).digest('hex'),
+        width: 1,
+        height: 1,
+      };
+    });
+
+    await expect(service.createRenditions(Buffer.from('source'))).resolves.toHaveLength(8);
+    expect(maximumActive).toBe(1);
   });
 
   it('sanitizes path components, bidi controls, misleading extensions, and length', () => {

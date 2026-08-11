@@ -5,6 +5,7 @@ import type {
   AdminCashReconciliationListResponseDto,
   AdminCommerceListQueryDto,
   AdminCustomerListResponseDto,
+  AdminDeliveryListQueryDto,
   AdminDeliveryListResponseDto,
   AdminOrderListResponseDto,
 } from './dto/admin-commerce-list.dto';
@@ -135,11 +136,13 @@ export class AdminCommerceReadsService {
   }
 
   async listDeliveries(
-    query: AdminCommerceListQueryDto,
+    query: AdminDeliveryListQueryDto,
     locale: Locale,
   ): Promise<AdminDeliveryListResponseDto> {
     const search = normalizedSearch(query);
     const where = {
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.courierId ? { courierId: query.courierId } : {}),
       ...(search
         ? {
             OR: [
