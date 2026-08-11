@@ -4070,10 +4070,35 @@ h2 {
 .admin-table td .price {
   color: var(--admin-text);
 }
-.admin-table td a {
+.admin-table td a,
+.admin-table-link {
   color: var(--admin-accent);
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+.admin-table-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.admin-table-link:disabled {
+  color: var(--admin-muted);
+  cursor: wait;
+}
+.admin-manifest-checkbox {
+  min-width: 120px;
+}
+.admin-table-help {
+  display: block;
+  max-width: 16ch;
+  margin-block-start: 4px;
+  color: var(--admin-muted);
+  font-size: 0.68rem;
+  line-height: 1.25;
 }
 .admin-pagination {
   display: flex;
