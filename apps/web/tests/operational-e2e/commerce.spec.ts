@@ -68,6 +68,23 @@ interface AdminDelivery {
   ageVerificationRequired: boolean;
 }
 
+interface AdminCourierRecord {
+  id: string;
+  code: string;
+  phoneE164: string | null;
+  whatsappPhoneE164: string | null;
+  whatsappTemplate: string;
+}
+
+interface AdminCourierWhatsAppPreview {
+  courierId: string;
+  courierName: string;
+  phoneE164: string;
+  renderedMessage: string;
+  url: string;
+  manualOnly: true;
+}
+
 interface AdminOrder {
   id: string;
   orderNumber: string;
@@ -180,11 +197,24 @@ interface AdminProductImage {
   ownerVersion: number;
 }
 
+interface PublicProductImage {
+  url: string;
+  altText: string;
+  renditions?: {
+    thumbnail: string;
+    card: string;
+    detail: string;
+    highResolution: string;
+  };
+  width?: number;
+  height?: number;
+}
+
 interface PublicProductDetail {
   id: string;
   slug: string;
-  primaryImage: { url: string; altText: string } | null;
-  images: Array<{ url: string; altText: string }>;
+  primaryImage: PublicProductImage | null;
+  images: PublicProductImage[];
 }
 
 interface CatalogImportBatch {
@@ -207,14 +237,13 @@ const expectLoadedImage = async (image: Locator) => {
   await expect
     .poll(
       () =>
-        image.evaluate((element: HTMLImageElement) => ({
-          complete: element.complete,
-          width: element.naturalWidth,
-          height: element.naturalHeight,
-        })),
+        image.evaluate(
+          (element: HTMLImageElement) =>
+            element.complete && element.naturalWidth > 0 && element.naturalHeight > 0,
+        ),
       { timeout: 10_000 },
     )
-    .toEqual({ complete: true, width: 320, height: 320 });
+    .toBe(true);
 };
 
 const confirmAge = async (page: Page) => {
@@ -810,8 +839,9 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     ) => {
       await uploadForm.locator('input[name="file"]').setInputFiles(fixturePath);
       await uploadForm.locator('select[name="variantId"]').selectOption('');
-      await uploadForm.locator('input[name="altTextFr"]').fill(altTextFr);
-      await uploadForm.locator('input[name="altTextAr"]').fill(altTextAr);
+      const uploadDraft = uploadForm.locator('.admin-media-batch__item').first();
+      await uploadDraft.getByLabel('Texte alternatif français').fill(altTextFr);
+      await uploadDraft.getByLabel('Texte alternatif arabe').fill(altTextAr);
       const primary = uploadForm.locator('input[name="isPrimary"]');
       if (isPrimary) await primary.check();
       else await primary.uncheck();
@@ -828,7 +858,8 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
       const image = ((await uploaded.json()) as { data: AdminProductImage }).data;
       await expect(imageCard(altTextFr)).toHaveCount(1);
       await expectLoadedImage(imageCard(altTextFr).locator('img'));
-      await expect(uploadButton).toBeEnabled();
+      await expect(uploadForm.locator('.admin-media-batch__item')).toHaveCount(0);
+      await expect(uploadButton).toBeDisabled();
       return image;
     };
     const productImage = await uploadManagedImage(
@@ -1305,8 +1336,9 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     }): Promise<AdminProductImage> => {
       await uploadForm.locator('input[name="file"]').setInputFiles(fixturePath);
       await uploadForm.locator('select[name="variantId"]').selectOption(variantId ?? '');
-      await uploadForm.locator('input[name="altTextFr"]').fill(altTextFr);
-      await uploadForm.locator('input[name="altTextAr"]').fill(altTextAr);
+      const uploadDraft = uploadForm.locator('.admin-media-batch__item').first();
+      await uploadDraft.getByLabel('Texte alternatif français').fill(altTextFr);
+      await uploadDraft.getByLabel('Texte alternatif arabe').fill(altTextAr);
       const primary = uploadForm.locator('input[name="isPrimary"]');
       if (isPrimary) await primary.check();
       else await primary.uncheck();
@@ -1323,7 +1355,8 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
       const image = ((await response.json()) as { data: AdminProductImage }).data;
       await expect(imageCard(altTextFr)).toHaveCount(1);
       await expectLoadedImage(imageCard(altTextFr).locator('img'));
-      await expect(uploadButton).toBeEnabled();
+      await expect(uploadForm.locator('.admin-media-batch__item')).toHaveCount(0);
+      await expect(uploadButton).toBeDisabled();
       return image;
     };
 
@@ -1398,7 +1431,9 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     await expect(imageCard('Image secondaire modifiée E2E')).toHaveCount(1);
 
     originalCard = imageCard('Image secondaire modifiée E2E');
-    const originalSource = await originalCard.locator('img').getAttribute('src');
+    const originalSource = await originalCard
+      .getByRole('img', { name: 'Image secondaire modifiée E2E', exact: true })
+      .getAttribute('src');
     expect(originalSource).toBeTruthy();
     await originalCard.locator('input[type="file"]').setInputFiles(mediaFixturePaths[3]);
     const replacementResponse = page.waitForResponse(
@@ -1417,9 +1452,15 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     await replacementRefresh;
     originalCard = imageCard('Image secondaire modifiée E2E');
     await expect
-      .poll(() => originalCard.locator('img').getAttribute('src'))
+      .poll(() =>
+        originalCard
+          .getByRole('img', { name: 'Image secondaire modifiée E2E', exact: true })
+          .getAttribute('src'),
+      )
       .not.toBe(originalSource);
-    await expectLoadedImage(originalCard.locator('img'));
+    await expectLoadedImage(
+      originalCard.getByRole('img', { name: 'Image secondaire modifiée E2E', exact: true }),
+    );
 
     page.once('dialog', (dialog) => void dialog.accept());
     const deletionResponse = page.waitForResponse(
@@ -1782,10 +1823,41 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
       Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     );
 
+    const storefrontRenditions = publicAfterPrimary.primaryImage?.renditions;
+    expect(storefrontRenditions).toBeDefined();
+    const detailRenditionPath = storefrontRenditions!.detail;
+    expect(detailRenditionPath).toMatch(/^\/api\/v1\/media\/[a-f0-9]{64}\/detail\/v1$/);
+
+    const optimizedWebpResponse = await context.request.get(`${apiUrl}${detailRenditionPath}`, {
+      headers: { Accept: 'image/webp,image/*;q=0.8' },
+    });
+    expect(optimizedWebpResponse.status()).toBe(200);
+    const optimizedHeaders = optimizedWebpResponse.headers();
+    expect(optimizedHeaders['content-type']).toBe('image/webp');
+    expect(optimizedHeaders['content-disposition']).toBe('inline');
+    expect(optimizedHeaders['x-content-type-options']).toBe('nosniff');
+    expect(optimizedHeaders['cache-control']).toContain('private');
+    expect(optimizedHeaders['cache-control']).toContain('immutable');
+    expect(optimizedHeaders['vary']).toContain('Accept');
+    const optimizedWebp = await optimizedWebpResponse.body();
+    expect(optimizedWebp.subarray(0, 4).toString('ascii')).toBe('RIFF');
+    expect(optimizedWebp.subarray(8, 12).toString('ascii')).toBe('WEBP');
+    expect(Number(optimizedHeaders['content-length'])).toBe(optimizedWebp.byteLength);
+
+    const optimizedJpegResponse = await context.request.get(`${apiUrl}${detailRenditionPath}`, {
+      headers: { Accept: 'image/jpeg,*/*;q=0.5' },
+    });
+    expect(optimizedJpegResponse.status()).toBe(200);
+    expect(optimizedJpegResponse.headers()['content-type']).toBe('image/jpeg');
+    expect((await optimizedJpegResponse.body()).subarray(0, 3)).toEqual(
+      Buffer.from([255, 216, 255]),
+    );
+
     await page.goto('/products/puffjet-menthe-operationnelle');
     await page.getByRole('button', { name: new RegExp(genericMediaAlt) }).click();
     const importedStorefrontImage = page.locator('.product-gallery__main');
     await expect(importedStorefrontImage).toHaveAttribute('alt', genericMediaAlt);
+    await expect(importedStorefrontImage).toHaveAttribute('src', detailRenditionPath);
     await expectLoadedImage(importedStorefrontImage);
   });
 
@@ -1801,7 +1873,7 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
     });
     expect(order.status).toBe('PREPARING');
 
-    const courier = await adminApi<{ id: string; code: string }>(
+    const courier = await adminApi<AdminCourierRecord>(
       context,
       'POST',
       '/admin/deliveries/courier-records',
@@ -1810,9 +1882,18 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
         name: 'Chauffeur manuel E2E',
         contactName: 'Opérateur E2E',
         phoneE164: '+21620123456',
+        whatsappPhoneE164: '+21622123456',
+        whatsappTemplate: 'Commande {{orderNumber}} | {{amountToCollect}} | {{customerPhone}}',
         confirmation: 'CREATE_MANUAL_COURIER',
       },
     );
+    expect(courier).toMatchObject({
+      code: 'E2E-DRIVER-01',
+      phoneE164: '+21620123456',
+      whatsappPhoneE164: '+21622123456',
+      whatsappTemplate: 'Commande {{orderNumber}} | {{amountToCollect}} | {{customerPhone}}',
+    });
+    expect(courier.whatsappPhoneE164).toMatch(/^\+216[24579]\d{7}$/);
     let delivery = await adminApi<AdminDelivery>(
       context,
       'GET',
@@ -1824,6 +1905,44 @@ test('real services cover storefront, order-to-cash, technical gates, TOTP, and 
       `/admin/deliveries/${delivery.id}/assign`,
       { expectedVersion: delivery.version, courierId: courier.id, trackingNumber: 'E2E-TRACK-001' },
     );
+
+    const whatsappPreview = await adminApi<AdminCourierWhatsAppPreview>(
+      context,
+      'GET',
+      `/admin/deliveries/${delivery.id}/courier-whatsapp`,
+    );
+    expect(whatsappPreview).toMatchObject({
+      courierId: courier.id,
+      phoneE164: '+21622123456',
+      manualOnly: true,
+    });
+    expect(whatsappPreview.renderedMessage).toContain(order.orderNumber);
+    expect(whatsappPreview.renderedMessage).toContain(
+      `${Math.floor(checkout.expectedCodMillimes / 1_000)}.${String(
+        checkout.expectedCodMillimes % 1_000,
+      ).padStart(3, '0')} TND`,
+    );
+    const whatsappUrl = new URL(whatsappPreview.url);
+    expect(whatsappUrl.protocol).toBe('https:');
+    expect(whatsappUrl.hostname).toBe('wa.me');
+    expect(whatsappUrl.pathname).toBe('/21622123456');
+    expect(whatsappUrl.search).toBe(`?text=${encodeURIComponent(whatsappPreview.renderedMessage)}`);
+    expect(whatsappUrl.searchParams.get('text')).toBe(whatsappPreview.renderedMessage);
+
+    const assignedVersion = delivery.version;
+    const assignedStatus = delivery.status;
+    delivery = await adminApi<AdminDelivery>(
+      context,
+      'POST',
+      `/admin/deliveries/${delivery.id}/courier-contacted`,
+      {
+        expectedVersion: assignedVersion,
+        confirmation: 'RECORD_COURIER_WHATSAPP_CONTACT',
+      },
+    );
+    expect(delivery.version).toBe(assignedVersion + 1);
+    expect(delivery.status).toBe(assignedStatus);
+
     for (const targetStatus of [
       'ASSIGNED_TO_COURIER',
       'HANDED_TO_COURIER',

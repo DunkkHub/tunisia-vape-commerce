@@ -1,6 +1,6 @@
 # Production readiness report
 
-Review date: 2026-08-04
+Review date: 2026-08-11
 
 ## Verdict vocabulary
 
@@ -11,17 +11,24 @@ The only overall verdict issued by this report is `NOT READY`.
 The 2026-07-23 software release candidate implemented and locally verified the required storefront,
 customer account, atomic COD checkout, catalog/media, inventory, order, manual delivery, cash
 custody, settings, notification, administrator, localization, backup, load, and deployment
-workflows. The current worktree adds customer-only Google OAuth, provider-safe account linking,
-password-recovery email presentation, session rotation, and a token-free external-identity schema.
-Formatting, linting, type checks, Prisma validation, unit/integration/security/operations tests,
-production builds, and standard Playwright tests pass locally; container rebuild/scan and the
-remaining feature/recovery gates are still open. Customer and administrator authentication remain
-separate security realms and no administrator, customer, product, stock, order, or credential is
-created by the structural seed.
+workflows. The current worktree additionally contains customer-only Google OAuth and recovery,
+manual-courier availability/capacity/coverage and guarded WhatsApp handoff, server-generated media
+renditions with immutable profile-versioned metadata and cached-content integrity checks, and
+collection-scoped COD discrepancy resolution.
+Its dependency baseline includes Swagger 11.4.6, the js-yaml 5.2.2 override, PostCSS 8.5.26, and
+Nano ID 3.3.18; the security workflow targets Trivy 0.73.0. On 2026-08-11 the exact migration-14
+worktree passed the uninterrupted 14-stage local release verifier, all six unchanged full-target
+disposable-load scenarios, and an encrypted isolated backup/restore drill at the fourteen-migration
+head. The earlier migration-13 collision rehearsal remains relevant historical upgrade evidence.
+The final current-head API, migration, worker, and web images also built successfully, passed strict
+Trivy 0.73.0 vulnerability and secret scans, and passed a healthy live-stack readiness and checkout
+smoke.
+Target-owned provider acceptance and mandatory remote container/CI evidence are still required.
+Customer and administrator authentication remain separate security realms and no administrator,
+customer, product, stock, order, courier, or credential is created by the structural seed.
 
-The current overall verdict remains **NOT READY** for a purchaser's live deployment. The 2026-07-27
-follow-up still requires the complete release and recovery gates. Remaining target-environment and
-operator conditions include real store identity/contact values, at least one complete active
+The current overall verdict remains **NOT READY** for a purchaser's live deployment. Remaining
+target-environment and operator conditions include real store identity/contact values, at least one complete active
 delivery method and price, production secrets and hosts, TLS, object storage,
 notification-provider credentials, protected backup destinations/keys, monitoring targets, an
 appropriately enrolled and authorized administrator roster, and successful mandatory CI/security
@@ -46,8 +53,8 @@ or engineering-verdict inputs. No legal opinion or approval is asserted.
 | `LEGAL_DOCUMENTS_MISSING`               | not a blocker                                | Absent from the checkout blocker vocabulary                           |
 | additional legal documents              | not required by software                     | No document-count readiness gate                                      |
 | minimum purchase age                    | `18`                                         | Configurable structural default                                       |
-| repository migration head               | `20260804090000_customer_google_identity`    | Eleventh migration directory in the current worktree                  |
-| configured readiness migration          | `20260804090000_customer_google_identity`    | Environment/runtime defaults and local database synchronized          |
+| repository migration head               | `20260811170000_product_image_renditions`    | Fourteenth migration directory in the current worktree                |
+| configured readiness migration          | `20260811170000_product_image_renditions`    | Environment/runtime defaults; fresh disposable installation passed    |
 
 In the recorded 2026-07-23 release candidate, after a clean migration plus structural seed, the live Compose smoke reported:
 
@@ -61,9 +68,10 @@ Those two blockers remain intentional in the current structural seed: it does no
 identity, delivery coverage, delivery price, pickup, product, or stock. Once an operator configures
 them, checkout is still subject to authoritative address, customer, catalog, promotion, inventory,
 consent, idempotency, transaction, and COD validation. The 2026-07-23 smoke predates the current
-geography/delivery migration. The current migration 11 was subsequently applied to the local
-database and to a clean disposable MySQL 8.4 database; that does not replace a production-shaped
-existing-data rehearsal and restore drill.
+geography/delivery and later operational migrations. The current repository head is
+`20260811170000_product_image_renditions`, migration 14. The exact-worktree release, fresh-install,
+load, and current-head restore gates are recorded below. A production-shaped existing-data rehearsal
+in the purchaser's target environment remains required for the promoted commit.
 
 ## Implemented technical guarantees
 
@@ -139,15 +147,60 @@ existing-data rehearsal and restore drill.
 
 ## Release verification evidence
 
+On 2026-08-11, the exact migration-14 worktree completed `pnpm verify:release` uninterrupted through
+all 14 ordered stages in 547.4 seconds. Results were:
+
+- frozen dependency installation and supply-chain policy, Prisma generation and validation,
+  formatting, zero-warning linting, all workspace type checks, and the high-severity dependency
+  audit: passed;
+- API unit: 106 files/548 tests; web unit: 28 files/155 tests; worker unit: 6 files/34 tests;
+- disposable integration: all 14 migrations applied to a fresh database, the structural seed ran
+  twice without creating commerce/demo identities or data, and 4 files/24 tests passed;
+- security: 2 files/6 tests; operational tooling: 34 tests; all production workspace builds: passed;
+- fast Playwright: 8 passed with 2 intentional project-matrix skips; and
+- operational Playwright: 1 passed in approximately 1.4 minutes, covering registration/login,
+  catalog/cart/checkout, administrator TOTP, product editing and media/import, delivery, inventory,
+  COD, RBAC denial, and technical/maintenance gates.
+
+This is the current exact-source release evidence. The migration-13 and earlier results retained
+below are historical predecessor evidence.
+
+On 2026-08-09, the then-current migration-13 worktree completed `pnpm verify:release` all the way
+through its fourteen ordered stages in 556.2 seconds using the frozen pnpm 11.11.0 lockfile, MySQL
+8.4, distinct migration/runtime identities, Redis database 15 for integration, Redis database 14
+for operational E2E, and Chromium. Results were:
+
+- dependency installation and supply-chain policy, Prisma generation/validation, formatting,
+  zero-warning linting, all workspace type checks, and the high-severity dependency audit: passed;
+- API unit: 105 files/537 tests; web unit: 28 files/154 tests; worker unit: 6 files/34 tests;
+- disposable integration: all 13 migrations applied to a new database, structural seed repeated
+  without creating commerce/demo identities or data, and 4 files/24 tests passed;
+- security: 2 files/6 tests; operational tooling: 33 tests; all production workspace builds: passed;
+- fast Playwright: 8 passed with 2 intentional project-matrix skips; and
+- operational Playwright: 1 passed in 1.4 minutes, including registration/login, administrator TOTP,
+  catalog/product/media/inventory operations, authoritative COD checkout and replay, Bizerte
+  Express boundaries, delivery, collection/remittance/reconciliation, RBAC denial, and launch
+  gates. Terminal state was `DELIVERED`, `CASH_REMITTED`, reservation `CONSUMED`, with reconciled
+  inventory.
+
+The same candidate's price-filter regression first exposed and then repaired a duplicated
+sellable-variant relation predicate. On the real fixture, the incorrect price-filter count fell from
+3,602 duplicated rows to the exact 3 products; fifty concurrent corrected counts completed in under
+one second. A dedicated real-MySQL regression requires a two-variant product to produce exactly one
+item, `total=1`, and `totalPages=1`. The unchanged full load subsequently passed at its original
+targets and timeouts.
+
 The 2026-08-04 customer-authentication change passed repository-wide formatting and linting; all
 six workspace type checks and production builds; Prisma validation; 104 API files/497 tests, 25 web
 files/140 tests, and 6 worker files/33 tests; 4 disposable-MySQL integration files/21 tests after a
 clean 11-migration install and repeated structural seed; 2 security files/6 tests; 26 operations
 tests; and standard Chromium/mobile Playwright with 8 passes and 2 intentional viewport skips.
 `pnpm audit --audit-level=low` reported no known vulnerability. Google-provider staging acceptance,
-fresh container scans, and the complete release/recovery matrix remain required.
+fresh container scans, and the complete release/recovery matrix remained required at that checkpoint.
+That migration-13 candidate's completed local scans and release/recovery evidence are recorded
+above; Google-provider staging acceptance remains outstanding.
 
-The following is the last complete release-gate evidence and predates the 2026-07-27 geography,
+The following is older historical release-gate evidence and predates the 2026-07-27 geography,
 delivery-metadata, and catalog-consistency follow-up. The 2026-07-23 local `pnpm verify:release`
 command completed all 14 ordered stages in 444.165 seconds on the final release-candidate source.
 It used MySQL 8.4, distinct migration
@@ -246,33 +299,34 @@ use. No parent framework, test runner, linter, or unrelated dependency changes. 
 passes supply-chain policy and `pnpm audit` now reports no known vulnerabilities locally. The
 mandatory remote workflow refresh remains required for the promoted commit.
 
-The exact patched worktree also passes formatting, linting, all workspace type checks, Prisma
-validation, 408 API unit tests, 130 web unit tests, 30 worker unit tests, 19 disposable MySQL/Redis
-integration tests, 6 security tests, 26 operations tests, and every production workspace build.
-Standard Chromium/mobile Playwright passes 8 tests with 2 intentional project-matrix skips. A fresh
-disposable operational rerun applies all ten migrations, repeats the structural seed without
-commerce/demo data, builds the production storefront, and passes its complete real-service journey
-in 2.2 minutes, ending with the order delivered, cash remitted, and inventory reservation consumed.
+At that checkpoint, the patched worktree also passed formatting, linting, all workspace type checks,
+Prisma validation, 408 API unit tests, 130 web unit tests, 30 worker unit tests, 19 disposable
+MySQL/Redis integration tests, 6 security tests, 26 operations tests, and every production workspace
+build. Standard Chromium/mobile Playwright passed 8 tests with 2 intentional project-matrix skips. A
+fresh disposable operational rerun applied all ten migrations then present, repeated the structural
+seed without commerce/demo data, built the production storefront, and passed its complete
+real-service journey in 2.2 minutes, ending with the order delivered, cash remitted, and inventory
+reservation consumed.
 
 GitHub Security run 30455832962 exposed a separate runtime-image dependency path that the pnpm
 override cannot control. Its API and worker SARIF analyses each reported HIGH CVE-2026-14257 in
 npm-bundled brace-expansion 5.0.7, fixed in 5.0.8, plus MEDIUM GHSA-r292-9mhp-454m in npm-bundled
 tar 7.5.19, fixed in 7.5.21. The web image had zero findings because its nginx runtime contains no
 npm tree. The API and worker processes invoke `node` directly and never use npm at runtime, so the
-final images now remove npm and its binaries instead of upgrading an unused package manager across
-a major version. The Trivy action remains on stable v0.36.0, selects stable Trivy 0.72.0 rather than
-its older 0.70.0 default, and explicitly scans vulnerabilities and secrets while constraining SARIF
-enforcement to the declared `HIGH,CRITICAL` policy; fixed findings still fail the job and
-`ignore-unfixed` remains enabled.
+final images removed npm and its binaries instead of upgrading an unused package manager across a
+major version. At that checkpoint the Trivy action remained on stable v0.36.0, selected Trivy 0.72.0
+rather than its older 0.70.0 default, and explicitly scanned vulnerabilities and secrets while
+constraining SARIF enforcement to the declared `HIGH,CRITICAL` policy; fixed findings still failed
+the job and `ignore-unfixed` remained enabled.
 
-Local parity runtime builds now pass for both affected images. Each remains non-root, retains its
-original direct Node.js command, and contains no npm directory or npm/npx executable. Trivy 0.72.0,
-using the CI-equivalent vulnerability and secret scanners, HIGH/CRITICAL severity filter,
-`ignore-unfixed`, and failing exit code, returns exit zero with no findings for the rebuilt API and
-worker images and the current web runtime. Formatting, linting, workspace type checks, Prisma
-validation, 407 API/129 web/30 worker unit tests, 19 disposable integration tests, 6 security tests,
-26 operations tests, every production build, and fast Playwright with 8 passes and 2 intentional
-skips also pass on this final worktree.
+Local parity runtime builds then passed for both affected images. Each remained non-root, retained
+its original direct Node.js command, and contained no npm directory or npm/npx executable. Trivy
+0.72.0, using the CI-equivalent vulnerability and secret scanners, HIGH/CRITICAL severity filter,
+`ignore-unfixed`, and failing exit code, returned exit zero with no findings for the rebuilt API,
+worker, and web runtimes. Formatting, linting, workspace type checks, Prisma validation, 407
+API/129 web/30 worker unit tests, 19 disposable integration tests, 6 security tests, 26 operations
+tests, every production build, and fast Playwright with 8 passes and 2 intentional skips also passed
+on that historical worktree.
 
 The earlier live Compose run applied all 10 migrations and reported the schema up to date. The
 structural seed completed twice with stable totals of 9 roles, 43 permissions, 24 governorates, 279
@@ -304,9 +358,61 @@ and 2,082 localities with no users or commerce records, built the production web
 the complete real-service scenario in 1.6 minutes. Registration/login, administrator TOTP, product
 creation/editing/publication, product-media lifecycle, stock receipt, authoritative COD checkout and
 replay, Bizerte Express supported/unsupported locality boundaries, delivery, cash remittance and
-reconciliation, permission denial, checkout gate, and maintenance gate all passed. The exact-worktree
-Compose rebuild/smoke, representative existing-data upgrade, and migration-11 backup/restore drill
-remain required before promotion. The overall verdict remains **NOT READY**.
+reconciliation, permission denial, checkout gate, and maintenance gate all passed. At that
+checkpoint, the next required evidence was a Compose rebuild/smoke, representative existing-data
+upgrade, and migration-11 backup/restore drill. That requirement is retained as history and is
+superseded by the migration-13 gate below. The overall verdict remained **NOT READY**.
+
+### 2026-08-09 migration-13 candidate boundary
+
+The evidence dated 2026-07-27 through 2026-08-04 in the preceding historical subsections must not be
+interpreted as an exact-worktree pass for that candidate. The repository then contained thirteen
+migrations. The two migrations after the customer identity change were:
+
+- `20260804120000_manual_courier_operations`, which adds non-destructive courier availability,
+  capacity, WhatsApp contact/template, internal integer-millime cost, and optional delivery-zone
+  coverage without changing customer delivery rates; and
+- `20260804130000_collection_discrepancy_scope`, which links a collection discrepancy and its
+  append-only reconciliation events to the exact cash collection without rewriting recorded cash.
+
+The administration delivery workspace now separates courier configuration from assignment and
+delivery execution. Operators can search and filter couriers, maintain availability, capacity,
+explicit zones and internal fees, review assignment warnings, assign/reassign/unassign within
+custody rules, preview a server-rendered manual `wa.me` handoff, record contact separately, and keep
+data-minimized internal notes. No courier provider or WhatsApp sender is enabled by these controls.
+
+Collection discrepancy resolution preserves immutable recorded cash, appends an exact adjustment
+event under dual control, and keeps the order warning unless the non-void order-wide accountable
+total is exact. Remittance completion applies the same order-wide aggregate invariant.
+
+The current dependency-only changes are the smallest compatible patches recorded in the manifests:
+Swagger 11.4.6, js-yaml 5.2.2, PostCSS 8.5.26, and the resulting Nano ID 3.3.18. The GitHub security
+workflow retains `aquasecurity/trivy-action` v0.36.0 while selecting Trivy 0.73.0, scans fixed and
+unfixed findings, and preserves separate build, scan, SARIF upload, and SBOM failure reporting. Its
+matrix now includes the dedicated migration image as well as API, worker, and web. The migration
+target deploys the already locked Prisma 6.19.3 runtime into a clean non-root Node image, removes the
+unused bundled npm tree, exposes no npm/npm/npx on `PATH`, and is about 104 MB instead of the former
+roughly 695 MB build-stage image. The exact migration
+command applied cleanly at head 13, and Trivy 0.73.0 reported zero HIGH/CRITICAL vulnerability or
+secret findings both with and without `ignore-unfixed`. The complete exact-worktree release rerun is
+recorded above for that migration-13 candidate. Mandatory remote CI/provider evidence must still be
+attached to the promoted commit;
+the overall verdict remains **NOT READY**.
+
+### 2026-08-11 current migration-14 boundary
+
+The current repository contains fourteen migrations. The new head,
+`20260811170000_product_image_renditions`, records immutable byte count, SHA-256, dimensions, and
+encoder-profile version for each generated rendition without rewriting existing approved image
+bytes. Product media exposes fixed server-generated WebP/JPEG renditions only when the complete
+immutable manifest is present. Public reads do not generate, backfill, write storage, or mutate the
+database; an incomplete legacy manifest falls back to the checksum-verified original, while missing
+or conflicting objects fail closed.
+
+The migration-14 Prisma schema, fresh disposable installation, uninterrupted release verifier,
+full-target load, and current-head encrypted restore drill have all been verified against this exact
+worktree. The final current-head images, strict Trivy scans, migration execution, and deployment
+smoke are recorded below. Historical migration-13 evidence remains separately labeled.
 
 ## Catalog import and media evidence
 
@@ -343,7 +449,16 @@ make the catalog sellable by themselves.
 
 ## Load and concurrency evidence
 
-`pnpm test:load:disposable` passed all six full targets in 104.8 seconds with one API, one worker,
+On 2026-08-11, the unchanged `pnpm test:load:disposable` gate passed all six full targets against the
+exact migration-14 source. Catalog browsing completed 500/500 requests at concurrency 100 with zero
+failures (p95 7,457 ms; max 9,600 ms). Independent checkout completed 50/50 at concurrency 50 with
+zero failures (p95 5,841 ms). The final-unit race produced exactly one winner, rejected the other
+contender as `OUT_OF_STOCK`, and left authoritative remaining quantity `0`. All 20 idempotent
+replays converged on one order identity, the 25-request administrator list passed, worker recovery
+ended `HEALTHY` with zero dead letters, and reconciliation was clean. Normal rate limits, the
+30-second request timeout, concurrency, and zero-error threshold were not weakened.
+
+The earlier recorded full-target run passed all six targets in 104.8 seconds with one API, one worker,
 MySQL pools 60/10, Redis database 13, and 211 distinct loopback source addresses while normal
 throttles remained enabled:
 
@@ -356,12 +471,30 @@ throttles remained enabled:
 | Administrator order list | 25/25, 0 failures                                                                                        |
 | Worker backlog recovery  | 10 triggers; maximum backlog 5; final actionable/dead-letter counts 0; worker `HEALTHY`                  |
 
-Post-run reconciliation found 62 orders, 62 active reservations, 62 notifications, 62 cancelled
-notification attempts, 62 processed notification outbox events, 66 total outbox events, no dead
-letters, no duplicate order, and zero
-remaining checkout/race/replay stock.
+The 2026-08-11 post-run reconciliation found 62 orders, 62 active reservations, 62 notifications,
+62 cancelled notification attempts, 62 processed notification outbox events, 66 total outbox
+events, no dead letters, no duplicate order, and zero remaining checkout/race/replay stock.
 
 ## Backup and restore evidence
+
+On 2026-08-11, a fresh gzip plus AES-256-GCM backup of the migration-14 local MySQL database was
+restored into an isolated disposable database and identity. The authenticated manifest, table
+counts, and all 14 migration checksums matched, including the current head
+`20260811170000_product_image_renditions`. Verification reported zero negative-inventory,
+over-reservation, invalid order-total, invalid line-total, cash-accounting, orphan-reference,
+incomplete-migration, or expected-migration violations. The encrypted artifact, disposable database,
+scoped restore identity, and temporary drill files were removed after verification.
+
+Historically, on 2026-08-09, a fresh gzip plus AES-256-GCM backup of the then-current local MySQL
+8.4 database was restored into an isolated disposable database at migration-13 head
+`20260804130000_collection_discrepancy_scope`. The authenticated manifest and all 13 migration
+checksums passed. Verification reported zero negative-inventory, over-reservation, order-total,
+line-total, cash-accounting, orphan, incomplete-migration, or expected-table violations; the
+disposable database was removed. A separate representative migration-13 fixture with two legacy
+discrepancies claiming the same collection also completed successfully and left both ambiguous
+links null, preserving the fail-closed accounting boundary. Repeated structural seeding remained
+stable at 9 roles, 43 permissions, 24 governorates, 279 delegations, and 2,082 localities with no
+administrator, customer, product, delivery method, or rate created.
 
 On 2026-07-23, the current MySQL 8.4 application database was backed up with gzip plus AES-256-GCM,
 an authenticated format-2 manifest, restricted temporary/final files, and an external temporary
@@ -384,29 +517,55 @@ restore, or provider snapshot/PITR acceptance.
 
 ## Container and deployment evidence
 
-On 2026-07-23, the final working-tree migration, API, worker, and web targets rebuilt successfully
+On 2026-08-11, the final current-head images built successfully with local image IDs API
+`ac4239b3faa1`, migration `1a6e2f36d053`, worker `6ceeeafdc52e`, and web `0096c46a0477`. The
+dedicated migration image found all 14 migrations current with none pending. It runs as `node` UID
+and GID 1000, invokes the Prisma 6.19.3 CLI through its direct Node command, has no npm, npx, or pnpm
+on `PATH`, and contains no bundled npm dependency tree. The upstream Corepack 0.35 installation and
+inert package-manager shims remain present but are not used by the runtime command.
+
+The fresh API, worker, web, and Nginx containers were recreated. API, worker, web, proxy, MySQL,
+Redis, object storage, and supporting dependencies reached healthy state. Readiness returned HTTP
+200 with MySQL, Redis, worker heartbeat, and all 14 migrations up. The storefront returned HTTP 200. Checkout policy returned HTTP 200 with `allowed=true` and `blockers=[]`; storefront state
+reported checkout enabled with maintenance and prelaunch disabled. The local gateway remains
+available at `http://127.0.0.1:18080`.
+
+On 2026-08-09, the then-current migration-13 working-tree migration, API, worker, and web targets
+rebuilt successfully. The dedicated migration image reported all 13 migrations current. API, worker, web,
+and Nginx were recreated while preserving the named MySQL/Redis/object-storage volumes; every
+application container is non-root with a read-only root filesystem. The policy-aware deployment
+smoke passed liveness, MySQL/Redis/worker/migration readiness, storefront state, checkout policy,
+trusted-origin age confirmation, public catalog, storefront, customer login, and administrator
+login. It reported checkout enabled, maintenance/prelaunch disabled, and no checkout blocker. The
+site is running at `http://127.0.0.1:18080`.
+
+On 2026-07-23, the then-current migration, API, worker, and web targets rebuilt successfully
 from the pinned multi-stage Dockerfiles. The non-root migration container exited `0`; API, worker,
 web, Nginx, MySQL, Redis, MinIO, and Mailpit were simultaneously healthy after only application
-containers were replaced, preserving the named data volumes. The current site remains available at
-`http://127.0.0.1:18080`.
+containers were replaced, preserving the named data volumes.
 
-The policy-aware deployment smoke passed liveness, dependency readiness, storefront state, checkout
-policy, trusted-origin age confirmation, public catalog, storefront, customer login, and admin login.
-It confirmed checkout enabled, maintenance/prelaunch disabled, and reported only
+That historical policy-aware deployment smoke passed liveness, dependency readiness, storefront
+state, checkout policy, trusted-origin age confirmation, public catalog, storefront, customer login,
+and admin login. It confirmed checkout enabled, maintenance/prelaunch disabled, and reported only
 `STORE_INFORMATION_MISSING` and `DELIVERY_METHOD_MISSING`. The strict operational-readiness variant
 correctly failed for those two missing purchaser inputs; neither legal review nor legal documents
 appeared as a blocker.
 
 ## Local security and artifact evidence
 
-- `pnpm audit --audit-level high` reported no known high-severity dependency vulnerability.
-- Gitleaks 8.30.1 scanned Git history with the four exact historical placeholder/test fingerprints
-  in `.gitleaksignore`; it found no leak. The ignore file has no wildcard, path-wide, rule-wide, or
-  entropy suppression. A separate Trivy secret-only stream of all 493 tracked and nonignored files
-  also reported zero findings.
-- Trivy 0.69.3 scanned the freshly built API, worker, and web runtime images for fixed
-  `HIGH`/`CRITICAL` vulnerabilities with the same `ignore-unfixed` policy as CI. Every image reported
-  zero high and zero critical findings.
+- Full, production-only, and development-only `pnpm audit --audit-level=low` runs reported no known
+  vulnerability.
+- Gitleaks 8.30.1 scanned 38 commits/~5.62 MB of repository history with redaction enabled and
+  reported no leak. The four entries in `.gitleaksignore` are exact historical placeholder/test
+  fingerprints; there is no wildcard, path-wide, rule-wide, or entropy suppression.
+- Trivy 0.73.0 scanned the exact final migration-14 API, migration, worker, and web images with
+  vulnerability and secret scanners, severity `HIGH,CRITICAL`, `--ignore-unfixed=false`, and
+  `--exit-code 1`. All four scans exited `0` with zero vulnerabilities and zero secrets. The security
+  workflow matrix scans the same four image targets.
+- The final migration image runs as non-root `node` UID/GID 1000, invokes the Prisma 6.19.3 CLI
+  through a direct Node command, exposes no npm, npx, or pnpm on `PATH`, and contains no bundled npm
+  dependency tree. Upstream Corepack 0.35 and inert shims remain present; this evidence does not
+  claim the filesystem contains no package-manager shim names.
 - Local CycloneDX 1.6 SBOM generation succeeded for API (440 components), worker (269), and web (22).
   GitHub must still regenerate and retain the repository's required SPDX artifacts for the promoted
   commit.
@@ -446,8 +605,9 @@ MySQL 8.4 release path and must not be imported into the application database.
 
 ## Remaining target-environment configuration
 
-1. Rehearse migration 11 against a representative existing-data upgrade and record a fresh
-   migration-11 backup/restore drill plus the complete release-gate evidence for the promoted commit.
+1. Retain the completed migration-14 release, load, and encrypted restore evidence plus the
+   migration-12/13 collision rehearsal. Repeat migration/restore, load, and deployment acceptance
+   against the purchaser's production-shaped staging clone for the promoted commit.
 2. Configure real store name, phone, email, and address.
 3. Configure and activate at least one complete delivery method/coverage path with valid pricing;
    then verify `GET /api/v1/checkout/policy` has no blocker.
@@ -507,7 +667,11 @@ operators must also follow `docs/CATALOG_IMPORT_AND_MEDIA.md`.
 
 **NOT READY**
 
-This verdict remains until the current migration-11 candidate passes the complete release and
-recovery gates, the requested administrator is created through a fully TOTP-authenticated protected
-flow, purchaser target operational configuration is supplied, and all mandatory CI/security checks
-pass for the promoted commit. Legal approval is not an engineering readiness gate.
+The current `20260811170000_product_image_renditions` candidate has passed the exact-worktree
+uninterrupted release verifier, fresh fourteen-migration install with repeat seed, full-target load,
+encrypted isolated restore drill, final image builds and strict scans, fourteen-migration container
+execution, and live-stack smoke. The **NOT READY** verdict remains because a representative
+upgrade/recovery run must pass in the purchaser's target environment, purchaser-owned operational
+configuration and provider acceptance must be supplied, the requested administrator must be
+created through a fully TOTP-authenticated protected flow, and all mandatory CI/security checks
+must pass for the promoted commit. Legal approval is not an engineering readiness gate.

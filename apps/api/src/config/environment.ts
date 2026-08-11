@@ -73,7 +73,7 @@ const environmentSchema = z
       .min(1)
       .max(200)
       .regex(/^\d{14}_[a-z0-9_]+$/)
-      .default('20260804090000_customer_google_identity'),
+      .default('20260811170000_product_image_renditions'),
     COOKIE_SECRET: z.string().default('development-only-cookie-secret-change-me'),
     FIELD_ENCRYPTION_KEY: z.string().default('development-only-field-key-change-me'),
     CHECKOUT_ENABLED: booleanFromEnvironment('true'),

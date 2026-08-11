@@ -224,6 +224,15 @@ export class AdminCashCollectionListItemDto {
   @ApiProperty({ minimum: 0 })
   collectedMillimes!: number;
 
+  @ApiPropertyOptional({ nullable: true, minimum: 0 })
+  accountableMillimes!: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  adjustmentMillimes!: number | null;
+
+  @ApiPropertyOptional({ enum: CashDiscrepancyStatus, nullable: true })
+  discrepancyStatus!: CashDiscrepancyStatus | null;
+
   @ApiPropertyOptional({ nullable: true, format: 'date-time' })
   collectedAt!: string | null;
 
@@ -327,6 +336,15 @@ export class AdminCashCollectionDetailDto {
 
   @ApiProperty({ minimum: 0 })
   collectedMillimes!: number;
+
+  @ApiPropertyOptional({ nullable: true, minimum: 0 })
+  accountableMillimes!: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  adjustmentMillimes!: number | null;
+
+  @ApiPropertyOptional({ enum: CashDiscrepancyStatus, nullable: true })
+  discrepancyStatus!: CashDiscrepancyStatus | null;
 
   @ApiPropertyOptional({ nullable: true, format: 'date-time' })
   collectedAt!: string | null;

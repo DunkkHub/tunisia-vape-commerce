@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '../src/app/providers';
 import { adminDataClient } from '../src/api/admin-data-client';
-import type { AdminProductImage } from '../src/api/types';
+import type { AdminProductImage, AdminProductVariantRead } from '../src/api/types';
 import { AdminProductMediaManager } from '../src/pages/admin/admin-product-media-manager';
 import { json, requestUrl } from './test-app';
 
@@ -143,6 +143,144 @@ describe('administrator product media workflow', () => {
     invalidateSpy.mockRestore();
   });
 
+  it('uploads a variant image batch sequentially and chains the owner version', async () => {
+    const variant: AdminProductVariantRead = {
+      id: 'variant-1',
+      productId: 'product-1',
+      nameFr: 'Menthe glacée',
+      nameAr: 'نعناع بارد',
+      sku: 'MINT-01',
+      barcode: null,
+      color: null,
+      costMillimes: 20_000,
+      priceMillimes: 35_000,
+      promotionalPriceMillimes: null,
+      taxRateBps: 0,
+      weightGrams: 50,
+      lowStockThreshold: 2,
+      publicationStatus: 'DRAFT',
+      archivedAt: null,
+      version: 7,
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.includes('/admin/products/product-1/images?')) {
+        return Promise.resolve(
+          json({ items: [image], page: 1, pageSize: 50, total: 1, totalPages: 1 }),
+        );
+      }
+      if (url.includes('/admin/products/product-1/variants')) {
+        return Promise.resolve(json({ items: [variant] }));
+      }
+      return Promise.resolve(json({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const uploadSpy = vi.spyOn(adminDataClient, 'uploadProductImage');
+    uploadSpy
+      .mockReset()
+      .mockResolvedValueOnce({ ...image, id: 'image-2', variantId: variant.id, ownerVersion: 8 })
+      .mockResolvedValueOnce({ ...image, id: 'image-3', variantId: variant.id, ownerVersion: 9 });
+    const user = userEvent.setup();
+
+    render(
+      <AppProviders>
+        <AdminProductMediaManager productId="product-1" productVersion={3} />
+      </AppProviders>,
+    );
+
+    expect(await screen.findByRole('img', { name: 'Produit vu de face' })).toBeVisible();
+    const files = [
+      new File([new Uint8Array([0xff, 0xd8, 0xff])], 'front.jpg', { type: 'image/jpeg' }),
+      new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'side.png', {
+        type: 'image/png',
+      }),
+    ];
+    await user.upload(screen.getByLabelText('Fichier image'), files);
+    await user.selectOptions(screen.getByLabelText('Propriétaire de l’image'), variant.id);
+    const frenchAltFields = screen.getAllByLabelText('Texte alternatif français');
+    const arabicAltFields = screen.getAllByLabelText('Texte alternatif arabe');
+    await user.type(frenchAltFields[0]!, 'Vue avant menthe');
+    await user.type(arabicAltFields[0]!, 'واجهة النعناع');
+    await user.type(frenchAltFields[1]!, 'Vue latérale menthe');
+    await user.type(arabicAltFields[1]!, 'جانب النعناع');
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Définir la première image comme principale' }),
+    );
+    await user.click(screen.getByRole('button', { name: /Téléverser l’image/ }));
+
+    await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(2));
+    expect(uploadSpy.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        file: files[0],
+        expectedOwnerVersion: 7,
+        variantId: variant.id,
+        altTextFr: 'Vue avant menthe',
+        altTextAr: 'واجهة النعناع',
+        isPrimary: true,
+      }),
+    );
+    expect(uploadSpy.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        file: files[1],
+        expectedOwnerVersion: 8,
+        variantId: variant.id,
+        altTextFr: 'Vue latérale menthe',
+        altTextAr: 'جانب النعناع',
+        isPrimary: false,
+      }),
+    );
+    expect(
+      await screen.findByText('Toutes les images ont été validées et téléversées.'),
+    ).toBeVisible();
+  });
+
+  it('keeps a failed upload staged and retries it without reselecting the file', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.includes('/admin/products/product-1/images?')) {
+        return Promise.resolve(
+          json({ items: [image], page: 1, pageSize: 50, total: 1, totalPages: 1 }),
+        );
+      }
+      if (url.includes('/admin/products/product-1/variants')) {
+        return Promise.resolve(json({ items: [] }));
+      }
+      return Promise.resolve(json({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const uploadSpy = vi.spyOn(adminDataClient, 'uploadProductImage');
+    uploadSpy
+      .mockReset()
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce({ ...image, id: 'image-2', ownerVersion: 4 });
+    const user = userEvent.setup();
+
+    render(
+      <AppProviders>
+        <AdminProductMediaManager productId="product-1" productVersion={3} />
+      </AppProviders>,
+    );
+
+    expect(await screen.findByRole('img', { name: 'Produit vu de face' })).toBeVisible();
+    const file = new File([new Uint8Array([0xff, 0xd8, 0xff])], 'retry.jpg', {
+      type: 'image/jpeg',
+    });
+    await user.upload(screen.getByLabelText('Fichier image'), file);
+    await user.type(screen.getAllByLabelText('Texte alternatif français')[0]!, 'Vue à réessayer');
+    await user.type(screen.getAllByLabelText('Texte alternatif arabe')[0]!, 'صورة لإعادة المحاولة');
+    await user.click(screen.getByRole('button', { name: /Téléverser l’image/ }));
+
+    expect(await screen.findByText(/Ce fichier n’a pas pu être téléversé/)).toBeVisible();
+    const retry = await screen.findByRole('button', { name: 'Réessayer les images restantes' });
+    await waitFor(() => expect(retry).toBeEnabled());
+    await user.click(retry);
+
+    await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(2));
+    expect(uploadSpy.mock.calls[0]?.[1].file).toBe(file);
+    expect(uploadSpy.mock.calls[1]?.[1].file).toBe(file);
+    expect(await screen.findByText('Image validée et téléversée.')).toBeVisible();
+  });
+
   it('keeps the authenticated review queue reachable across every result page', async () => {
     const reviewImages = [1, 2].map((page): AdminProductImage => ({
       ...image,
@@ -256,10 +394,12 @@ describe('administrator product media workflow', () => {
       total: 2,
       totalPages: 1,
     });
-    let resolveReorder!: (value: { imageIds: string[]; ownerVersion: number }) => void;
-    const reorderPromise = new Promise<{ imageIds: string[]; ownerVersion: number }>((resolve) => {
-      resolveReorder = resolve;
-    });
+    let resolveReorder!: (value: { items: AdminProductImage[]; ownerVersion: number }) => void;
+    const reorderPromise = new Promise<{ items: AdminProductImage[]; ownerVersion: number }>(
+      (resolve) => {
+        resolveReorder = resolve;
+      },
+    );
     vi.spyOn(adminDataClient, 'reorderProductImages').mockReturnValue(reorderPromise);
     const user = userEvent.setup();
 
@@ -277,7 +417,7 @@ describe('administrator product media workflow', () => {
     expect(screen.getAllByRole('button', { name: 'Supprimer' })[0]).toBeDisabled();
 
     await act(async () => {
-      resolveReorder({ imageIds: ['image-2', 'image-1'], ownerVersion: 4 });
+      resolveReorder({ items: [galleryImage, image], ownerVersion: 4 });
       await reorderPromise;
     });
     await waitFor(() =>

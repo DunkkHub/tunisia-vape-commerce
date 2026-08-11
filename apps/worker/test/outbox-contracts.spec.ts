@@ -58,6 +58,24 @@ describe('outbox contracts', () => {
         credentials: 'forbidden',
       }),
     ).toThrow();
+    expect(
+      parseEventPayload(OUTBOX_EVENT_TYPES.MEDIA_OBJECT_DELETE, 2, {
+        bucket: 'local-media',
+        objectKeys: [
+          'products/product-1/image.png',
+          'products/product-1/image.png.renditions/card.webp',
+        ],
+      }),
+    ).toMatchObject({
+      eventType: OUTBOX_EVENT_TYPES.MEDIA_OBJECT_DELETE,
+      payload: { objectKeys: expect.any(Array) as string[] },
+    });
+    expect(() =>
+      parseEventPayload(OUTBOX_EVENT_TYPES.MEDIA_OBJECT_DELETE, 2, {
+        bucket: 'local-media',
+        objectKeys: Array.from({ length: 18 }, (_, index) => `products/image-${index}.webp`),
+      }),
+    ).toThrow();
   });
 
   it('decodes bounded JSON returned as text by a raw MySQL query', () => {
@@ -65,7 +83,7 @@ describe('outbox contracts', () => {
       notificationId: 'notification-a',
     });
     expect(() => parseStoredJson('{invalid')).toThrow();
-    expect(() => parseStoredJson('x'.repeat(8_193))).toThrow();
+    expect(() => parseStoredJson('x'.repeat(12_289))).toThrow();
   });
 
   it('creates BullMQ-safe deterministic IDs without embedding the source key', () => {

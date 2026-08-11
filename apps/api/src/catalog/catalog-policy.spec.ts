@@ -116,6 +116,36 @@ describe('public catalog filters', () => {
     });
   });
 
+  it('keeps the lower price bound as separate base and anti-variant predicates', () => {
+    const where = buildPublicProductWhere(
+      { minPriceMillimes: 5_000 },
+      new Date('2026-07-11T12:00:00.000Z'),
+      priceFields,
+    );
+    const clauses = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
+    const priceClause = clauses.find((clause) => 'AND' in clause);
+    const priceClauses = Array.isArray(priceClause?.AND)
+      ? priceClause.AND
+      : priceClause?.AND
+        ? [priceClause.AND]
+        : [];
+    const serializedNotClauses = priceClauses
+      .filter((clause) => 'NOT' in clause)
+      .map((clause) => JSON.stringify(clause));
+    const sellableVariantClause = JSON.stringify({
+      variants: { some: publicSellableVariantWhere() },
+    });
+
+    expect(
+      clauses.filter((clause) => JSON.stringify(clause) === sellableVariantClause),
+    ).toHaveLength(1);
+    expect(priceClauses).toHaveLength(2);
+    expect(JSON.stringify(priceClauses)).toContain(
+      '"variants":{"none":{"publicationStatus":"PUBLISHED","archivedAt":null,"deletedAt":null',
+    );
+    expect(serializedNotClauses.every((clause) => !clause.includes('"variants"'))).toBe(true);
+  });
+
   it('combines brand, type, variant flavor, puff, nicotine and price predicates', () => {
     const now = new Date('2026-07-11T12:00:00.000Z');
     const where = buildPublicProductWhere(

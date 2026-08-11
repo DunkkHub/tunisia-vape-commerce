@@ -27,6 +27,11 @@ import {
   serializeDeliveryStatusCsv,
 } from './delivery-csv';
 import { canTransitionDelivery } from './delivery-transition-policy';
+import {
+  buildCourierWhatsAppLink,
+  DEFAULT_COURIER_WHATSAPP_TEMPLATE,
+  type CourierWhatsAppTemplateValues,
+} from './courier-whatsapp';
 import type {
   CreateDeliveryManifestDto,
   CreateManualCourierDto,
@@ -42,16 +47,43 @@ const COURIER_RECORD_SELECT = {
   id: true,
   code: true,
   name: true,
+  companyName: true,
   status: true,
+  availabilityStatus: true,
   contactName: true,
   phoneE164: true,
+  whatsappPhoneE164: true,
   email: true,
+  defaultFeeMillimes: true,
+  maximumActiveDeliveries: true,
+  whatsappTemplate: true,
   notes: true,
   createdAt: true,
   updatedAt: true,
   integrations: {
     orderBy: { id: 'asc' },
     select: { type: true, name: true, active: true },
+  },
+  deliveryZones: {
+    orderBy: [{ deliveryZone: { priority: 'desc' } }, { deliveryZoneId: 'asc' }],
+    select: {
+      deliveryZoneId: true,
+      active: true,
+      feeMillimes: true,
+      createdAt: true,
+      updatedAt: true,
+      deliveryZone: {
+        select: {
+          code: true,
+          nameFr: true,
+          nameAr: true,
+          active: true,
+          supported: true,
+          temporarilySuspended: true,
+          _count: { select: { localities: true } },
+        },
+      },
+    },
   },
   _count: { select: { deliveries: true, manifests: true } },
 } as const satisfies Prisma.CourierSelect;
@@ -189,7 +221,23 @@ export class AdminDeliveryOperationsService {
   ) {}
 
   async listCourierRecords(query: ManualCourierListQueryDto) {
-    const where = query.status ? { status: query.status } : {};
+    const search = query.q?.trim().replace(/\s+/g, ' ');
+    const where = {
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.availabilityStatus ? { availabilityStatus: query.availabilityStatus } : {}),
+      ...(search
+        ? {
+            OR: [
+              { code: { contains: search } },
+              { name: { contains: search } },
+              { companyName: { contains: search } },
+              { contactName: { contains: search } },
+              { phoneE164: { contains: search } },
+              { whatsappPhoneE164: { contains: search } },
+            ],
+          }
+        : {}),
+    } satisfies Prisma.CourierWhereInput;
     const [records, total] = await this.prisma.$transaction([
       this.prisma.courier.findMany({
         where,
@@ -200,9 +248,26 @@ export class AdminDeliveryOperationsService {
       }),
       this.prisma.courier.count({ where }),
     ]);
+    const activeCounts = records.length
+      ? await this.prisma.delivery.groupBy({
+          by: ['courierId'],
+          where: {
+            courierId: { in: records.map(({ id }) => id) },
+            status: { notIn: [...TERMINAL_DELIVERY_STATUSES] },
+          },
+          _count: { _all: true },
+        })
+      : [];
+    const activeCountByCourier = new Map(
+      activeCounts.flatMap((item) =>
+        item.courierId ? ([[item.courierId, item._count._all]] as const) : [],
+      ),
+    );
     return {
       data: {
-        items: records.map((record) => this.serializeCourier(record)),
+        items: records.map((record) =>
+          this.serializeCourier(record, activeCountByCourier.get(record.id) ?? 0),
+        ),
         page: query.page,
         pageSize: query.limit,
         total,
@@ -214,13 +279,24 @@ export class AdminDeliveryOperationsService {
   async createManualCourier(input: CreateManualCourierDto, request: Request) {
     try {
       return await this.prisma.$transaction(async (transaction) => {
+        await this.validateCoverageZones(transaction, input.coverageZones);
+        this.validateWhatsAppConfiguration(
+          input.whatsappTemplate,
+          input.whatsappPhoneE164 ?? input.phoneE164,
+        );
         const courier = await transaction.courier.create({
           data: {
             code: input.code.trim().toUpperCase(),
             name: input.name.trim(),
+            companyName: input.companyName?.trim() ?? null,
+            availabilityStatus: input.availabilityStatus ?? 'AVAILABLE',
             contactName: input.contactName?.trim() ?? null,
             phoneE164: input.phoneE164 ?? null,
+            whatsappPhoneE164: input.whatsappPhoneE164 ?? null,
             email: input.email?.trim().toLowerCase() ?? null,
+            defaultFeeMillimes: input.defaultFeeMillimes ?? null,
+            maximumActiveDeliveries: input.maximumActiveDeliveries ?? null,
+            whatsappTemplate: input.whatsappTemplate?.trim() ?? DEFAULT_COURIER_WHATSAPP_TEMPLATE,
             notes: input.notes?.trim() ?? null,
             integrations: {
               create: {
@@ -230,6 +306,17 @@ export class AdminDeliveryOperationsService {
                 configuration: { mode: 'MANUAL_ADMIN' },
               },
             },
+            ...(input.coverageZones?.length
+              ? {
+                  deliveryZones: {
+                    create: input.coverageZones.map((zone) => ({
+                      deliveryZoneId: zone.deliveryZoneId,
+                      active: zone.active ?? true,
+                      feeMillimes: zone.feeMillimes ?? null,
+                    })),
+                  },
+                }
+              : {}),
           },
           select: COURIER_RECORD_SELECT,
         });
@@ -237,9 +324,18 @@ export class AdminDeliveryOperationsService {
           action: 'delivery.courier.manual_created',
           resourceType: 'Courier',
           resourceId: courier.id,
-          after: { code: courier.code, name: courier.name, status: courier.status, mode: 'MANUAL' },
+          after: {
+            code: courier.code,
+            name: courier.name,
+            status: courier.status,
+            availabilityStatus: courier.availabilityStatus,
+            defaultFeeMillimes: courier.defaultFeeMillimes,
+            maximumActiveDeliveries: courier.maximumActiveDeliveries,
+            coverageZoneIds: courier.deliveryZones.map(({ deliveryZoneId }) => deliveryZoneId),
+            mode: 'MANUAL',
+          },
         });
-        return { data: this.serializeCourier(courier) };
+        return { data: this.serializeCourier(courier, 0) };
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -253,9 +349,16 @@ export class AdminDeliveryOperationsService {
     const changeKeys = [
       'code',
       'name',
+      'companyName',
+      'availabilityStatus',
       'contactName',
       'phoneE164',
+      'whatsappPhoneE164',
       'email',
+      'defaultFeeMillimes',
+      'maximumActiveDeliveries',
+      'whatsappTemplate',
+      'coverageZones',
       'notes',
       'status',
     ] as const;
@@ -282,6 +385,19 @@ export class AdminDeliveryOperationsService {
             'A courier with an external integration cannot be changed through the manual workflow.',
           );
         }
+        await this.validateCoverageZones(transaction, input.coverageZones);
+        const effectivePhoneE164 =
+          input.phoneE164 !== undefined ? input.phoneE164 : courier.phoneE164;
+        const effectiveWhatsAppPhoneE164 =
+          input.whatsappPhoneE164 !== undefined
+            ? input.whatsappPhoneE164
+            : courier.whatsappPhoneE164;
+        this.validateWhatsAppConfiguration(
+          input.whatsappTemplate === null
+            ? DEFAULT_COURIER_WHATSAPP_TEMPLATE
+            : (input.whatsappTemplate ?? courier.whatsappTemplate ?? undefined),
+          effectiveWhatsAppPhoneE164 ?? effectivePhoneE164 ?? undefined,
+        );
         if (input.status && input.status !== CourierStatus.ACTIVE && courier.status === 'ACTIVE') {
           const [activeDeliveries, activeManifests] = await Promise.all([
             transaction.delivery.count({
@@ -301,15 +417,35 @@ export class AdminDeliveryOperationsService {
             );
           }
         }
+        const now = new Date();
         const data: Prisma.CourierUpdateManyMutationInput = {
+          updatedAt: now,
           ...(input.code !== undefined ? { code: input.code.trim().toUpperCase() } : {}),
           ...(input.name !== undefined ? { name: input.name.trim() } : {}),
+          ...(input.companyName !== undefined
+            ? { companyName: input.companyName?.trim() ?? null }
+            : {}),
+          ...(input.availabilityStatus !== undefined
+            ? { availabilityStatus: input.availabilityStatus }
+            : {}),
           ...(input.contactName !== undefined
             ? { contactName: input.contactName?.trim() ?? null }
             : {}),
           ...(input.phoneE164 !== undefined ? { phoneE164: input.phoneE164 } : {}),
+          ...(input.whatsappPhoneE164 !== undefined
+            ? { whatsappPhoneE164: input.whatsappPhoneE164 }
+            : {}),
           ...(input.email !== undefined
             ? { email: input.email?.trim().toLowerCase() ?? null }
+            : {}),
+          ...(input.defaultFeeMillimes !== undefined
+            ? { defaultFeeMillimes: input.defaultFeeMillimes }
+            : {}),
+          ...(input.maximumActiveDeliveries !== undefined
+            ? { maximumActiveDeliveries: input.maximumActiveDeliveries }
+            : {}),
+          ...(input.whatsappTemplate !== undefined
+            ? { whatsappTemplate: input.whatsappTemplate?.trim() ?? null }
             : {}),
           ...(input.notes !== undefined ? { notes: input.notes?.trim() ?? null } : {}),
           ...(input.status !== undefined ? { status: input.status } : {}),
@@ -324,15 +460,48 @@ export class AdminDeliveryOperationsService {
             'The courier record changed. Refresh and try again.',
           );
         }
+        if (input.coverageZones !== undefined) {
+          await transaction.courierDeliveryZone.deleteMany({ where: { courierId: id } });
+          if (input.coverageZones.length > 0) {
+            await transaction.courierDeliveryZone.createMany({
+              data: input.coverageZones.map((zone) => ({
+                courierId: id,
+                deliveryZoneId: zone.deliveryZoneId,
+                active: zone.active ?? true,
+                feeMillimes: zone.feeMillimes ?? null,
+              })),
+            });
+          }
+        }
         await this.audit(transaction, request, {
           action: 'delivery.courier.manual_updated',
           resourceType: 'Courier',
           resourceId: id,
-          before: { code: courier.code, name: courier.name, status: courier.status },
+          before: {
+            code: courier.code,
+            name: courier.name,
+            status: courier.status,
+            availabilityStatus: courier.availabilityStatus,
+            defaultFeeMillimes: courier.defaultFeeMillimes,
+            maximumActiveDeliveries: courier.maximumActiveDeliveries,
+            coverageZoneIds: courier.deliveryZones.map(({ deliveryZoneId }) => deliveryZoneId),
+          },
           after: {
             code: input.code?.trim().toUpperCase() ?? courier.code,
             name: input.name?.trim() ?? courier.name,
             status: input.status ?? courier.status,
+            availabilityStatus: input.availabilityStatus ?? courier.availabilityStatus,
+            defaultFeeMillimes:
+              input.defaultFeeMillimes === undefined
+                ? courier.defaultFeeMillimes
+                : input.defaultFeeMillimes,
+            maximumActiveDeliveries:
+              input.maximumActiveDeliveries === undefined
+                ? courier.maximumActiveDeliveries
+                : input.maximumActiveDeliveries,
+            coverageZoneIds:
+              input.coverageZones?.map(({ deliveryZoneId }) => deliveryZoneId) ??
+              courier.deliveryZones.map(({ deliveryZoneId }) => deliveryZoneId),
             changedFields: changeKeys.filter((key) => input[key] !== undefined),
           },
         });
@@ -341,7 +510,10 @@ export class AdminDeliveryOperationsService {
           select: COURIER_RECORD_SELECT,
         });
         if (!updated) throw this.courierNotFound();
-        return { data: this.serializeCourier(updated) };
+        const activeDeliveryCount = await transaction.delivery.count({
+          where: { courierId: id, status: { notIn: [...TERMINAL_DELIVERY_STATUSES] } },
+        });
+        return { data: this.serializeCourier(updated, activeDeliveryCount) };
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -1070,22 +1242,97 @@ export class AdminDeliveryOperationsService {
     };
   }
 
-  private serializeCourier(courier: CourierRecord) {
+  private serializeCourier(courier: CourierRecord, activeDeliveryCount: number) {
     return {
       id: courier.id,
       code: courier.code,
       name: courier.name,
+      companyName: courier.companyName,
       status: courier.status,
+      availabilityStatus: courier.availabilityStatus,
       contactName: courier.contactName,
       phoneE164: courier.phoneE164,
+      whatsappPhoneE164: courier.whatsappPhoneE164,
       email: courier.email,
+      defaultFeeMillimes: courier.defaultFeeMillimes,
+      maximumActiveDeliveries: courier.maximumActiveDeliveries,
+      whatsappTemplate: courier.whatsappTemplate ?? DEFAULT_COURIER_WHATSAPP_TEMPLATE,
       notes: courier.notes,
       integrations: courier.integrations,
+      coverageMode:
+        courier.deliveryZones.length > 0 ? ('ZONES' as const) : ('UNRESTRICTED' as const),
+      coverageZones: courier.deliveryZones.map((zone) => ({
+        deliveryZoneId: zone.deliveryZoneId,
+        code: zone.deliveryZone.code,
+        nameFr: zone.deliveryZone.nameFr,
+        nameAr: zone.deliveryZone.nameAr,
+        active: zone.active,
+        zoneActive: zone.deliveryZone.active,
+        zoneSupported: zone.deliveryZone.supported,
+        zoneTemporarilySuspended: zone.deliveryZone.temporarilySuspended,
+        feeMillimes: zone.feeMillimes,
+        localityCount: zone.deliveryZone._count.localities,
+        createdAt: zone.createdAt.toISOString(),
+        updatedAt: zone.updatedAt.toISOString(),
+      })),
+      activeDeliveryCount,
       deliveryCount: courier._count.deliveries,
       manifestCount: courier._count.manifests,
       createdAt: courier.createdAt.toISOString(),
       updatedAt: courier.updatedAt.toISOString(),
     };
+  }
+
+  private async validateCoverageZones(
+    transaction: Transaction,
+    zones: CreateManualCourierDto['coverageZones'],
+  ): Promise<void> {
+    if (zones === undefined || zones.length === 0) return;
+    const records = await transaction.deliveryZone.findMany({
+      where: { id: { in: zones.map(({ deliveryZoneId }) => deliveryZoneId) } },
+      select: { id: true },
+    });
+    if (records.length !== zones.length) {
+      throw this.badRequest(
+        'COURIER_COVERAGE_ZONE_INVALID',
+        'Every courier coverage entry must reference an existing delivery zone.',
+      );
+    }
+  }
+
+  private validateWhatsAppConfiguration(
+    template: string | undefined,
+    effectivePhoneE164: string | undefined,
+  ): void {
+    const values = Object.freeze({
+      orderNumber: 'ORDER',
+      customerName: 'CUSTOMER',
+      customerPhone: '+21620000000',
+      deliveryAddress: 'ADDRESS',
+      governorate: 'GOVERNORATE',
+      delegation: 'DELEGATION',
+      locality: 'LOCALITY',
+      amountToCollect: '0.000 TND',
+      orderNotes: 'NONE',
+    }) satisfies CourierWhatsAppTemplateValues;
+    try {
+      buildCourierWhatsAppLink({
+        courierPhoneE164: effectivePhoneE164 ?? '+21620000000',
+        template: template ?? DEFAULT_COURIER_WHATSAPP_TEMPLATE,
+        values,
+      });
+    } catch (error) {
+      const code =
+        error instanceof Error && 'code' in error && typeof error.code === 'string'
+          ? error.code
+          : 'COURIER_WHATSAPP_TEMPLATE_INVALID';
+      throw this.badRequest(
+        code,
+        code === 'COURIER_WHATSAPP_PHONE_INVALID'
+          ? 'The courier WhatsApp phone number is invalid.'
+          : 'The courier WhatsApp message template is invalid.',
+      );
+    }
   }
 
   private serializeManifest(manifest: ManifestDetail) {

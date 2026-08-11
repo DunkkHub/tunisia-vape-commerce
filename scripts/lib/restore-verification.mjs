@@ -11,6 +11,14 @@ const scalarCount = async (prisma, query) => {
   return asCount(row?.count);
 };
 
+export const assertExpectedMigrationHead = (latestMigration, expectedMigration) => {
+  if (latestMigration !== expectedMigration) {
+    throw new Error(
+      `Restored migration head ${String(latestMigration ?? 'NONE')} does not match the application-required migration ${expectedMigration}`,
+    );
+  }
+};
+
 export const verifyRestoredDatabase = async (
   prisma,
   manifest = null,
@@ -22,8 +30,11 @@ export const verifyRestoredDatabase = async (
   const countEntries = await Promise.all(
     [
       ['User', prisma.user.count()],
+      ['CustomerExternalIdentity', prisma.customerExternalIdentity.count()],
+      ['PasswordResetToken', prisma.passwordResetToken.count()],
       ['Product', prisma.product.count()],
       ['ProductVariant', prisma.productVariant.count()],
+      ['ProductImage', prisma.productImage.count()],
       ['InventoryItem', prisma.inventoryItem.count()],
       ['StockReservation', prisma.stockReservation.count()],
       ['StockMovement', prisma.stockMovement.count()],
@@ -31,13 +42,21 @@ export const verifyRestoredDatabase = async (
       ['OrderItem', prisma.orderItem.count()],
       ['OrderAddressSnapshot', prisma.orderAddressSnapshot.count()],
       ['OrderConsentSnapshot', prisma.orderConsentSnapshot.count()],
+      ['DeliveryZone', prisma.deliveryZone.count()],
+      ['Courier', prisma.courier.count()],
+      ['CourierDeliveryZone', prisma.courierDeliveryZone.count()],
       ['Delivery', prisma.delivery.count()],
+      ['DeliveryAttempt', prisma.deliveryAttempt.count()],
       ['DeliveryEvent', prisma.deliveryEvent.count()],
       ['CashCollection', prisma.cashCollection.count()],
       ['CashRemittance', prisma.cashRemittance.count()],
+      ['CashRemittanceItem', prisma.cashRemittanceItem.count()],
+      ['CashDiscrepancy', prisma.cashDiscrepancy.count()],
+      ['CashReconciliationEvent', prisma.cashReconciliationEvent.count()],
       ['AuditLog', prisma.auditLog.count()],
       ['OutboxEvent', prisma.outboxEvent.count()],
       ['Notification', prisma.notification.count()],
+      ['NotificationDeliveryAttempt', prisma.notificationDeliveryAttempt.count()],
     ].map(async ([name, operation]) => [name, await operation]),
   );
   const rowCounts = Object.fromEntries(countEntries);
@@ -92,8 +111,32 @@ export const verifyRestoredDatabase = async (
       prisma,
       Prisma.sql`
           SELECT COUNT(*) AS \`count\`
-          FROM \`CashCollection\`
-          WHERE \`expectedMillimes\` < 0 OR \`collectedMillimes\` < 0
+          FROM (
+            SELECT cc.id
+            FROM \`CashCollection\` cc
+            WHERE cc.\`expectedMillimes\` < 0 OR cc.\`collectedMillimes\` < 0
+            UNION ALL
+            SELECT cd.id
+            FROM \`CashDiscrepancy\` cd
+            LEFT JOIN \`CashCollection\` cc ON cc.id = cd.cashCollectionId
+            WHERE cd.\`expectedMillimes\` < 0
+              OR cd.\`actualMillimes\` < 0
+              OR cd.\`differenceMillimes\` != cd.\`actualMillimes\` - cd.\`expectedMillimes\`
+              OR NOT (
+                (cd.\`remittanceId\` IS NOT NULL AND cd.\`orderId\` IS NULL AND
+                 cd.\`cashCollectionId\` IS NULL) OR
+                (cd.\`remittanceId\` IS NULL AND cd.\`orderId\` IS NOT NULL)
+              )
+              OR (cd.\`cashCollectionId\` IS NOT NULL AND
+                  (cd.\`orderId\` IS NULL OR
+                   cc.\`orderId\` != cd.\`orderId\` OR
+                   cc.\`expectedMillimes\` != cd.\`expectedMillimes\` OR
+                   cc.\`collectedMillimes\` != cd.\`actualMillimes\`))
+            UNION ALL
+            SELECT cre.id
+            FROM \`CashReconciliationEvent\` cre
+            WHERE cre.\`remittanceId\` IS NOT NULL AND cre.\`cashCollectionId\` IS NOT NULL
+          ) invalid_cash
         `,
     ),
     scalarCount(
@@ -105,6 +148,26 @@ export const verifyRestoredDatabase = async (
           FROM \`OrderItem\` oi
           LEFT JOIN \`Order\` o ON o.id = oi.orderId
           WHERE o.id IS NULL
+          UNION ALL
+          SELECT cei.id
+          FROM \`CustomerExternalIdentity\` cei
+          LEFT JOIN \`CustomerProfile\` cp ON cp.id = cei.customerId
+          WHERE cp.id IS NULL
+          UNION ALL
+          SELECT prt.id
+          FROM \`PasswordResetToken\` prt
+          LEFT JOIN \`User\` u ON u.id = prt.userId
+          WHERE u.id IS NULL
+          UNION ALL
+          SELECT pi.id
+          FROM \`ProductImage\` pi
+          LEFT JOIN \`Product\` p ON p.id = pi.productId
+          WHERE pi.productId IS NOT NULL AND p.id IS NULL
+          UNION ALL
+          SELECT pi.id
+          FROM \`ProductImage\` pi
+          LEFT JOIN \`ProductVariant\` pv ON pv.id = pi.variantId
+          WHERE pi.variantId IS NOT NULL AND pv.id IS NULL
           UNION ALL
           SELECT oa.id
           FROM \`OrderAddressSnapshot\` oa
@@ -121,10 +184,85 @@ export const verifyRestoredDatabase = async (
           LEFT JOIN \`Order\` o ON o.id = d.orderId
           WHERE o.id IS NULL
           UNION ALL
+          SELECT d.id
+          FROM \`Delivery\` d
+          LEFT JOIN \`Courier\` c ON c.id = d.courierId
+          WHERE d.courierId IS NOT NULL AND c.id IS NULL
+          UNION ALL
+          SELECT cdz.courierId
+          FROM \`CourierDeliveryZone\` cdz
+          LEFT JOIN \`Courier\` c ON c.id = cdz.courierId
+          WHERE c.id IS NULL
+          UNION ALL
+          SELECT cdz.courierId
+          FROM \`CourierDeliveryZone\` cdz
+          LEFT JOIN \`DeliveryZone\` dz ON dz.id = cdz.deliveryZoneId
+          WHERE dz.id IS NULL
+          UNION ALL
+          SELECT da.id
+          FROM \`DeliveryAttempt\` da
+          LEFT JOIN \`Delivery\` d ON d.id = da.deliveryId
+          WHERE d.id IS NULL
+          UNION ALL
+          SELECT de.id
+          FROM \`DeliveryEvent\` de
+          LEFT JOIN \`Delivery\` d ON d.id = de.deliveryId
+          WHERE d.id IS NULL
+          UNION ALL
           SELECT cc.id
           FROM \`CashCollection\` cc
           LEFT JOIN \`Order\` o ON o.id = cc.orderId
           WHERE o.id IS NULL
+          UNION ALL
+          SELECT cc.id
+          FROM \`CashCollection\` cc
+          LEFT JOIN \`Delivery\` d ON d.id = cc.deliveryId
+          WHERE cc.deliveryId IS NOT NULL AND d.id IS NULL
+          UNION ALL
+          SELECT cc.id
+          FROM \`CashCollection\` cc
+          LEFT JOIN \`Courier\` c ON c.id = cc.courierId
+          WHERE cc.courierId IS NOT NULL AND c.id IS NULL
+          UNION ALL
+          SELECT cr.id
+          FROM \`CashRemittance\` cr
+          LEFT JOIN \`Courier\` c ON c.id = cr.courierId
+          WHERE c.id IS NULL
+          UNION ALL
+          SELECT cri.id
+          FROM \`CashRemittanceItem\` cri
+          LEFT JOIN \`CashRemittance\` cr ON cr.id = cri.remittanceId
+          WHERE cr.id IS NULL
+          UNION ALL
+          SELECT cri.id
+          FROM \`CashRemittanceItem\` cri
+          LEFT JOIN \`CashCollection\` cc ON cc.id = cri.cashCollectionId
+          WHERE cc.id IS NULL
+          UNION ALL
+          SELECT cd.id
+          FROM \`CashDiscrepancy\` cd
+          LEFT JOIN \`CashRemittance\` cr ON cr.id = cd.remittanceId
+          WHERE cd.remittanceId IS NOT NULL AND cr.id IS NULL
+          UNION ALL
+          SELECT cd.id
+          FROM \`CashDiscrepancy\` cd
+          LEFT JOIN \`Order\` o ON o.id = cd.orderId
+          WHERE cd.orderId IS NOT NULL AND o.id IS NULL
+          UNION ALL
+          SELECT cd.id
+          FROM \`CashDiscrepancy\` cd
+          LEFT JOIN \`CashCollection\` cc ON cc.id = cd.cashCollectionId
+          WHERE cd.cashCollectionId IS NOT NULL AND cc.id IS NULL
+          UNION ALL
+          SELECT cre.id
+          FROM \`CashReconciliationEvent\` cre
+          LEFT JOIN \`CashRemittance\` cr ON cr.id = cre.remittanceId
+          WHERE cre.remittanceId IS NOT NULL AND cr.id IS NULL
+          UNION ALL
+          SELECT cre.id
+          FROM \`CashReconciliationEvent\` cre
+          LEFT JOIN \`CashCollection\` cc ON cc.id = cre.cashCollectionId
+          WHERE cre.cashCollectionId IS NOT NULL AND cc.id IS NULL
           UNION ALL
           SELECT sr.id
           FROM \`StockReservation\` sr
@@ -201,6 +339,7 @@ export const verifyRestoredDatabase = async (
   ) {
     throw new Error('Restored migration state does not match the backup manifest');
   }
+  assertExpectedMigrationHead(latestMigrationRow?.migrationName ?? null, expectedMigration);
   if (
     manifest?.formatVersion === 2 &&
     JSON.stringify(migrationStateRows) !== JSON.stringify(manifest.migrationState)

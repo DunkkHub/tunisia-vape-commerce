@@ -55,22 +55,6 @@ const COLLECTION_DETAIL_SELECT = {
       expectedCodMillimes: true,
       deliveryMethodType: true,
       version: true,
-      cashDiscrepancies: {
-        orderBy: [{ openedAt: 'desc' }, { id: 'desc' }],
-        take: 100,
-        select: {
-          id: true,
-          status: true,
-          expectedMillimes: true,
-          actualMillimes: true,
-          differenceMillimes: true,
-          reasonCode: true,
-          reasonDetail: true,
-          openedAt: true,
-          resolvedAt: true,
-        },
-      },
-      _count: { select: { cashDiscrepancies: true } },
     },
   },
   delivery: {
@@ -80,6 +64,22 @@ const COLLECTION_DETAIL_SELECT = {
       status: true,
       version: true,
       courier: { select: { id: true, code: true, name: true } },
+    },
+  },
+  discrepancy: {
+    select: {
+      id: true,
+      cashCollectionId: true,
+      status: true,
+      expectedMillimes: true,
+      actualMillimes: true,
+      differenceMillimes: true,
+      reasonCode: true,
+      reasonDetail: true,
+      openedByUserId: true,
+      resolvedByUserId: true,
+      openedAt: true,
+      resolvedAt: true,
     },
   },
   remittanceItems: {
@@ -174,6 +174,7 @@ const COLLECTION_OPERATION_SELECT = {
   status: true,
   expectedMillimes: true,
   collectedMillimes: true,
+  collectedByUserId: true,
   recordIdempotencyKeyHash: true,
   recordRequestHash: true,
   order: {
@@ -215,8 +216,22 @@ const REMITTANCE_OPERATION_SELECT = {
           status: true,
           expectedMillimes: true,
           collectedMillimes: true,
+          discrepancy: {
+            select: {
+              id: true,
+              status: true,
+              expectedMillimes: true,
+              actualMillimes: true,
+              differenceMillimes: true,
+            },
+          },
           order: {
-            select: { id: true, paymentStatus: true, version: true },
+            select: {
+              id: true,
+              paymentStatus: true,
+              expectedCodMillimes: true,
+              version: true,
+            },
           },
         },
       },
@@ -243,9 +258,36 @@ interface ExistingAllocationRow {
   amountMillimes: number;
 }
 
+interface AccountableCollection {
+  expectedMillimes: number;
+  collectedMillimes: number;
+  discrepancy: {
+    id: string;
+    status: CashDiscrepancyStatus;
+    expectedMillimes: number;
+    actualMillimes: number;
+    differenceMillimes: number;
+  } | null;
+}
+
+interface CollectionAccountingProjectionInput {
+  expectedMillimes: number;
+  collectedMillimes: number;
+  discrepancy: {
+    status: CashDiscrepancyStatus;
+    expectedMillimes: number;
+    actualMillimes: number;
+    differenceMillimes: number;
+  } | null;
+}
+
 const REMITTABLE_COLLECTION_STATUSES = new Set<CashCollectionStatus>([
   CashCollectionStatus.COLLECTED,
   CashCollectionStatus.PARTIALLY_COLLECTED,
+]);
+const ACCOUNTED_COLLECTION_STATUSES = new Set<CashCollectionStatus>([
+  CashCollectionStatus.COLLECTED,
+  CashCollectionStatus.REMITTED,
 ]);
 
 const COLLECTABLE_PAYMENT_STATUSES = new Set<PaymentStatus>([
@@ -285,6 +327,14 @@ export class AdminCashService {
           collectedMillimes: true,
           collectedAt: true,
           createdAt: true,
+          discrepancy: {
+            select: {
+              status: true,
+              expectedMillimes: true,
+              actualMillimes: true,
+              differenceMillimes: true,
+            },
+          },
           order: { select: { orderNumber: true, paymentStatus: true } },
           courier: { select: { name: true } },
         },
@@ -294,6 +344,7 @@ export class AdminCashService {
     return {
       data: this.page(
         records.map((record) => ({
+          ...this.collectionAccountingProjection(record),
           id: record.id,
           orderNumber: record.order.orderNumber,
           courierName: record.courier?.name ?? null,
@@ -336,6 +387,14 @@ export class AdminCashService {
           collectedMillimes: true,
           collectedAt: true,
           createdAt: true,
+          discrepancy: {
+            select: {
+              status: true,
+              expectedMillimes: true,
+              actualMillimes: true,
+              differenceMillimes: true,
+            },
+          },
           order: { select: { orderNumber: true, status: true, paymentStatus: true } },
           courier: { select: { code: true, name: true } },
         },
@@ -352,7 +411,7 @@ export class AdminCashService {
         resourceId: request.requestId.slice(0, 80),
         before: null,
         after: {
-          schemaVersion: 'COD_COLLECTIONS_V1',
+          schemaVersion: 'COD_COLLECTIONS_V2',
           rowCount: found.length,
           filters: { status: query.status ?? null, q: search ?? null },
         },
@@ -373,25 +432,34 @@ export class AdminCashService {
         'expectedMillimes',
         'collectedMillimes',
         'differenceMillimes',
+        'accountableMillimes',
+        'adjustmentMillimes',
+        'discrepancyStatus',
         'collectedAt',
         'createdAt',
       ],
-      records.map((record) => [
-        'COD_COLLECTIONS_V1',
-        record.id,
-        record.order.orderNumber,
-        record.order.status,
-        record.order.paymentStatus,
-        record.courier?.code,
-        record.courier?.name,
-        record.status,
-        record.method,
-        record.expectedMillimes,
-        record.collectedMillimes,
-        cashDifference(record.expectedMillimes, record.collectedMillimes),
-        record.collectedAt?.toISOString(),
-        record.createdAt.toISOString(),
-      ]),
+      records.map((record) => {
+        const accounting = this.collectionAccountingProjection(record);
+        return [
+          'COD_COLLECTIONS_V2',
+          record.id,
+          record.order.orderNumber,
+          record.order.status,
+          record.order.paymentStatus,
+          record.courier?.code,
+          record.courier?.name,
+          record.status,
+          record.method,
+          record.expectedMillimes,
+          record.collectedMillimes,
+          cashDifference(record.expectedMillimes, record.collectedMillimes),
+          accounting.accountableMillimes,
+          accounting.adjustmentMillimes,
+          accounting.discrepancyStatus,
+          record.collectedAt?.toISOString(),
+          record.createdAt.toISOString(),
+        ];
+      }),
     );
     return {
       csv,
@@ -560,6 +628,7 @@ export class AdminCashService {
 
       await transaction.cashReconciliationEvent.create({
         data: {
+          cashCollectionId: collection.id,
           type: 'COLLECTION_RECORDED',
           amountMillimes: input.collectedMillimes,
           actorUserId: request.auth!.userId,
@@ -576,6 +645,7 @@ export class AdminCashService {
       if (difference !== 0) {
         const discrepancy = await transaction.cashDiscrepancy.create({
           data: {
+            cashCollectionId: collection.id,
             orderId: collection.order.id,
             expectedMillimes: collection.expectedMillimes,
             actualMillimes: input.collectedMillimes,
@@ -587,6 +657,7 @@ export class AdminCashService {
         });
         await transaction.cashReconciliationEvent.create({
           data: {
+            cashCollectionId: collection.id,
             type: 'DISCREPANCY_OPENED',
             amountMillimes: difference,
             actorUserId: request.auth!.userId,
@@ -819,7 +890,17 @@ export class AdminCashService {
               id: true,
               courierId: true,
               status: true,
+              expectedMillimes: true,
               collectedMillimes: true,
+              discrepancy: {
+                select: {
+                  id: true,
+                  status: true,
+                  expectedMillimes: true,
+                  actualMillimes: true,
+                  differenceMillimes: true,
+                },
+              },
             },
           }),
         ]);
@@ -841,16 +922,17 @@ export class AdminCashService {
         }
         for (const collection of collections) {
           const amount = requested.get(collection.id)!;
+          const accountableMillimes = this.accountableCollectionMillimes(collection);
           if (
             collection.courierId !== courier.id ||
             !REMITTABLE_COLLECTION_STATUSES.has(collection.status)
           ) {
             throw this.stateConflict('COLLECTION_NOT_REMITTABLE');
           }
-          if ((alreadyAllocated.get(collection.id) ?? 0) + amount > collection.collectedMillimes) {
+          if ((alreadyAllocated.get(collection.id) ?? 0) + amount > accountableMillimes) {
             throw this.conflict(
               'COLLECTION_OVER_ALLOCATED',
-              'A collection cannot be allocated more than its recorded cash.',
+              'A collection cannot be allocated more than its reconciled cash balance.',
             );
           }
         }
@@ -1052,110 +1134,391 @@ export class AdminCashService {
 
   async resolveDiscrepancy(id: string, input: ResolveCashDiscrepancyDto, request: Request) {
     return this.prisma.$transaction(async (transaction) => {
-      const locked = await transaction.$queryRaw<{ id: string }[]>(Prisma.sql`
-        SELECT id FROM CashDiscrepancy WHERE id = ${id} FOR UPDATE
-      `);
-      if (locked.length !== 1) throw this.discrepancyNotFound();
-      const discrepancy = await transaction.cashDiscrepancy.findUnique({
+      const reference = await transaction.cashDiscrepancy.findUnique({
         where: { id },
         select: {
           id: true,
           remittanceId: true,
-          status: true,
-          differenceMillimes: true,
-          openedByUserId: true,
+          cashCollectionId: true,
+          orderId: true,
         },
       });
-      if (!discrepancy) throw this.discrepancyNotFound();
-      if (!discrepancy.remittanceId) {
-        throw this.stateConflict('COLLECTION_DISCREPANCY_RESOLUTION_UNSUPPORTED');
-      }
-      if (!canTransitionDiscrepancy(discrepancy.status, input.resolution)) {
-        throw this.stateConflict('DISCREPANCY_RESOLUTION_NOT_ALLOWED');
-      }
-      if (discrepancy.openedByUserId === request.auth!.userId) {
-        throw new ForbiddenException({
-          code: 'SEPARATE_RECONCILIATION_APPROVER_REQUIRED',
-          message: 'A different administrator must resolve the discrepancy.',
-        });
-      }
-      const remittance = await this.lockRemittanceWithCash(transaction, discrepancy.remittanceId);
-      if (remittance.status !== CashRemittanceStatus.DISCREPANCY) {
-        throw this.stateConflict('REMITTANCE_DISCREPANCY_STATE_INVALID');
-      }
-      this.assertIndependentActor(remittance.receivedByUserId, request.auth!.userId);
-      const now = new Date();
-      if (input.resolution === CashDiscrepancyStatus.RESOLVED) {
-        if (input.finalVerifiedMillimes !== remittance.declaredMillimes) {
-          throw this.badRequest(
-            'FINAL_VERIFIED_AMOUNT_INVALID',
-            'Resolution requires final verified cash to equal the declared remittance.',
-          );
-        }
-        await this.applyVerifiedAllocations(transaction, remittance);
-        const remittanceUpdated = await transaction.cashRemittance.updateMany({
-          where: { id: remittance.id, status: 'DISCREPANCY' },
-          data: {
-            status: 'VERIFIED',
-            verifiedMillimes: remittance.declaredMillimes,
-            differenceMillimes: 0,
-            verifiedByUserId: request.auth!.userId,
-            verifiedAt: now,
-          },
-        });
-        if (remittanceUpdated.count !== 1) {
-          throw this.stateConflict('DISCREPANCY_RESOLUTION_NOT_ALLOWED');
-        }
-      } else if (input.finalVerifiedMillimes !== undefined) {
-        throw this.badRequest(
-          'FINAL_VERIFIED_AMOUNT_NOT_APPLICABLE',
-          'A written-off discrepancy does not change the verified amount.',
+      if (!reference) throw this.discrepancyNotFound();
+      if (reference.cashCollectionId && reference.orderId && !reference.remittanceId) {
+        return this.resolveCollectionDiscrepancy(
+          transaction,
+          reference.cashCollectionId,
+          id,
+          input,
+          request,
         );
       }
-      const discrepancyUpdated = await transaction.cashDiscrepancy.updateMany({
-        where: { id, status: discrepancy.status },
-        data: {
-          status: input.resolution,
-          resolvedByUserId: request.auth!.userId,
-          resolvedAt: now,
+      if (reference.remittanceId && !reference.cashCollectionId && !reference.orderId) {
+        return this.resolveRemittanceDiscrepancy(
+          transaction,
+          reference.remittanceId,
+          id,
+          input,
+          request,
+        );
+      }
+      throw this.stateConflict('DISCREPANCY_SCOPE_INVALID');
+    });
+  }
+
+  private async resolveCollectionDiscrepancy(
+    transaction: Transaction,
+    cashCollectionId: string,
+    id: string,
+    input: ResolveCashDiscrepancyDto,
+    request: Request,
+  ) {
+    const collection = await this.lockCollection(transaction, cashCollectionId);
+    const locked = await transaction.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT id FROM CashDiscrepancy WHERE id = ${id} FOR UPDATE
+    `);
+    if (locked.length !== 1) throw this.discrepancyNotFound();
+    const discrepancy = await transaction.cashDiscrepancy.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        remittanceId: true,
+        cashCollectionId: true,
+        orderId: true,
+        status: true,
+        expectedMillimes: true,
+        actualMillimes: true,
+        differenceMillimes: true,
+        openedByUserId: true,
+      },
+    });
+    if (!discrepancy) throw this.discrepancyNotFound();
+    if (
+      discrepancy.remittanceId !== null ||
+      discrepancy.cashCollectionId !== collection.id ||
+      discrepancy.orderId !== collection.orderId ||
+      collection.deliveryId === null ||
+      collection.delivery?.id !== collection.deliveryId ||
+      collection.delivery.orderId !== collection.orderId ||
+      discrepancy.expectedMillimes !== collection.expectedMillimes ||
+      discrepancy.actualMillimes !== collection.collectedMillimes ||
+      discrepancy.differenceMillimes !==
+        cashDifference(collection.expectedMillimes, collection.collectedMillimes)
+    ) {
+      throw this.stateConflict('COLLECTION_DISCREPANCY_LINKAGE_INVALID');
+    }
+    if (!canTransitionDiscrepancy(discrepancy.status, input.resolution)) {
+      throw this.stateConflict('DISCREPANCY_RESOLUTION_NOT_ALLOWED');
+    }
+    if (
+      !REMITTABLE_COLLECTION_STATUSES.has(collection.status) ||
+      collection.order.paymentStatus !== PaymentStatus.RECONCILIATION_DISCREPANCY
+    ) {
+      throw this.stateConflict('COLLECTION_DISCREPANCY_STATE_INVALID');
+    }
+    if (
+      !collection.collectedByUserId ||
+      discrepancy.openedByUserId === request.auth!.userId ||
+      collection.collectedByUserId === request.auth!.userId
+    ) {
+      throw new ForbiddenException({
+        code: 'SEPARATE_RECONCILIATION_APPROVER_REQUIRED',
+        message: 'A different administrator must resolve the collection discrepancy.',
+      });
+    }
+    await transaction.$queryRaw(Prisma.sql`
+      SELECT id FROM CashRemittanceItem
+      WHERE cashCollectionId = ${collection.id}
+      ORDER BY id ASC
+      FOR UPDATE
+    `);
+    const allocationCount = await transaction.cashRemittanceItem.count({
+      where: { cashCollectionId: collection.id },
+    });
+    if (allocationCount !== 0) {
+      throw this.stateConflict('COLLECTION_DISCREPANCY_ALREADY_ALLOCATED');
+    }
+
+    const now = new Date();
+    const adjustmentMillimes = collection.expectedMillimes - collection.collectedMillimes;
+    if (input.resolution === CashDiscrepancyStatus.RESOLVED) {
+      if (input.finalVerifiedMillimes !== collection.expectedMillimes) {
+        throw this.badRequest(
+          'FINAL_VERIFIED_AMOUNT_INVALID',
+          'Resolution requires final verified cash to equal the expected collection.',
+        );
+      }
+      const paymentStatus =
+        collection.order.deliveryMethodType === DeliveryMethodType.STORE_PICKUP
+          ? PaymentStatus.CASH_COLLECTED_AT_STORE
+          : PaymentStatus.CASH_COLLECTED_BY_COURIER;
+      const orderCollections = await transaction.cashCollection.findMany({
+        where: { orderId: collection.orderId, status: { not: CashCollectionStatus.VOIDED } },
+        select: {
+          id: true,
+          status: true,
+          expectedMillimes: true,
+          collectedMillimes: true,
+          discrepancy: {
+            select: {
+              status: true,
+              expectedMillimes: true,
+              actualMillimes: true,
+              differenceMillimes: true,
+            },
+          },
         },
       });
-      if (discrepancyUpdated.count !== 1) {
+      let accountableTotal = 0;
+      let currentCollectionFound = false;
+      const projectionReady = orderCollections.every((item) => {
+        if (item.id === collection.id) {
+          currentCollectionFound = true;
+          accountableTotal += collection.expectedMillimes;
+          return true;
+        }
+        const difference = cashDifference(item.expectedMillimes, item.collectedMillimes);
+        if (!item.discrepancy) {
+          if (!ACCOUNTED_COLLECTION_STATUSES.has(item.status) || difference !== 0) return false;
+          accountableTotal += item.collectedMillimes;
+          return true;
+        }
+        if (
+          item.discrepancy.status !== CashDiscrepancyStatus.RESOLVED ||
+          item.discrepancy.expectedMillimes !== item.expectedMillimes ||
+          item.discrepancy.actualMillimes !== item.collectedMillimes ||
+          item.discrepancy.differenceMillimes !== difference ||
+          !ACCOUNTED_COLLECTION_STATUSES.has(item.status)
+        ) {
+          return false;
+        }
+        accountableTotal += item.expectedMillimes;
+        return true;
+      });
+      const clearProjection =
+        currentCollectionFound &&
+        projectionReady &&
+        accountableTotal === collection.order.expectedCodMillimes;
+      const collectionUpdated = await transaction.cashCollection.updateMany({
+        where: { id: collection.id, status: collection.status },
+        data: { status: CashCollectionStatus.COLLECTED },
+      });
+      if (collectionUpdated.count !== 1) throw this.versionConflict();
+      if (clearProjection) {
+        const [orderUpdated, deliveryUpdated] = await Promise.all([
+          transaction.order.updateMany({
+            where: {
+              id: collection.order.id,
+              version: collection.order.version,
+              paymentStatus: PaymentStatus.RECONCILIATION_DISCREPANCY,
+            },
+            data: { paymentStatus, version: { increment: 1 } },
+          }),
+          transaction.delivery.updateMany({
+            where: { id: collection.delivery.id, version: collection.delivery.version },
+            data: { cashCollectedResult: true, version: { increment: 1 } },
+          }),
+        ]);
+        if (orderUpdated.count !== 1 || deliveryUpdated.count !== 1) {
+          throw this.versionConflict();
+        }
+      }
+      await transaction.cashReconciliationEvent.create({
+        data: {
+          cashCollectionId: collection.id,
+          type: 'ADJUSTMENT_RECORDED',
+          amountMillimes: adjustmentMillimes,
+          actorUserId: request.auth!.userId,
+          summary: 'Collection cash balance corrected by an independent exact second count.',
+          metadata: {
+            discrepancyId: discrepancy.id,
+            originalCollectedMillimes: collection.collectedMillimes,
+            finalVerifiedMillimes: input.finalVerifiedMillimes,
+            adjustmentMillimes,
+            resolutionReason: input.reasonDetail.trim(),
+          },
+          requestId: request.requestId,
+        },
+      });
+    } else if (input.finalVerifiedMillimes !== undefined) {
+      throw this.badRequest(
+        'FINAL_VERIFIED_AMOUNT_NOT_APPLICABLE',
+        'A written-off discrepancy does not change the verified collection amount.',
+      );
+    }
+
+    const discrepancyUpdated = await transaction.cashDiscrepancy.updateMany({
+      where: { id, status: discrepancy.status },
+      data: {
+        status: input.resolution,
+        resolvedByUserId: request.auth!.userId,
+        resolvedAt: now,
+      },
+    });
+    if (discrepancyUpdated.count !== 1) {
+      throw this.stateConflict('DISCREPANCY_RESOLUTION_NOT_ALLOWED');
+    }
+    await Promise.all([
+      transaction.cashReconciliationEvent.create({
+        data: {
+          cashCollectionId: collection.id,
+          type: 'DISCREPANCY_RESOLVED',
+          amountMillimes: discrepancy.differenceMillimes,
+          actorUserId: request.auth!.userId,
+          summary:
+            input.resolution === CashDiscrepancyStatus.RESOLVED
+              ? 'Collection discrepancy resolved with exact independently verified cash.'
+              : 'Collection discrepancy written off; the order remains discrepant.',
+          metadata: {
+            discrepancyId: discrepancy.id,
+            resolution: input.resolution,
+            resolutionReason: input.reasonDetail.trim(),
+          },
+          requestId: request.requestId,
+        },
+      }),
+      this.audit(transaction, request, {
+        action: 'cash.discrepancy.resolved',
+        resourceType: 'CashDiscrepancy',
+        resourceId: discrepancy.id,
+        before: {
+          scope: 'COLLECTION',
+          status: discrepancy.status,
+          paymentStatus: collection.order.paymentStatus,
+          collectedMillimes: collection.collectedMillimes,
+        },
+        after: {
+          scope: 'COLLECTION',
+          status: input.resolution,
+          finalVerifiedMillimes: input.finalVerifiedMillimes ?? null,
+          adjustmentMillimes:
+            input.resolution === CashDiscrepancyStatus.RESOLVED ? adjustmentMillimes : null,
+        },
+      }),
+    ]);
+    return {
+      data: this.serializeCollection(
+        await this.requireCollectionDetail(transaction, collection.id),
+      ),
+    };
+  }
+
+  private async resolveRemittanceDiscrepancy(
+    transaction: Transaction,
+    remittanceId: string,
+    id: string,
+    input: ResolveCashDiscrepancyDto,
+    request: Request,
+  ) {
+    const locked = await transaction.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT id FROM CashDiscrepancy WHERE id = ${id} FOR UPDATE
+    `);
+    if (locked.length !== 1) throw this.discrepancyNotFound();
+    const discrepancy = await transaction.cashDiscrepancy.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        remittanceId: true,
+        cashCollectionId: true,
+        orderId: true,
+        status: true,
+        differenceMillimes: true,
+        openedByUserId: true,
+      },
+    });
+    if (
+      !discrepancy ||
+      discrepancy.remittanceId !== remittanceId ||
+      discrepancy.cashCollectionId !== null ||
+      discrepancy.orderId !== null
+    ) {
+      throw this.stateConflict('DISCREPANCY_SCOPE_INVALID');
+    }
+    if (!canTransitionDiscrepancy(discrepancy.status, input.resolution)) {
+      throw this.stateConflict('DISCREPANCY_RESOLUTION_NOT_ALLOWED');
+    }
+    if (discrepancy.openedByUserId === request.auth!.userId) {
+      throw new ForbiddenException({
+        code: 'SEPARATE_RECONCILIATION_APPROVER_REQUIRED',
+        message: 'A different administrator must resolve the discrepancy.',
+      });
+    }
+    const remittance = await this.lockRemittanceWithCash(transaction, remittanceId);
+    if (remittance.status !== CashRemittanceStatus.DISCREPANCY) {
+      throw this.stateConflict('REMITTANCE_DISCREPANCY_STATE_INVALID');
+    }
+    this.assertIndependentActor(remittance.receivedByUserId, request.auth!.userId);
+    const now = new Date();
+    if (input.resolution === CashDiscrepancyStatus.RESOLVED) {
+      if (input.finalVerifiedMillimes !== remittance.declaredMillimes) {
+        throw this.badRequest(
+          'FINAL_VERIFIED_AMOUNT_INVALID',
+          'Resolution requires final verified cash to equal the declared remittance.',
+        );
+      }
+      await this.applyVerifiedAllocations(transaction, remittance);
+      const remittanceUpdated = await transaction.cashRemittance.updateMany({
+        where: { id: remittance.id, status: 'DISCREPANCY' },
+        data: {
+          status: 'VERIFIED',
+          verifiedMillimes: remittance.declaredMillimes,
+          differenceMillimes: 0,
+          verifiedByUserId: request.auth!.userId,
+          verifiedAt: now,
+        },
+      });
+      if (remittanceUpdated.count !== 1) {
         throw this.stateConflict('DISCREPANCY_RESOLUTION_NOT_ALLOWED');
       }
-      await Promise.all([
-        transaction.cashReconciliationEvent.create({
-          data: {
-            remittanceId: remittance.id,
-            type: 'DISCREPANCY_RESOLVED',
-            amountMillimes: discrepancy.differenceMillimes,
-            actorUserId: request.auth!.userId,
-            summary:
-              input.resolution === CashDiscrepancyStatus.RESOLVED
-                ? 'Remittance discrepancy resolved with exact verified cash.'
-                : 'Remittance discrepancy written off; remittance remains unreconciled.',
-            metadata: {
-              discrepancyId: discrepancy.id,
-              resolution: input.resolution,
-              resolutionReason: input.reasonDetail.trim(),
-            },
-            requestId: request.requestId,
-          },
-        }),
-        this.audit(transaction, request, {
-          action: 'cash.discrepancy.resolved',
-          resourceType: 'CashDiscrepancy',
-          resourceId: discrepancy.id,
-          before: { status: discrepancy.status },
-          after: { status: input.resolution },
-        }),
-      ]);
-      return {
-        data: this.serializeRemittance(
-          await this.requireRemittanceDetail(transaction, remittance.id),
-        ),
-      };
+    } else if (input.finalVerifiedMillimes !== undefined) {
+      throw this.badRequest(
+        'FINAL_VERIFIED_AMOUNT_NOT_APPLICABLE',
+        'A written-off discrepancy does not change the verified amount.',
+      );
+    }
+    const discrepancyUpdated = await transaction.cashDiscrepancy.updateMany({
+      where: { id, status: discrepancy.status },
+      data: {
+        status: input.resolution,
+        resolvedByUserId: request.auth!.userId,
+        resolvedAt: now,
+      },
     });
+    if (discrepancyUpdated.count !== 1) {
+      throw this.stateConflict('DISCREPANCY_RESOLUTION_NOT_ALLOWED');
+    }
+    await Promise.all([
+      transaction.cashReconciliationEvent.create({
+        data: {
+          remittanceId: remittance.id,
+          type: 'DISCREPANCY_RESOLVED',
+          amountMillimes: discrepancy.differenceMillimes,
+          actorUserId: request.auth!.userId,
+          summary:
+            input.resolution === CashDiscrepancyStatus.RESOLVED
+              ? 'Remittance discrepancy resolved with exact verified cash.'
+              : 'Remittance discrepancy written off; remittance remains unreconciled.',
+          metadata: {
+            discrepancyId: discrepancy.id,
+            resolution: input.resolution,
+            resolutionReason: input.reasonDetail.trim(),
+          },
+          requestId: request.requestId,
+        },
+      }),
+      this.audit(transaction, request, {
+        action: 'cash.discrepancy.resolved',
+        resourceType: 'CashDiscrepancy',
+        resourceId: discrepancy.id,
+        before: { status: discrepancy.status },
+        after: { status: input.resolution },
+      }),
+    ]);
+    return {
+      data: this.serializeRemittance(
+        await this.requireRemittanceDetail(transaction, remittance.id),
+      ),
+    };
   }
 
   private async lockCollection(transaction: Transaction, id: string): Promise<CollectionOperation> {
@@ -1215,6 +1578,19 @@ export class AdminCashService {
     transaction: Transaction,
     remittance: RemittanceOperation,
   ): Promise<void> {
+    const orders = this.uniqueOrders(remittance);
+    const orderIds = orders.map(({ id }) => id);
+    const siblingCollectionReferences = await transaction.cashCollection.findMany({
+      where: { orderId: { in: orderIds } },
+      orderBy: { id: 'asc' },
+      select: { id: true },
+    });
+    await this.lockRows(
+      transaction,
+      'CashCollection',
+      siblingCollectionReferences.map(({ id }) => id),
+    );
+
     const collectionIds = remittance.items.map(({ cashCollectionId }) => cashCollectionId);
     const allocations = await transaction.cashRemittanceItem.findMany({
       where: {
@@ -1230,17 +1606,14 @@ export class AdminCashService {
         (allocatedByCollection.get(allocation.cashCollectionId) ?? 0) + allocation.amountMillimes,
       );
     }
-    const ordersEligibleForRemittance = new Map<
-      string,
-      RemittanceOperation['items'][number]['cashCollection']['order']
-    >();
     for (const item of remittance.items) {
       const collection = item.cashCollection;
+      const accountableMillimes = this.accountableCollectionMillimes(collection);
       const allocated = allocatedByCollection.get(collection.id) ?? 0;
-      if (allocated > collection.collectedMillimes) {
+      if (allocated > accountableMillimes) {
         throw this.stateConflict('COLLECTION_OVER_ALLOCATED');
       }
-      if (allocated !== collection.collectedMillimes) continue;
+      if (allocated !== accountableMillimes) continue;
       if (!canTransitionCollection(collection.status, CashCollectionStatus.REMITTED)) {
         throw this.stateConflict('COLLECTION_REMITTANCE_STATE_INVALID');
       }
@@ -1249,21 +1622,127 @@ export class AdminCashService {
         data: { status: 'REMITTED' },
       });
       if (collectionUpdated.count !== 1) throw this.stateConflict('COLLECTION_REMITTANCE_CONFLICT');
-      if (collection.collectedMillimes === collection.expectedMillimes) {
-        ordersEligibleForRemittance.set(collection.order.id, collection.order);
-      }
     }
-    for (const order of ordersEligibleForRemittance.values()) {
-      const remainingCollections = await transaction.cashCollection.count({
-        where: { orderId: order.id, status: { not: CashCollectionStatus.REMITTED } },
-      });
-      if (remainingCollections !== 0) continue;
+
+    const accountableCollections = await transaction.cashCollection.findMany({
+      where: {
+        orderId: { in: orderIds },
+        status: { not: CashCollectionStatus.VOIDED },
+      },
+      orderBy: [{ orderId: 'asc' }, { id: 'asc' }],
+      select: {
+        id: true,
+        orderId: true,
+        status: true,
+        expectedMillimes: true,
+        collectedMillimes: true,
+        discrepancy: {
+          select: {
+            id: true,
+            status: true,
+            expectedMillimes: true,
+            actualMillimes: true,
+            differenceMillimes: true,
+          },
+        },
+      },
+    });
+    const collectionsByOrder = new Map<string, typeof accountableCollections>();
+    for (const collection of accountableCollections) {
+      const orderCollections = collectionsByOrder.get(collection.orderId) ?? [];
+      orderCollections.push(collection);
+      collectionsByOrder.set(collection.orderId, orderCollections);
+    }
+    for (const order of orders) {
+      const orderCollections = collectionsByOrder.get(order.id) ?? [];
+      if (
+        orderCollections.length === 0 ||
+        orderCollections.some(({ status }) => status !== CashCollectionStatus.REMITTED)
+      ) {
+        continue;
+      }
+      const accountableTotal = sumMillimes(
+        orderCollections.map((collection) => this.accountableCollectionMillimes(collection)),
+      );
+      if (accountableTotal !== order.expectedCodMillimes) continue;
       const orderUpdated = await transaction.order.updateMany({
         where: { id: order.id, version: order.version },
         data: { paymentStatus: 'CASH_REMITTED', version: { increment: 1 } },
       });
       if (orderUpdated.count !== 1) throw this.versionConflict();
     }
+  }
+
+  private accountableCollectionMillimes(collection: AccountableCollection): number {
+    const recordedDifference = cashDifference(
+      collection.expectedMillimes,
+      collection.collectedMillimes,
+    );
+    const discrepancy = collection.discrepancy;
+    if (!discrepancy) {
+      if (recordedDifference !== 0) {
+        throw this.stateConflict('COLLECTION_DISCREPANCY_LINK_MISSING');
+      }
+      return collection.collectedMillimes;
+    }
+    if (
+      discrepancy.expectedMillimes !== collection.expectedMillimes ||
+      discrepancy.actualMillimes !== collection.collectedMillimes ||
+      discrepancy.differenceMillimes !== recordedDifference
+    ) {
+      throw this.stateConflict('COLLECTION_DISCREPANCY_LINKAGE_INVALID');
+    }
+    if (
+      discrepancy.status === CashDiscrepancyStatus.OPEN ||
+      discrepancy.status === CashDiscrepancyStatus.INVESTIGATING
+    ) {
+      throw this.stateConflict('COLLECTION_DISCREPANCY_UNRESOLVED');
+    }
+    return discrepancy.status === CashDiscrepancyStatus.RESOLVED
+      ? collection.expectedMillimes
+      : collection.collectedMillimes;
+  }
+
+  private collectionAccountingProjection(collection: CollectionAccountingProjectionInput) {
+    const rawDifference = cashDifference(collection.expectedMillimes, collection.collectedMillimes);
+    const discrepancy = collection.discrepancy;
+    if (!discrepancy) {
+      return {
+        accountableMillimes: rawDifference === 0 ? collection.collectedMillimes : null,
+        adjustmentMillimes: rawDifference === 0 ? 0 : null,
+        discrepancyStatus: null,
+      };
+    }
+    const linkageValid =
+      discrepancy.expectedMillimes === collection.expectedMillimes &&
+      discrepancy.actualMillimes === collection.collectedMillimes &&
+      discrepancy.differenceMillimes === rawDifference;
+    if (!linkageValid) {
+      return {
+        accountableMillimes: null,
+        adjustmentMillimes: null,
+        discrepancyStatus: discrepancy.status,
+      };
+    }
+    if (discrepancy.status === CashDiscrepancyStatus.RESOLVED) {
+      return {
+        accountableMillimes: collection.expectedMillimes,
+        adjustmentMillimes: collection.expectedMillimes - collection.collectedMillimes,
+        discrepancyStatus: discrepancy.status,
+      };
+    }
+    if (discrepancy.status === CashDiscrepancyStatus.WRITTEN_OFF) {
+      return {
+        accountableMillimes: collection.collectedMillimes,
+        adjustmentMillimes: 0,
+        discrepancyStatus: discrepancy.status,
+      };
+    }
+    return {
+      accountableMillimes: null,
+      adjustmentMillimes: null,
+      discrepancyStatus: discrepancy.status,
+    };
   }
 
   private uniqueOrders(remittance: RemittanceOperation) {
@@ -1364,6 +1843,7 @@ export class AdminCashService {
       status: collection.status,
       expectedMillimes: collection.expectedMillimes,
       collectedMillimes: collection.collectedMillimes,
+      ...this.collectionAccountingProjection(collection),
       collectedByUserId: collection.collectedByUserId,
       collectedAt: collection.collectedAt?.toISOString() ?? null,
       method: collection.method,
@@ -1372,14 +1852,16 @@ export class AdminCashService {
         ...item,
         createdAt: item.createdAt.toISOString(),
       })),
-      discrepancies: [...collection.order.cashDiscrepancies].reverse().map((discrepancy) => ({
-        ...discrepancy,
-        openedAt: discrepancy.openedAt.toISOString(),
-        resolvedAt: discrepancy.resolvedAt?.toISOString() ?? null,
-      })),
-      historyTruncated:
-        collection._count.remittanceItems > collection.remittanceItems.length ||
-        collection.order._count.cashDiscrepancies > collection.order.cashDiscrepancies.length,
+      discrepancies: collection.discrepancy
+        ? [
+            {
+              ...collection.discrepancy,
+              openedAt: collection.discrepancy.openedAt.toISOString(),
+              resolvedAt: collection.discrepancy.resolvedAt?.toISOString() ?? null,
+            },
+          ]
+        : [],
+      historyTruncated: collection._count.remittanceItems > collection.remittanceItems.length,
       createdAt: collection.createdAt.toISOString(),
       updatedAt: collection.updatedAt.toISOString(),
     };

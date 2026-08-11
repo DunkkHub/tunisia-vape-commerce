@@ -159,6 +159,7 @@ describe('CatalogService public filters and facets', () => {
             altTextAr: 'عبوة نعناع',
             width: 800,
             height: 800,
+            renditions: [],
           },
         ],
         variants: [
@@ -228,6 +229,12 @@ describe('CatalogService public filters and facets', () => {
       primaryImage: {
         id: 'image-1',
         url: `/api/v1/media/${'a'.repeat(64)}`,
+        renditions: {
+          thumbnail: `/api/v1/media/${'a'.repeat(64)}`,
+          card: `/api/v1/media/${'a'.repeat(64)}`,
+          detail: `/api/v1/media/${'a'.repeat(64)}`,
+          highResolution: `/api/v1/media/${'a'.repeat(64)}`,
+        },
         altText: 'Flacon menthe',
         width: 800,
         height: 800,
@@ -237,7 +244,12 @@ describe('CatalogService public filters and facets', () => {
     const request = findMany.mock.calls[0]?.[0] as
       | {
           select?: {
-            images?: { where?: unknown; orderBy?: unknown; take?: number };
+            images?: {
+              where?: unknown;
+              orderBy?: unknown;
+              take?: number;
+              select?: { renditions?: unknown };
+            };
             variants?: {
               select?: { inventoryItems?: { where?: unknown } };
             };
@@ -253,6 +265,10 @@ describe('CatalogService public filters and facets', () => {
       { sortOrder: 'asc' },
       { id: 'asc' },
     ]);
+    expect(request?.select?.images?.select?.renditions).toMatchObject({
+      where: { profileVersion: 1 },
+      take: 9,
+    });
     const inventoryWhere = request?.select?.variants?.select?.inventoryItems?.where as
       | {
           location: { is: { active: boolean; fulfillsOrders: boolean } };

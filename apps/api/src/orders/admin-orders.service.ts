@@ -548,6 +548,7 @@ export class AdminOrdersService {
       const locked = await this.lockActiveInventory(transaction, order.id);
       const now = new Date();
       const reason = input.reason.trim();
+      const reasonCode = disposition === 'reject' ? 'ADMIN_REJECTED' : 'ADMIN_CANCELLED';
       if (locked.reservations.length > 0) {
         const released = await transaction.stockReservation.updateMany({
           where: {
@@ -566,6 +567,32 @@ export class AdminOrdersService {
             'RESERVATION_CONFLICT',
             'Reserved stock changed while the order was being terminated.',
           );
+        }
+        const inventoryById = new Map(locked.items.map((item) => [item.id, item]));
+        for (const reservation of locked.reservations) {
+          const inventory = inventoryById.get(reservation.inventoryItemId);
+          if (!inventory || reservation.quantity <= 0 || inventory.onHandQuantity < 0) {
+            throw this.conflict(
+              'INVENTORY_INVARIANT_BREACH',
+              'Reserved stock cannot be released safely.',
+            );
+          }
+          await transaction.stockMovement.create({
+            data: {
+              inventoryItemId: inventory.id,
+              locationId: inventory.locationId,
+              batchId: inventory.batchId,
+              type: 'RESERVATION_RELEASE',
+              quantityDelta: 0,
+              onHandAfter: inventory.onHandQuantity,
+              referenceType: 'Order',
+              referenceId: order.id,
+              reasonCode,
+              note: reason,
+              actorUserId: request.auth!.userId,
+              requestId: request.requestId,
+            },
+          });
         }
       }
 
@@ -595,7 +622,6 @@ export class AdminOrdersService {
         throw this.conflict('VERSION_CONFLICT', 'The order changed before it could be cancelled.');
       }
 
-      const reasonCode = disposition === 'reject' ? 'ADMIN_REJECTED' : 'ADMIN_CANCELLED';
       await Promise.all([
         transaction.orderStatusHistory.create({
           data: {

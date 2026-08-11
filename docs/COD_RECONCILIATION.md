@@ -80,6 +80,8 @@ Workflow:
 5. Resolve with approved compensating events, financial treatment, owner, reason, and second approval according to threshold.
 6. Close only when expected, received, difference, and disposition all balance.
 
+Collection discrepancies are linked to the exact `CashCollection`. An exact independent second count records the correction as an append-only `ADJUSTMENT_RECORDED` event; it never changes the original `collectedMillimes`. A write-off closes the investigation but leaves the order payment projection in `RECONCILIATION_DISCREPANCY`. Allocation is blocked while a discrepancy is open or investigating, and an already allocated collection cannot be resolved through the collection endpoint.
+
 Suspected theft or systemic mismatch follows docs/INCIDENT_RESPONSE.md. Do not automatically suspend a courier/customer without reviewed evidence and policy.
 
 ## Status model
@@ -103,7 +105,7 @@ Remittances move through `DRAFT`, `SUBMITTED`, and then `VERIFIED` or `DISCREPAN
 
 Every report labels event basis and UTC/Africa-Tunis cutoff. Required views include expected COD, collected by courier/store, held by each courier, remitted, unremitted aging, discrepancy, daily reconciliation, and courier history. Never combine orders created with delivered revenue or reconciled cash.
 
-The administrator cash screen exposes filterable collection and remittance lists plus `GET /api/v1/admin/cash/collections/export.csv` (`COD_COLLECTIONS_V1`) and `GET /api/v1/admin/cash/remittances/export.csv` (`COD_REMITTANCES_V1`). Both exports require `cash.read`, `reports.export`, and recent authentication; they are audited, capped at 500 filtered rows, contain integer millimes, omit customer contact/address data, and neutralize spreadsheet formula prefixes.
+The administrator cash screen exposes filterable collection and remittance lists plus `GET /api/v1/admin/cash/collections/export.csv` (`COD_COLLECTIONS_V2`) and `GET /api/v1/admin/cash/remittances/export.csv` (`COD_REMITTANCES_V1`). Collection V2 preserves the raw recorded amount and adds the accountable amount, signed append-only adjustment, and discrepancy status; unresolved or invalid legacy linkage has no accountable value. Both exports require `cash.read`, `reports.export`, and recent authentication; they are audited, capped at 500 filtered rows, contain integer millimes, omit customer contact/address data, and neutralize spreadsheet formula prefixes.
 
 ## Tests
 

@@ -82,12 +82,21 @@ const courier = {
   id: 'courier-intigo',
   code: 'INTIGO',
   name: 'Intigo',
+  companyName: null,
   status: 'ACTIVE',
+  availabilityStatus: 'AVAILABLE',
   contactName: null,
   phoneE164: null,
+  whatsappPhoneE164: null,
   email: null,
+  defaultFeeMillimes: null,
+  maximumActiveDeliveries: null,
+  whatsappTemplate: 'Commande {{orderNumber}}',
   notes: 'STANDARD_COD · COD · suivi manuel · retours activés',
   integrations: [{ type: 'MANUAL', name: 'Manual administrator operations', active: true }],
+  coverageMode: 'UNRESTRICTED',
+  coverageZones: [],
+  activeDeliveryCount: 0,
   deliveryCount: 0,
   manifestCount: 0,
   createdAt: '2026-07-23T10:00:00.000Z',
@@ -157,7 +166,9 @@ describe('administrator delivery configuration', () => {
 
     await user.click(operations);
     expect(operations).toHaveAttribute('aria-current', 'page');
-    expect(await screen.findByRole('button', { name: 'Créer le livreur' })).toBeVisible();
+    expect(
+      await screen.findByText('Créer le livreur', { selector: 'summary strong' }),
+    ).toBeVisible();
     expect(screen.getByText('Mettre une méthode de livraison en service')).not.toBeVisible();
 
     await user.click(tools);
@@ -236,6 +247,7 @@ describe('administrator delivery configuration', () => {
     renderRoute('/admin/delivery');
 
     await user.click(await screen.findByRole('button', { name: /Gérer les livraisons/ }));
+    await user.click(await screen.findByText('Créer le livreur', { selector: 'summary strong' }));
     const createButton = await screen.findByRole('button', { name: 'Créer le livreur' });
     const form = createButton.closest('form');
     if (!form) throw new Error('Expected the courier form.');
@@ -248,9 +260,10 @@ describe('administrator delivery configuration', () => {
     await user.click(createButton);
 
     expect(await screen.findByText('Livreur créé : INTIGO · Intigo.')).toBeVisible();
-    expect(
-      await screen.findByText('STANDARD_COD · COD · suivi manuel · retours activés'),
-    ).toBeVisible();
+    const note = (
+      await screen.findAllByText('STANDARD_COD · COD · suivi manuel · retours activés')
+    ).find((element) => element.matches('p') && !element.closest('[hidden]'));
+    expect(note).toBeVisible();
     const call = fetchMock.mock.calls.find(
       ([input, init]) =>
         requestUrl(input).endsWith('/admin/deliveries/courier-records') && init?.method === 'POST',

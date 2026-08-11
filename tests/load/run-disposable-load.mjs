@@ -282,9 +282,10 @@ const createLoadFixture = (fixture) => ({
         '/api/v1/products?page=1&pageSize=20&minPriceMillimes=5000',
         '/api/v1/products?page=1&pageSize=20&maxPriceMillimes=20000',
         '/api/v1/products?page=1&pageSize=20&featured=true',
-      ].map((requestPath) => ({
+      ].map((requestPath, index) => ({
         method: 'GET',
         path: requestPath,
+        diagnosticLabel: `catalog-${index + 1}`,
         headers: { [SOURCE_HEADER]: 'pool:catalog:100', 'Accept-Language': 'fr' },
       })),
     },

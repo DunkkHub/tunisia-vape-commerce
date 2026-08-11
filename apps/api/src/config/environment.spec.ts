@@ -31,7 +31,7 @@ describe('launch environment defaults', () => {
       MINIMUM_PURCHASE_AGE: 18,
       HEALTHCHECK_TIMEOUT_MS: 2_000,
       WORKER_HEARTBEAT_MAX_AGE_SECONDS: 60,
-      EXPECTED_MIGRATION_NAME: '20260804090000_customer_google_identity',
+      EXPECTED_MIGRATION_NAME: '20260811170000_product_image_renditions',
       PASSWORD_RESET_TTL_MINUTES: 30,
       GOOGLE_OAUTH_ENABLED: false,
       GOOGLE_OAUTH_STATE_TTL_SECONDS: 300,

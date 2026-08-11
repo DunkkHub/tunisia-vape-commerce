@@ -336,19 +336,14 @@ export const buildEffectiveProductPriceWhere = (
   filters: Pick<NormalizedCatalogFilter, 'maxPriceMillimes' | 'minPriceMillimes'>,
   fields: CatalogPriceFieldReferences,
 ): Prisma.ProductWhereInput => {
-  const clauses: Prisma.ProductWhereInput[] = [hasSellablePublicVariant()];
+  const clauses: Prisma.ProductWhereInput[] = [];
   if (filters.minPriceMillimes !== undefined && filters.minPriceMillimes > 0) {
-    const belowMinimum: Prisma.ProductWhereInput = {
-      OR: [
-        productBaseEffectivePrice('lt', filters.minPriceMillimes, fields),
-        {
-          variants: {
-            some: publicVariantEffectivePrice('lt', filters.minPriceMillimes, fields),
-          },
-        },
-      ],
-    };
-    clauses.push({ NOT: belowMinimum });
+    clauses.push({ NOT: productBaseEffectivePrice('lt', filters.minPriceMillimes, fields) });
+    clauses.push({
+      variants: {
+        none: publicVariantEffectivePrice('lt', filters.minPriceMillimes, fields),
+      },
+    });
   }
   if (filters.maxPriceMillimes !== undefined) {
     clauses.push(effectivePriceBelowOrEqual(filters.maxPriceMillimes, fields));

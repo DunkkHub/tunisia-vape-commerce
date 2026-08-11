@@ -15,11 +15,13 @@ import {
 } from '@nestjs/common';
 import {
   ApiCookieAuth,
+  ApiExtraModels,
   ApiHeader,
   ApiOkResponse,
   ApiOperation,
   ApiProduces,
   ApiTags,
+  getSchemaPath,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
@@ -46,6 +48,7 @@ import {
 
 @ApiTags('administrator-cash')
 @ApiCookieAuth('admin')
+@ApiExtraModels(AdminCashCollectionResponseDto, AdminCashRemittanceResponseDto)
 @Controller('admin/cash')
 @UseGuards(AdminSessionGuard, PermissionsGuard)
 @UseInterceptors(NoStoreInterceptor)
@@ -177,8 +180,15 @@ export class AdminCashController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(CsrfGuard, RecentAuthenticationGuard)
   @RequirePermissions('cash.reconcile')
-  @ApiOperation({ summary: 'Resolve or write off an open remittance discrepancy' })
-  @ApiOkResponse({ type: AdminCashRemittanceResponseDto })
+  @ApiOperation({ summary: 'Resolve or write off an open collection or remittance discrepancy' })
+  @ApiOkResponse({
+    schema: {
+      oneOf: [
+        { $ref: getSchemaPath(AdminCashCollectionResponseDto) },
+        { $ref: getSchemaPath(AdminCashRemittanceResponseDto) },
+      ],
+    },
+  })
   resolveDiscrepancy(
     @Param('id') id: string,
     @Body() input: ResolveCashDiscrepancyDto,

@@ -122,7 +122,7 @@ URL before applying migrations.
 
 ## Migration state
 
-The latest expected migration is `20260804090000_customer_google_identity`. It adds a customer-only provider binding and allows a Google-only customer to have no local password; it does not create users, provider credentials, or an administrator and does not weaken administrator password-plus-TOTP authentication. The preceding delivery and catalog migrations add operational metadata, reviewed import receipts, provenance, readiness flags, and exact media ownership constraints without creating products, stock, delivery zones, or rates.
+The latest expected migration is `20260811170000_product_image_renditions`. It records immutable versioned rendition checksums, sizes, and dimensions; existing image bytes are not rewritten and legacy approved images are backfilled on a bounded verified first read. The preceding migrations link collection-level COD discrepancies to exact collections and add optional manual-courier operations without changing customer delivery prices. The earlier identity migration adds customer-only provider binding without creating users, credentials, or an administrator or weakening administrator password-plus-TOTP authentication.
 
 For controlled staging or production, set `DATABASE_URL` to the least-privilege runtime identity and apply migrations only with the migration identity:
 

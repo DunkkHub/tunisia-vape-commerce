@@ -37,9 +37,12 @@ import type {
   AdminCashCollectionDetail,
   AdminCashRemittance,
   AdminCashRemittanceDetail,
-  AdminCourierOption,
+  AdminCourierAssignmentOption,
+  AdminCourierAssignmentWarning,
+  AdminCourierAvailabilityStatus,
   AdminCourierRecord,
   AdminCourierStatus,
+  AdminCourierWhatsAppPreview,
   AdminCsvDownload,
   AdminDeliveryDetail,
   AdminDeliveryManifest,
@@ -563,7 +566,7 @@ export const adminDataClient = {
     reasonDetail: string,
     finalVerifiedMillimes?: number,
   ) =>
-    adminRequest<AdminCashRemittanceDetail>(
+    adminRequest<AdminCashCollectionDetail | AdminCashRemittanceDetail>(
       `/admin/cash/discrepancies/${encodeURIComponent(discrepancyId)}/resolve`,
       {
         method: 'POST',
@@ -579,33 +582,71 @@ export const adminDataClient = {
     ),
   delivery: (id: string) =>
     adminRequest<AdminDeliveryDetail>(`/admin/deliveries/${encodeURIComponent(id)}`),
-  couriers: () => adminRequest<AdminCourierOption[]>('/admin/deliveries/couriers'),
+  couriers: (deliveryId?: string) =>
+    adminRequest<AdminCourierAssignmentOption[]>(
+      `/admin/deliveries/couriers${deliveryId ? `?deliveryId=${encodeURIComponent(deliveryId)}` : ''}`,
+    ),
   courierRecords: (query = 'page=1&limit=50') =>
     adminRequest<Pagination<AdminCourierRecord>>(`/admin/deliveries/courier-records?${query}`),
   createCourierRecord: (payload: {
     code: string;
     name: string;
+    companyName?: string;
+    availabilityStatus?: AdminCourierAvailabilityStatus;
     contactName?: string;
     phoneE164?: string;
+    whatsappPhoneE164?: string;
     email?: string;
+    defaultFeeMillimes?: number;
+    maximumActiveDeliveries?: number;
+    whatsappTemplate?: string;
+    coverageZones?: Array<{
+      deliveryZoneId: string;
+      active?: boolean;
+      feeMillimes?: number;
+    }>;
     notes?: string;
   }) =>
     adminRequest<AdminCourierRecord>('/admin/deliveries/courier-records', {
       method: 'POST',
       body: jsonBody({ ...payload, confirmation: 'CREATE_MANUAL_COURIER' }),
     }),
-  updateCourierStatus: (courier: AdminCourierRecord, status: AdminCourierStatus) =>
+  updateCourierRecord: (
+    courier: AdminCourierRecord,
+    payload: {
+      code?: string;
+      name?: string;
+      companyName?: string | null;
+      status?: AdminCourierStatus;
+      availabilityStatus?: AdminCourierAvailabilityStatus;
+      contactName?: string | null;
+      phoneE164?: string | null;
+      whatsappPhoneE164?: string | null;
+      email?: string | null;
+      defaultFeeMillimes?: number | null;
+      maximumActiveDeliveries?: number | null;
+      whatsappTemplate?: string | null;
+      coverageZones?: Array<{
+        deliveryZoneId: string;
+        active?: boolean;
+        feeMillimes?: number;
+      }>;
+      notes?: string | null;
+    },
+  ) =>
     adminRequest<AdminCourierRecord>(
       `/admin/deliveries/courier-records/${encodeURIComponent(courier.id)}`,
       {
         method: 'PATCH',
         body: jsonBody({
           expectedUpdatedAt: courier.updatedAt,
-          status,
+          ...payload,
           confirmation: 'UPDATE_MANUAL_COURIER',
         }),
       },
     ),
+  updateCourierStatus: (courier: AdminCourierRecord, status: AdminCourierStatus) =>
+    adminDataClient.updateCourierRecord(courier, { status }),
   deliveryManifests: (query = 'page=1&limit=50') =>
     adminRequest<Pagination<AdminDeliveryManifestSummary>>(`/admin/deliveries/manifests?${query}`),
   deliveryManifest: (id: string) =>
@@ -654,12 +695,81 @@ export const adminDataClient = {
         ...(payload.dryRun ? {} : { confirmation: 'APPLY_DELIVERY_STATUS_IMPORT' }),
       }),
     }),
-  assignDelivery: (delivery: AdminDeliveryDetail, courierId: string) =>
+  assignDelivery: (
+    delivery: AdminDeliveryDetail,
+    courierId: string,
+    acknowledgedWarnings: AdminCourierAssignmentWarning[] = [],
+    trackingNumber?: string,
+    note?: string,
+  ) =>
     adminRequest<AdminDeliveryDetail>(
       `/admin/deliveries/${encodeURIComponent(delivery.id)}/assign`,
       {
         method: 'POST',
-        body: jsonBody({ expectedVersion: delivery.version, courierId }),
+        body: jsonBody({
+          expectedVersion: delivery.version,
+          courierId,
+          ...(acknowledgedWarnings.length > 0 ? { acknowledgedWarnings } : {}),
+          ...(trackingNumber ? { trackingNumber } : {}),
+          ...(note ? { note } : {}),
+        }),
+      },
+    ),
+  reassignDelivery: (
+    delivery: AdminDeliveryDetail,
+    courierId: string,
+    reason: string,
+    acknowledgedWarnings: AdminCourierAssignmentWarning[] = [],
+    trackingNumber?: string,
+    note?: string,
+  ) =>
+    adminRequest<AdminDeliveryDetail>(
+      `/admin/deliveries/${encodeURIComponent(delivery.id)}/reassign`,
+      {
+        method: 'POST',
+        body: jsonBody({
+          expectedVersion: delivery.version,
+          courierId,
+          reason,
+          ...(acknowledgedWarnings.length > 0 ? { acknowledgedWarnings } : {}),
+          ...(trackingNumber ? { trackingNumber } : {}),
+          ...(note ? { note } : {}),
+        }),
+      },
+    ),
+  unassignDelivery: (delivery: AdminDeliveryDetail, reason: string) =>
+    adminRequest<AdminDeliveryDetail>(
+      `/admin/deliveries/${encodeURIComponent(delivery.id)}/unassign`,
+      {
+        method: 'POST',
+        body: jsonBody({
+          expectedVersion: delivery.version,
+          reason,
+          confirmation: 'UNASSIGN_COURIER',
+        }),
+      },
+    ),
+  courierWhatsAppPreview: (deliveryId: string) =>
+    adminRequest<AdminCourierWhatsAppPreview>(
+      `/admin/deliveries/${encodeURIComponent(deliveryId)}/courier-whatsapp`,
+    ),
+  recordCourierWhatsAppContact: (delivery: AdminDeliveryDetail) =>
+    adminRequest<AdminDeliveryDetail>(
+      `/admin/deliveries/${encodeURIComponent(delivery.id)}/courier-contacted`,
+      {
+        method: 'POST',
+        body: jsonBody({
+          expectedVersion: delivery.version,
+          confirmation: 'RECORD_COURIER_WHATSAPP_CONTACT',
+        }),
+      },
+    ),
+  updateDeliveryInternalNotes: (delivery: AdminDeliveryDetail, internalNotes: string | null) =>
+    adminRequest<AdminDeliveryDetail>(
+      `/admin/deliveries/${encodeURIComponent(delivery.id)}/internal-notes`,
+      {
+        method: 'PATCH',
+        body: jsonBody({ expectedVersion: delivery.version, internalNotes }),
       },
     ),
   transitionDelivery: (delivery: AdminDeliveryDetail, targetStatus: string, explanation?: string) =>
@@ -897,7 +1007,7 @@ export const adminDataClient = {
       },
     ),
   reorderProductImages: (productId: string, image: AdminProductImage, imageIds: string[]) =>
-    adminRequest<{ imageIds: string[]; ownerVersion: number }>(
+    adminRequest<{ items: AdminProductImage[]; ownerVersion: number }>(
       `/admin/products/${encodeURIComponent(productId)}/images/reorder`,
       {
         method: 'POST',
@@ -909,7 +1019,7 @@ export const adminDataClient = {
       },
     ),
   deleteProductImage: (productId: string, image: AdminProductImage) =>
-    adminRequest<{ deletedImageId: string; ownerVersion: number }>(
+    adminRequest<{ id: string; deleted: true; ownerVersion: number }>(
       `/admin/products/${encodeURIComponent(productId)}/images/${encodeURIComponent(image.id)}?expectedOwnerVersion=${image.ownerVersion}`,
       { method: 'DELETE' },
     ),

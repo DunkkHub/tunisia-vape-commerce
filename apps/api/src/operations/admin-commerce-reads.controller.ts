@@ -12,6 +12,7 @@ import {
   AdminCashReconciliationListResponseDto,
   AdminCommerceListQueryDto,
   AdminCustomerListResponseDto,
+  AdminDeliveryListQueryDto,
   AdminDeliveryListResponseDto,
   AdminOrderListResponseDto,
 } from './dto/admin-commerce-list.dto';
@@ -45,7 +46,7 @@ export class AdminCommerceReadsController {
   @RequirePermissions('deliveries.read')
   @ApiOperation({ summary: 'List delivery assignments for administrator operations' })
   @ApiOkResponse({ type: AdminDeliveryListResponseDto })
-  deliveries(@Query() query: AdminCommerceListQueryDto, @Req() request: Request) {
+  deliveries(@Query() query: AdminDeliveryListQueryDto, @Req() request: Request) {
     return this.reads.listDeliveries(query, requestLocale(request));
   }
 

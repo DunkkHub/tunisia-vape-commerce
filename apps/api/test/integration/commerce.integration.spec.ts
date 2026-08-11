@@ -13,6 +13,7 @@ import { officialProductJsonUrl, WOTOFO_PRODUCTS } from '../../src/catalog-impor
 import { CatalogService } from '../../src/catalog/catalog.service';
 import { CheckoutOrderService } from '../../src/checkout/checkout-order.service';
 import { CheckoutPolicyService } from '../../src/checkout/checkout-policy.service';
+import { CheckoutQuoteService } from '../../src/checkout/checkout-quote.service';
 import type { AgeGateService } from '../../src/compliance/age-gate.service';
 import { CryptoService } from '../../src/common/security/crypto.service';
 import { validateEnvironment, type Environment } from '../../src/config/environment';
@@ -61,6 +62,7 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
   const catalog = new CatalogService(prisma, {} as AgeGateService, config);
   const checkoutPolicy = new CheckoutPolicyService(prisma, config);
   const checkout = new CheckoutOrderService(prisma, checkoutPolicy, crypto);
+  const quotes = new CheckoutQuoteService(prisma, checkoutPolicy);
   const customerOrders = new CustomerOrdersService(prisma, crypto);
   const adminOrders = new AdminOrdersService(prisma, crypto);
   const redis = new Redis(environment.REDIS_URL, {
@@ -213,6 +215,53 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
     });
   });
 
+  it('counts a price-filtered public product once when it has multiple sellable variants', async () => {
+    const fixture = await createSellableVariant(prisma, foundation);
+    const uniquePuffCount = 99_001;
+    await prisma.product.update({
+      where: { id: fixture.product.id },
+      data: { puffCount: uniquePuffCount },
+    });
+    await prisma.productVariant.create({
+      data: {
+        productId: fixture.product.id,
+        nameFr: `${fixture.product.nameFr} variante 2`,
+        nameAr: `${fixture.product.nameAr} variante 2`,
+        sku: `IT-${fixture.product.id}-2`,
+        costMillimes: 6_000,
+        priceMillimes: 12_000,
+        taxRateBps: 1_900,
+        weightGrams: 50,
+        publicationStatus: 'PUBLISHED',
+        inventoryItems: {
+          create: {
+            locationId: foundation.locationId,
+            onHandQuantity: 5,
+          },
+        },
+      },
+    });
+
+    const result = await catalog.products(
+      {
+        page: 1,
+        pageSize: 20,
+        sort: 'newest',
+        puffCount: uniquePuffCount,
+        minPriceMillimes: 5_000,
+      },
+      'fr',
+    );
+
+    expect(result.data.items.map(({ id }) => id)).toEqual([fixture.product.id]);
+    expect(result.data).toMatchObject({
+      page: 1,
+      pageSize: 20,
+      total: 1,
+      totalPages: 1,
+    });
+  });
+
   it('creates one successful COD order with immutable snapshots and active reservation', async () => {
     const customer = await createCustomer(prisma);
     const product = await createSellableVariant(prisma, foundation, { onHand: 3 });
@@ -273,6 +322,50 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
       (await prisma.inventoryItem.findUniqueOrThrow({ where: { id: product.inventory.id } }))
         .onHandQuantity,
     ).toBe(3);
+  });
+
+  it('reloads changed catalog prices when an earlier quote becomes stale', async () => {
+    const customer = await createCustomer(prisma);
+    const product = await createSellableVariant(prisma, foundation, { onHand: 2 });
+    const input = await checkoutInput(
+      prisma,
+      customer.id,
+      product.variant.id,
+      foundation.validGeography,
+    );
+    const quoteInput = {
+      items: input.items,
+      localityId: input.localityId!,
+      express: input.express ?? false,
+    };
+    const staleQuote = await quotes.quote(quoteInput);
+    expect(staleQuote.data.grandTotalMillimes).toBe(18_900);
+
+    await prisma.productVariant.update({
+      where: { id: product.variant.id },
+      data: { priceMillimes: 12_000, version: { increment: 1 } },
+    });
+
+    const created = await checkout.create(
+      input,
+      key('changed-server-price'),
+      customer.id,
+      requestFixture(),
+    );
+    expect(created.data).toMatchObject({
+      subtotalMillimes: 12_000,
+      deliveryTotalMillimes: 7_000,
+      taxTotalMillimes: 2_280,
+      grandTotalMillimes: 21_280,
+      expectedCodMillimes: 21_280,
+    });
+    await expect(
+      prisma.orderItem.findFirstOrThrow({ where: { orderId: created.data.id } }),
+    ).resolves.toMatchObject({
+      unitPriceMillimes: 12_000,
+      unitTaxMillimes: 2_280,
+      lineTotalMillimes: 14_280,
+    });
   });
 
   it('prunes an archived persisted cart line while preserving valid lines for checkout', async () => {
@@ -585,6 +678,49 @@ describe.sequential('commerce integration on disposable MySQL and isolated Redis
         where: { orderId: created.data.id, status: 'VOIDED' },
       }),
     ).toBe(1);
+  });
+
+  it('administrator cancellation appends a zero-delta reservation release movement', async () => {
+    const customer = await createCustomer(prisma);
+    const product = await createSellableVariant(prisma, foundation, { onHand: 2 });
+    const created = await checkout.create(
+      await checkoutInput(prisma, customer.id, product.variant.id, foundation.validGeography),
+      key('admin-cancel'),
+      customer.id,
+      requestFixture(),
+    );
+
+    await adminOrders.cancel(
+      created.data.id,
+      {
+        expectedVersion: 1,
+        confirmed: true,
+        confirmation: 'CANCEL_ORDER',
+        reason: 'Administrator confirmed the customer cancellation',
+      },
+      requestFixture(foundation.adminUserId),
+    );
+
+    const [reservation, inventory, releaseMovements] = await Promise.all([
+      prisma.stockReservation.findFirstOrThrow({ where: { orderId: created.data.id } }),
+      prisma.inventoryItem.findUniqueOrThrow({ where: { id: product.inventory.id } }),
+      prisma.stockMovement.findMany({
+        where: {
+          inventoryItemId: product.inventory.id,
+          referenceId: created.data.id,
+          type: 'RESERVATION_RELEASE',
+          reasonCode: 'ADMIN_CANCELLED',
+        },
+      }),
+    ]);
+    expect(reservation).toMatchObject({ state: 'RELEASED', activeKey: null });
+    expect(inventory.onHandQuantity).toBe(2);
+    expect(releaseMovements).toHaveLength(1);
+    expect(releaseMovements[0]).toMatchObject({
+      quantityDelta: 0,
+      onHandAfter: 2,
+      actorUserId: foundation.adminUserId,
+    });
   });
 
   it('serializes simultaneous customer cancel and admin confirm with one controlled winner', async () => {

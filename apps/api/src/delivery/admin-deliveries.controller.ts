@@ -34,20 +34,25 @@ import { AdminDeliveriesService } from './admin-deliveries.service';
 import {
   AdminDeliveryOperationResponseDto,
   AdminCourierOptionsResponseDto,
+  AdminCourierWhatsAppPreviewResponseDto,
   AdminDeliveryResponseDto,
   AssignDeliveryDto,
   CompleteDeliveryDto,
   CompleteDeliveryReturnDto,
   CreateDeliveryManifestDto,
   CreateManualCourierDto,
+  CourierOptionsQueryDto,
   DeliveryManifestListQueryDto,
   DeliveryStatusExportQueryDto,
   ImportDeliveryStatusCsvDto,
   ManualCourierListQueryDto,
+  RecordCourierWhatsAppContactDto,
   ReassignDeliveryDto,
   RecordDeliveryAttemptDto,
   TransitionDeliveryManifestDto,
   TransitionDeliveryDto,
+  UnassignDeliveryDto,
+  UpdateDeliveryInternalNotesDto,
   UpdateManualCourierDto,
 } from './dto/admin-delivery.dto';
 
@@ -67,8 +72,8 @@ export class AdminDeliveriesController {
   @RequirePermissions('deliveries.read')
   @ApiOperation({ summary: 'List up to 100 active couriers for manual assignment' })
   @ApiOkResponse({ type: AdminCourierOptionsResponseDto })
-  couriers() {
-    return this.deliveries.listCouriers();
+  couriers(@Query() query: CourierOptionsQueryDto) {
+    return this.deliveries.listCouriers(query);
   }
 
   @Get('courier-records')
@@ -182,6 +187,44 @@ export class AdminDeliveriesController {
     return this.operations.importStatusCsv(input, request);
   }
 
+  @Get(':id/courier-whatsapp')
+  @UseGuards(RecentAuthenticationGuard)
+  @RequirePermissions('deliveries.update')
+  @ApiOperation({
+    summary: 'Preview a validated manual wa.me link without sending a WhatsApp message',
+  })
+  @ApiOkResponse({ type: AdminCourierWhatsAppPreviewResponseDto })
+  courierWhatsApp(@Param('id') id: string, @Req() request: Request) {
+    return this.deliveries.getCourierWhatsApp(id, request);
+  }
+
+  @Post(':id/courier-contacted')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(CsrfGuard, RecentAuthenticationGuard)
+  @RequirePermissions('deliveries.update')
+  @ApiOperation({ summary: 'Record an audited manual WhatsApp contact event without sending it' })
+  @ApiOkResponse({ type: AdminDeliveryOperationResponseDto })
+  recordCourierContact(
+    @Param('id') id: string,
+    @Body() input: RecordCourierWhatsAppContactDto,
+    @Req() request: Request,
+  ) {
+    return this.deliveries.recordCourierWhatsAppContact(id, input, request);
+  }
+
+  @Patch(':id/internal-notes')
+  @UseGuards(CsrfGuard, RecentAuthenticationGuard)
+  @RequirePermissions('deliveries.update')
+  @ApiOperation({ summary: 'Optimistically update data-minimized internal delivery notes' })
+  @ApiOkResponse({ type: AdminDeliveryResponseDto })
+  updateInternalNotes(
+    @Param('id') id: string,
+    @Body() input: UpdateDeliveryInternalNotesDto,
+    @Req() request: Request,
+  ) {
+    return this.deliveries.updateInternalNotes(id, input, request);
+  }
+
   @Get(':id')
   @RequirePermissions('deliveries.read')
   @ApiOperation({ summary: 'Get manual delivery workflow detail and immutable events' })
@@ -208,6 +251,16 @@ export class AdminDeliveriesController {
   @ApiOkResponse({ type: AdminDeliveryResponseDto })
   reassign(@Param('id') id: string, @Body() input: ReassignDeliveryDto, @Req() request: Request) {
     return this.deliveries.reassign(id, input, request);
+  }
+
+  @Post(':id/unassign')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(CsrfGuard, RecentAuthenticationGuard)
+  @RequirePermissions('deliveries.assign')
+  @ApiOperation({ summary: 'Remove a pre-custody courier assignment with a mandatory reason' })
+  @ApiOkResponse({ type: AdminDeliveryResponseDto })
+  unassign(@Param('id') id: string, @Body() input: UnassignDeliveryDto, @Req() request: Request) {
+    return this.deliveries.unassign(id, input, request);
   }
 
   @Post(':id/transitions')

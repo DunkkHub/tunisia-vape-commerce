@@ -617,8 +617,12 @@ describe('COD discrepancy dual control', () => {
       orderNumber: 'TN-000001',
       courierName: 'Livreur Tunis',
       status: 'EXPECTED',
+      paymentStatus: 'CASH_EXPECTED',
       expectedMillimes: 100_000,
       collectedMillimes: 0,
+      accountableMillimes: null,
+      adjustmentMillimes: null,
+      discrepancyStatus: null,
       collectedAt: null,
     };
     const collectionDetail = {
@@ -681,6 +685,107 @@ describe('COD discrepancy dual control', () => {
         confirmation: 'RECORD_COLLECTION',
       });
     });
+  });
+
+  it('enforces collection-recorder dual control, write-off fields, and partial remittance selection', async () => {
+    const collectionSummary = {
+      id: 'partial-collection',
+      orderNumber: 'TN-000002',
+      courierName: 'Livreur Tunis',
+      status: 'PARTIALLY_COLLECTED',
+      paymentStatus: 'RECONCILIATION_DISCREPANCY',
+      expectedMillimes: 100_000,
+      collectedMillimes: 98_000,
+      accountableMillimes: null,
+      adjustmentMillimes: null,
+      discrepancyStatus: 'OPEN',
+      collectedAt: '2026-07-20T10:00:00.000Z',
+      createdAt: '2026-07-20T09:00:00.000Z',
+    };
+    const collectionDetail = {
+      ...collectionSummary,
+      orderId: 'order-2',
+      orderStatus: 'OUT_FOR_DELIVERY',
+      orderVersion: 3,
+      deliveryId: 'delivery-2',
+      delivery: { id: 'delivery-2', version: 4 },
+      courierId: 'courier-1',
+      collectedByUserId: 'admin-self',
+      method: 'CASH',
+      note: null,
+      allocations: [],
+      discrepancies: [
+        {
+          id: 'collection-discrepancy',
+          cashCollectionId: 'partial-collection',
+          status: 'OPEN',
+          expectedMillimes: 100_000,
+          actualMillimes: 98_000,
+          differenceMillimes: -2_000,
+          reasonCode: 'SHORT_CASH',
+          reasonDetail: 'Short initial count',
+          openedByUserId: 'admin-other',
+          resolvedByUserId: null,
+          openedAt: '2026-07-20T10:00:00.000Z',
+          resolvedAt: null,
+        },
+      ],
+      historyTruncated: false,
+      updatedAt: '2026-07-20T10:00:00.000Z',
+    };
+    const resolvedSummary = {
+      ...collectionSummary,
+      id: 'resolved-collection',
+      orderNumber: 'TN-000003',
+      status: 'COLLECTED',
+      paymentStatus: 'CASH_COLLECTED_BY_COURIER',
+      accountableMillimes: 100_000,
+      adjustmentMillimes: 2_000,
+      discrepancyStatus: 'RESOLVED',
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.includes('/auth/admin/session')) return Promise.resolve(json({ user: adminUser }));
+      if (url.includes('/admin/cash/collections?')) {
+        return Promise.resolve(json(page([collectionSummary, resolvedSummary])));
+      }
+      if (url.endsWith('/admin/cash/collections/partial-collection')) {
+        return Promise.resolve(json(collectionDetail));
+      }
+      if (url.includes('/admin/cash/remittances?')) return Promise.resolve(json(page([])));
+      return Promise.resolve(json({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderRoute('/admin/cash');
+    const openRow = (await screen.findAllByText('TN-000002'))
+      .find((node) => node.tagName === 'TD')
+      ?.closest('tr');
+    const resolvedRow = (await screen.findAllByText('TN-000003'))
+      .find((node) => node.tagName === 'TD')
+      ?.closest('tr');
+    if (!openRow || !resolvedRow) throw new Error('Expected both collection rows.');
+    expect(within(openRow).getByText('OPEN')).toBeVisible();
+    expect(within(resolvedRow).getByText(/RESOLVED/)).toBeVisible();
+    expect(resolvedRow.querySelector('data[value="2000"]')).toBeVisible();
+    await user.click(within(openRow).getByRole('button', { name: /Voir les d/ }));
+    const secondAdminButton = await screen.findByRole('button', {
+      name: /Un second administrateur doit/,
+    });
+    expect(secondAdminButton).toBeDisabled();
+
+    const resolutionForm = secondAdminButton.closest('form');
+    if (!resolutionForm) throw new Error('Expected the collection discrepancy form.');
+    const finalAmount = within(resolutionForm).getByLabelText(/Montant final/);
+    await user.selectOptions(within(resolutionForm).getByLabelText(/solution/), 'WRITTEN_OFF');
+    expect(finalAmount).toBeDisabled();
+    expect(finalAmount).not.toBeRequired();
+
+    await user.click(screen.getByRole('tab', { name: /^Remises livreur/ }));
+    expect(await screen.findByRole('option', { name: 'TN-000002' })).toHaveValue(
+      'partial-collection',
+    );
   });
 
   it('disables self-resolution and submits the explicit verified resolution payload', async () => {

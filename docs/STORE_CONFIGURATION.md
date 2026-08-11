@@ -20,7 +20,7 @@ Store settings are authoritative database records. Environment variables may imp
 | `minimum_purchase_age`         | `18`        | Used when at least one configured age control requires it           |
 | store identity/contact         | empty       | Intentionally produces `STORE_INFORMATION_MISSING`                  |
 | delivery method                | none        | Intentionally produces `DELIVERY_METHOD_MISSING`                    |
-| latest expected migration      | configured  | `20260804090000_customer_google_identity`                           |
+| latest expected migration      | configured  | `20260811170000_product_image_renditions`                           |
 
 A fresh seed is therefore operationally blocked even though checkout and launch switches are open. This is intentional: buyers must provide real store information and delivery pricing.
 
@@ -83,6 +83,21 @@ Choose at least one path:
 2. Create a supported, non-suspended delivery zone, link active localities, create a current active base-geography rate in integer millimes, then activate the zone.
 
 The readiness policy checks for an active pickup or an active, supported, non-suspended zone that owns a current active nonnegative zone-base rate. A rate attached to another zone cannot satisfy readiness. Quote and order creation still resolve the customer's actual locality and fail closed if no single valid rate matches. Test every offered locality, minimum order, maximum COD value, date range, surcharge, blackout, and ambiguity before sale.
+
+### Configure manual couriers
+
+In **Administration → Livraison → Opérations**, create each real courier as a credential-free manual record. Configure the normalized phone and WhatsApp numbers, current availability, optional active-delivery capacity, and only the delivery zones that the courier actually serves. A courier with no linked coverage rows is intentionally treated as unrestricted for backward compatibility; new production records should normally use explicit zones. Default and per-zone courier fees are internal operating costs in integer millimes and do not change the customer rate.
+
+Before assigning a real order:
+
+1. keep the courier lifecycle status active and availability set to available;
+2. verify the order's configured delivery zone appears in courier coverage;
+3. review current active workload against capacity;
+4. acknowledge any explicit outside-zone or capacity warning rather than treating it as a silent override;
+5. use the server-rendered WhatsApp preview to open WhatsApp manually, or copy the message; and
+6. record the contact action only after the administrator has opened the manual handoff.
+
+The application does not send WhatsApp messages and stores no WhatsApp provider credential. Reassignment requires a reason. Unassignment is limited to pre-custody states and is rejected while an active dispatch manifest exists. Delivery completion and COD collection/remittance remain separate controlled operations.
 
 ## Configurable age, consent, and delivery controls
 

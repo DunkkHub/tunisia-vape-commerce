@@ -17,6 +17,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { PRODUCT_IMAGE_RENDITION_PROFILE_VERSION } from '../product-image-rendition-profile';
 
 const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -26,6 +27,11 @@ const multipartBoolean = ({ value }: TransformFnParams): unknown => {
   if (value === 'true') return true;
   if (value === 'false') return false;
   return value as unknown;
+};
+const renditionProfileVersion = ({ value }: TransformFnParams): unknown => {
+  if (typeof value !== 'string') return value as unknown;
+  const match = /^v([1-9]\d*)$/u.exec(value);
+  return match ? Number(match[1]) : value;
 };
 
 export class ProductMediaProductParamDto {
@@ -50,6 +56,21 @@ export class PublicMediaHashParamDto {
   @Length(64, 64)
   @Matches(SHA256_PATTERN)
   objectKeyHash!: string;
+}
+
+const PUBLIC_MEDIA_RENDITIONS = ['thumbnail', 'card', 'detail', 'high-resolution'] as const;
+
+export class PublicMediaRenditionParamDto extends PublicMediaHashParamDto {
+  @ApiProperty({ enum: PUBLIC_MEDIA_RENDITIONS })
+  @IsIn(PUBLIC_MEDIA_RENDITIONS)
+  rendition!: (typeof PUBLIC_MEDIA_RENDITIONS)[number];
+
+  @ApiProperty({ example: `v${PRODUCT_IMAGE_RENDITION_PROFILE_VERSION}` })
+  @Transform(renditionProfileVersion)
+  @IsInt()
+  @Min(1)
+  @Max(PRODUCT_IMAGE_RENDITION_PROFILE_VERSION)
+  profileVersion!: number;
 }
 
 export class ProductMediaListQueryDto {
@@ -228,6 +249,23 @@ export class AdminProductImageDto {
 
   @ApiProperty()
   url!: string;
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      thumbnail: { type: 'string' },
+      card: { type: 'string' },
+      detail: { type: 'string' },
+      highResolution: { type: 'string' },
+    },
+  })
+  renditions!: {
+    thumbnail: string;
+    card: string;
+    detail: string;
+    highResolution: string;
+  };
 
   @ApiProperty()
   contentType!: string;

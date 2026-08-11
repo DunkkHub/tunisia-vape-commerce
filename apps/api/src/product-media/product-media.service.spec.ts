@@ -3,7 +3,11 @@ import type { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaService } from '../database/prisma.service';
 import type { ProductImageValidatorService } from './product-image-validator.service';
-import { ProductMediaService, type ProductMediaMutationContext } from './product-media.service';
+import {
+  ProductMediaService,
+  publicProductImageRenditionUrls,
+  type ProductMediaMutationContext,
+} from './product-media.service';
 import type { MediaStorage, StoreMediaObjectInput } from './storage/media-storage';
 
 const context: ProductMediaMutationContext = {
@@ -22,6 +26,7 @@ const validated = {
   checksumSha256: createHash('sha256').update('decoded-image').digest('hex'),
   width: 320,
   height: 240,
+  renditions: [],
 };
 
 const productImageRecord = (overrides: Record<string, unknown> = {}) => ({
@@ -47,8 +52,32 @@ const productImageRecord = (overrides: Record<string, unknown> = {}) => ({
   deletedAt: null,
   product: { id: 'product-1', version: 1 },
   variant: null,
+  renditions: [],
   ...overrides,
 });
+
+const completeRenditionManifest = (
+  productImageId: string,
+  requestedOverride: Partial<{
+    byteSize: number;
+    checksumSha256: string;
+    width: number;
+    height: number;
+  }> = {},
+) =>
+  ['thumbnail', 'card', 'detail', 'high-resolution'].flatMap((name) =>
+    ['webp', 'jpeg'].map((format) => ({
+      productImageId,
+      name,
+      format,
+      profileVersion: 1,
+      byteSize: 1,
+      checksumSha256: '0'.repeat(64),
+      width: 1,
+      height: 1,
+      ...(name === 'card' && format === 'webp' ? requestedOverride : {}),
+    })),
+  );
 
 const validator = () =>
   ({ validate: vi.fn().mockResolvedValue(validated) }) as unknown as ProductImageValidatorService;
@@ -56,12 +85,33 @@ const validator = () =>
 const storage = (bytes = validated.bytes) =>
   ({
     bucket: 'test-media',
-    put: vi.fn().mockResolvedValue(undefined),
-    get: vi.fn().mockResolvedValue(bytes),
+    put: vi.fn<(input: StoreMediaObjectInput) => Promise<void>>().mockResolvedValue(undefined),
+    get: vi
+      .fn<(objectKey: string, maximumBytes: number) => Promise<Buffer>>()
+      .mockResolvedValue(bytes),
     delete: vi.fn().mockResolvedValue(undefined),
   }) satisfies MediaStorage;
 
 describe('ProductMediaService', () => {
+  it('advertises optimized public URLs only for a complete current-profile manifest', () => {
+    const objectKeyHash = 'a'.repeat(64);
+
+    expect(publicProductImageRenditionUrls(objectKeyHash, [])).toEqual({
+      thumbnail: `/api/v1/media/${objectKeyHash}`,
+      card: `/api/v1/media/${objectKeyHash}`,
+      detail: `/api/v1/media/${objectKeyHash}`,
+      highResolution: `/api/v1/media/${objectKeyHash}`,
+    });
+    expect(
+      publicProductImageRenditionUrls(objectKeyHash, completeRenditionManifest('image-1')),
+    ).toEqual({
+      thumbnail: `/api/v1/media/${objectKeyHash}/thumbnail/v1`,
+      card: `/api/v1/media/${objectKeyHash}/card/v1`,
+      detail: `/api/v1/media/${objectKeyHash}/detail/v1`,
+      highResolution: `/api/v1/media/${objectKeyHash}/high-resolution/v1`,
+    });
+  });
+
   it('stores an approved product image under a generated key and audits the committed mutation', async () => {
     const created = productImageRecord();
     const transaction = {
@@ -90,7 +140,26 @@ describe('ProductMediaService', () => {
       ),
     } as unknown as PrismaService;
     const mediaStorage = storage();
-    const service = new ProductMediaService(prisma, validator(), mediaStorage);
+    const renditionBytes = Buffer.from('card-webp');
+    const imageValidator = {
+      validate: vi.fn().mockResolvedValue({
+        ...validated,
+        renditions: [
+          {
+            name: 'card',
+            format: 'webp',
+            contentType: 'image/webp',
+            extension: 'webp',
+            bytes: renditionBytes,
+            byteSize: renditionBytes.length,
+            checksumSha256: createHash('sha256').update(renditionBytes).digest('hex'),
+            width: 320,
+            height: 240,
+          },
+        ],
+      }),
+    } as unknown as ProductImageValidatorService;
+    const service = new ProductMediaService(prisma, imageValidator, mediaStorage);
 
     const response = await service.upload(
       'product-1',
@@ -103,8 +172,9 @@ describe('ProductMediaService', () => {
       context,
     );
 
-    expect(mediaStorage.put).toHaveBeenCalledOnce();
-    expect(mediaStorage.put).toHaveBeenCalledWith(
+    expect(mediaStorage.put).toHaveBeenCalledTimes(2);
+    expect(mediaStorage.put).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         objectKey: expect.stringMatching(
           /^products\/product-1\/product\/[a-f0-9]{36}\.png$/,
@@ -114,6 +184,13 @@ describe('ProductMediaService', () => {
         checksumSha256: validated.checksumSha256,
       }),
     );
+    const originalObjectKey = vi.mocked(mediaStorage.put).mock.calls[0]?.[0].objectKey;
+    expect(mediaStorage.put).toHaveBeenNthCalledWith(2, {
+      objectKey: `${originalObjectKey}.renditions/v1/card.webp`,
+      bytes: renditionBytes,
+      contentType: 'image/webp',
+      checksumSha256: createHash('sha256').update(renditionBytes).digest('hex'),
+    });
     expect(transaction.productImage.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -123,6 +200,17 @@ describe('ProductMediaService', () => {
           moderationStatus: 'APPROVED',
           isPrimary: true,
           sortOrder: 0,
+          renditions: {
+            create: [
+              expect.objectContaining({
+                name: 'card',
+                format: 'webp',
+                profileVersion: 1,
+                byteSize: renditionBytes.length,
+                checksumSha256: createHash('sha256').update(renditionBytes).digest('hex'),
+              }),
+            ],
+          },
         }) as object,
       }),
     );
@@ -145,6 +233,12 @@ describe('ProductMediaService', () => {
       originalFilename: 'safe-image.png',
       updatedAt: '2026-07-20T00:05:00.000Z',
       url: '/api/v1/admin/products/product-1/images/image-1/content',
+      renditions: {
+        thumbnail: '/api/v1/admin/products/product-1/images/image-1/content',
+        card: '/api/v1/admin/products/product-1/images/image-1/content',
+        detail: '/api/v1/admin/products/product-1/images/image-1/content',
+        highResolution: '/api/v1/admin/products/product-1/images/image-1/content',
+      },
     });
   });
 
@@ -296,14 +390,18 @@ describe('ProductMediaService', () => {
     });
 
     expect(transaction.outboxEvent.upsert).toHaveBeenCalledWith({
-      where: { deterministicKey: 'media-object-delete:v1:image-1' },
+      where: { deterministicKey: 'media-object-delete:v2:image-1' },
       update: {},
       create: expect.objectContaining({
         aggregateType: 'ProductImage',
         aggregateId: 'image-1',
         eventType: 'media.object.delete.requested',
         payload: {
-          objectKey: current.objectKey,
+          objectKeys: expect.arrayContaining([
+            current.objectKey,
+            `${current.objectKey}.renditions/thumbnail.webp`,
+            `${current.objectKey}.renditions/high-resolution.jpg`,
+          ]) as string[],
           bucket: current.bucket,
         },
       }) as object,
@@ -419,6 +517,167 @@ describe('ProductMediaService', () => {
     });
     expect(findFirst).toHaveBeenCalledOnce();
     expect(mediaStorage.get).not.toHaveBeenCalled();
+  });
+
+  it('fails cheaply when a complete manifest points to a missing immutable rendition object', async () => {
+    const expected = Buffer.from('expected-webp');
+    const record = {
+      id: 'image-1',
+      objectKey: 'products/product-1/product/public.png',
+      contentType: 'image/png',
+      byteSize: 20,
+      checksumSha256: '1'.repeat(64),
+      renditions: completeRenditionManifest('image-1', {
+        byteSize: expected.length,
+        checksumSha256: createHash('sha256').update(expected).digest('hex'),
+        width: 720,
+        height: 480,
+      }),
+    };
+    const missing = Object.assign(new Error('missing'), { code: 'ENOENT' });
+    const mediaStorage = storage();
+    vi.mocked(mediaStorage.get).mockRejectedValueOnce(missing);
+    const createRendition = vi.fn();
+    const createRenditions = vi.fn();
+    const imageValidator = {
+      validate: vi.fn(),
+      createRendition,
+      createRenditions,
+    } as unknown as ProductImageValidatorService;
+    const createMany = vi.fn();
+    const findMany = vi.fn();
+    const prisma = {
+      productImage: { findFirst: vi.fn().mockResolvedValue(record) },
+      productImageRendition: { createMany, findMany },
+    } as unknown as PrismaService;
+    const service = new ProductMediaService(prisma, imageValidator, mediaStorage);
+
+    await expect(service.readPublicRendition('e'.repeat(64), 'card', 'webp')).rejects.toMatchObject(
+      {
+        response: { code: 'MEDIA_NOT_FOUND' },
+      },
+    );
+    expect(mediaStorage.get).toHaveBeenCalledWith(
+      `${record.objectKey}.renditions/v1/card.webp`,
+      expected.length,
+    );
+    expect(mediaStorage.get).toHaveBeenCalledOnce();
+    expect(mediaStorage.put).not.toHaveBeenCalled();
+    expect(createRendition).not.toHaveBeenCalled();
+    expect(createRenditions).not.toHaveBeenCalled();
+    expect(createMany).not.toHaveBeenCalled();
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('does not backfill or enqueue work for a legacy image without a persisted rendition manifest', async () => {
+    const record = {
+      id: 'legacy-image',
+      objectKey: 'products/product-1/product/legacy.png',
+      contentType: 'image/png',
+      byteSize: 20,
+      checksumSha256: '1'.repeat(64),
+      renditions: [],
+    };
+    const mediaStorage = storage();
+    const createRendition = vi.fn();
+    const createRenditions = vi.fn();
+    const imageValidator = {
+      createRendition,
+      createRenditions,
+    } as unknown as ProductImageValidatorService;
+    const createMany = vi.fn();
+    const findMany = vi.fn();
+    const prisma = {
+      productImage: { findFirst: vi.fn().mockResolvedValue(record) },
+      productImageRendition: { createMany, findMany },
+    } as unknown as PrismaService;
+    const service = new ProductMediaService(prisma, imageValidator, mediaStorage);
+
+    await expect(service.readPublicRendition('b'.repeat(64), 'card', 'webp')).rejects.toMatchObject(
+      {
+        response: { code: 'MEDIA_NOT_FOUND' },
+      },
+    );
+    expect(mediaStorage.get).not.toHaveBeenCalled();
+    expect(mediaStorage.put).not.toHaveBeenCalled();
+    expect(createRendition).not.toHaveBeenCalled();
+    expect(createRenditions).not.toHaveBeenCalled();
+    expect(createMany).not.toHaveBeenCalled();
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('serves a cached rendition only when it matches the deterministic rendition checksum', async () => {
+    const original = Buffer.from('stored-public-image');
+    const generated = Buffer.from('generated-webp');
+    const record = {
+      id: 'image-1',
+      objectKey: 'products/product-1/product/public.png',
+      contentType: 'image/png',
+      byteSize: original.length,
+      checksumSha256: createHash('sha256').update(original).digest('hex'),
+      renditions: completeRenditionManifest('image-1', {
+        byteSize: generated.length,
+        checksumSha256: createHash('sha256').update(generated).digest('hex'),
+        width: 720,
+        height: 480,
+      }),
+    };
+    const mediaStorage = storage();
+    vi.mocked(mediaStorage.get).mockResolvedValueOnce(generated);
+    const createRendition = vi.fn();
+    const imageValidator = {
+      createRendition,
+    } as unknown as ProductImageValidatorService;
+    const prisma = {
+      productImage: { findFirst: vi.fn().mockResolvedValue(record) },
+    } as unknown as PrismaService;
+    const service = new ProductMediaService(prisma, imageValidator, mediaStorage);
+
+    await expect(service.readPublicRendition('f'.repeat(64), 'card', 'webp')).resolves.toEqual({
+      bytes: generated,
+      contentType: 'image/webp',
+      byteSize: generated.length,
+    });
+    expect(mediaStorage.get).toHaveBeenCalledOnce();
+    expect(createRendition).not.toHaveBeenCalled();
+    expect(mediaStorage.put).not.toHaveBeenCalled();
+  });
+
+  it('rejects a structurally valid cached rendition with different image bytes', async () => {
+    const original = Buffer.from('stored-public-image');
+    const expected = Buffer.from('expected-webp');
+    const alternate = Buffer.from('replaced-webp');
+    const record = {
+      id: 'image-1',
+      objectKey: 'products/product-1/product/public.png',
+      contentType: 'image/png',
+      byteSize: original.length,
+      checksumSha256: createHash('sha256').update(original).digest('hex'),
+      renditions: completeRenditionManifest('image-1', {
+        byteSize: expected.length,
+        checksumSha256: createHash('sha256').update(expected).digest('hex'),
+        width: 720,
+        height: 480,
+      }),
+    };
+    const mediaStorage = storage();
+    vi.mocked(mediaStorage.get).mockResolvedValueOnce(alternate);
+    const createRendition = vi.fn();
+    const imageValidator = {
+      createRendition,
+    } as unknown as ProductImageValidatorService;
+    const prisma = {
+      productImage: { findFirst: vi.fn().mockResolvedValue(record) },
+    } as unknown as PrismaService;
+    const service = new ProductMediaService(prisma, imageValidator, mediaStorage);
+
+    await expect(service.readPublicRendition('a'.repeat(64), 'card', 'webp')).rejects.toMatchObject(
+      {
+        response: { code: 'MEDIA_INTEGRITY_FAILURE' },
+      },
+    );
+    expect(createRendition).not.toHaveBeenCalled();
+    expect(mediaStorage.put).not.toHaveBeenCalled();
   });
 
   it('fails closed when stored media no longer matches its immutable checksum', async () => {

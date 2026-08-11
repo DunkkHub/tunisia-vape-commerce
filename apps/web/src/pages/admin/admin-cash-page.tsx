@@ -35,6 +35,9 @@ export function AdminCashPage() {
   const [exportMessage, setExportMessage] = useState('');
   const [selectedCollectionId, setSelectedCollectionId] = useState('');
   const [selectedRemittanceId, setSelectedRemittanceId] = useState('');
+  const [collectionResolutionByDiscrepancy, setCollectionResolutionByDiscrepancy] = useState<
+    Record<string, 'RESOLVED' | 'WRITTEN_OFF'>
+  >({});
   const collectionIdempotency = useRef<{ collectionId: string; key: string } | null>(null);
   const collections = useQuery({
     queryKey: ['admin', 'cash', 'collections'],
@@ -181,6 +184,7 @@ export function AdminCashPage() {
                   <th>{t('admin.columns.courier')}</th>
                   <th>{t('admin.columns.expected')}</th>
                   <th>{t('admin.cashOps.collected')}</th>
+                  <th>{t('admin.cashOps.accountable')}</th>
                   <th>{t('common.status')}</th>
                   <th>{t('common.actions')}</th>
                 </tr>
@@ -195,6 +199,27 @@ export function AdminCashPage() {
                     </td>
                     <td>
                       <Price millimes={item.collectedMillimes} />
+                    </td>
+                    <td>
+                      {item.accountableMillimes === null ? (
+                        '—'
+                      ) : (
+                        <Price millimes={item.accountableMillimes} />
+                      )}
+                      {item.discrepancyStatus ? (
+                        <small>
+                          {t(`admin.cashOps.statuses.${item.discrepancyStatus}`, {
+                            defaultValue: item.discrepancyStatus,
+                          })}
+                          {item.adjustmentMillimes ? (
+                            <>
+                              {' · '}
+                              {t('admin.cashOps.adjustment')}:{' '}
+                              <Price millimes={item.adjustmentMillimes} />
+                            </>
+                          ) : null}
+                        </small>
+                      ) : null}
                     </td>
                     <td>
                       {t(`admin.cashOps.statuses.${item.status}`, { defaultValue: item.status })}
@@ -212,7 +237,7 @@ export function AdminCashPage() {
                 ))}
                 {collections.data?.items.length === 0 ? (
                   <tr>
-                    <td colSpan={6}>{t('admin.cashOps.noCollections')}</td>
+                    <td colSpan={7}>{t('admin.cashOps.noCollections')}</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -239,6 +264,81 @@ export function AdminCashPage() {
               </Button>
             </form>
           ) : null}
+          {collection.data?.discrepancies
+            .filter((item) => item.status === 'OPEN' || item.status === 'INVESTIGATING')
+            .map((discrepancy) => {
+              const resolution = collectionResolutionByDiscrepancy[discrepancy.id] ?? 'RESOLVED';
+              const requiresSecondAdmin =
+                discrepancy.openedByUserId === user?.id ||
+                collection.data.collectedByUserId === user?.id;
+              return (
+                <form
+                  className="admin-form-grid"
+                  key={discrepancy.id}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const form = new FormData(event.currentTarget);
+                    const reasonDetail = text(form, 'reasonDetail');
+                    const finalVerifiedMillimes = Number(text(form, 'finalVerifiedMillimes'));
+                    action.mutate(() =>
+                      adminDataClient.resolveCashDiscrepancy(
+                        discrepancy.id,
+                        resolution,
+                        reasonDetail,
+                        resolution === 'RESOLVED' ? finalVerifiedMillimes : undefined,
+                      ),
+                    );
+                  }}
+                >
+                  <h3>{t('admin.cashOps.discrepancyTitle')}</h3>
+                  <p>
+                    {collection.data.orderNumber} &middot; {discrepancy.reasonCode ?? '—'} &middot;{' '}
+                    <Price millimes={Math.abs(discrepancy.differenceMillimes)} />
+                  </p>
+                  <SelectField
+                    name="resolution"
+                    label={t('admin.cashOps.resolution')}
+                    value={resolution}
+                    onChange={(event) => {
+                      const next = event.currentTarget.value as 'RESOLVED' | 'WRITTEN_OFF';
+                      setCollectionResolutionByDiscrepancy((current) => ({
+                        ...current,
+                        [discrepancy.id]: next,
+                      }));
+                    }}
+                  >
+                    <option value="RESOLVED">{t('admin.cashOps.resolved')}</option>
+                    <option value="WRITTEN_OFF">{t('admin.cashOps.writtenOff')}</option>
+                  </SelectField>
+                  <FormField
+                    name="finalVerifiedMillimes"
+                    label={t('admin.cashOps.finalVerified')}
+                    type="number"
+                    min={0}
+                    defaultValue={collection.data.expectedMillimes}
+                    disabled={resolution === 'WRITTEN_OFF'}
+                    required={resolution === 'RESOLVED'}
+                  />
+                  <FormField
+                    name="reasonDetail"
+                    label={t('admin.cashOps.resolutionReason')}
+                    minLength={4}
+                    maxLength={1000}
+                    required
+                  />
+                  <Button
+                    type="submit"
+                    variant="admin"
+                    loading={action.isPending}
+                    disabled={!canReconcile || requiresSecondAdmin}
+                  >
+                    {requiresSecondAdmin
+                      ? t('admin.cashOps.secondAdminRequired')
+                      : t('admin.cashOps.resolve')}
+                  </Button>
+                </form>
+              );
+            })}
         </section>
       </AdminWorkspacePanel>
 
@@ -255,7 +355,9 @@ export function AdminCashPage() {
             <SelectField name="collectionId" label={t('admin.cashOps.collection')} required>
               <option value="">—</option>
               {collections.data?.items
-                .filter((item) => item.status === 'COLLECTED')
+                .filter(
+                  (item) => item.status === 'COLLECTED' || item.status === 'PARTIALLY_COLLECTED',
+                )
                 .map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.orderNumber}

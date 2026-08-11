@@ -36,6 +36,7 @@ import {
   databaseUrlForName,
   parseRestoreDrillArguments,
 } from '../lib/restore-drill.mjs';
+import { assertExpectedMigrationHead } from '../lib/restore-verification.mjs';
 
 const createFixture = async (directory, key, plaintext) => {
   const initializationVector = randomBytes(12);
@@ -305,4 +306,25 @@ test('backup command validation never echoes a database password', () => {
   );
   assert.notEqual(result.status, 0);
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(passwordMarker));
+});
+
+test('restore verification requires the exact application migration head', () => {
+  assert.doesNotThrow(() =>
+    assertExpectedMigrationHead(
+      '20260811170000_product_image_renditions',
+      '20260811170000_product_image_renditions',
+    ),
+  );
+  assert.throws(
+    () =>
+      assertExpectedMigrationHead(
+        '20260811170000_product_image_renditions',
+        '20260804090000_customer_google_identity',
+      ),
+    /does not match the application-required migration/u,
+  );
+  assert.throws(
+    () => assertExpectedMigrationHead(null, '20260811170000_product_image_renditions'),
+    /migration head NONE/u,
+  );
 });

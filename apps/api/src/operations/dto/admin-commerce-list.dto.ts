@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { DeliveryStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, Length, Max, MaxLength, Min } from 'class-validator';
 
 export class AdminCommerceListQueryDto {
   @ApiPropertyOptional({ default: 1, minimum: 1 })
@@ -23,6 +24,19 @@ export class AdminCommerceListQueryDto {
   @IsString()
   @MaxLength(80)
   q?: string;
+}
+
+export class AdminDeliveryListQueryDto extends AdminCommerceListQueryDto {
+  @ApiPropertyOptional({ enum: DeliveryStatus })
+  @IsOptional()
+  @IsEnum(DeliveryStatus)
+  status?: DeliveryStatus;
+
+  @ApiPropertyOptional({ maxLength: 30 })
+  @IsOptional()
+  @IsString()
+  @Length(1, 30)
+  courierId?: string;
 }
 
 abstract class AdminPageDto {

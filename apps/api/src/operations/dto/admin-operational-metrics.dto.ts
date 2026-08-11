@@ -61,6 +61,72 @@ class AdminWorkerMetricsDto {
   maximumAgeSeconds!: number;
 }
 
+class AdminAggregateAgeMetricDto {
+  @ApiProperty({ minimum: 0 })
+  count!: number;
+
+  @ApiPropertyOptional({ nullable: true, format: 'date-time' })
+  oldestAt!: string | null;
+
+  @ApiPropertyOptional({ nullable: true, minimum: 0 })
+  oldestAgeSeconds!: number | null;
+}
+
+class AdminAuthenticationSignalMetricsDto {
+  @ApiProperty({ type: () => AdminAggregateAgeMetricDto })
+  failedCustomerLogins!: AdminAggregateAgeMetricDto;
+
+  @ApiProperty({ type: () => AdminAggregateAgeMetricDto })
+  failedAdminLogins!: AdminAggregateAgeMetricDto;
+
+  @ApiProperty({ type: () => AdminAggregateAgeMetricDto })
+  passwordResetRequests!: AdminAggregateAgeMetricDto;
+
+  @ApiProperty({ type: () => AdminAggregateAgeMetricDto })
+  passwordResetFailuresOrDenials!: AdminAggregateAgeMetricDto;
+}
+
+class AdminSecuritySignalMetricsDto {
+  @ApiProperty({ type: () => AdminAggregateAgeMetricDto })
+  high!: AdminAggregateAgeMetricDto;
+
+  @ApiProperty({ type: () => AdminAggregateAgeMetricDto })
+  critical!: AdminAggregateAgeMetricDto;
+
+  @ApiProperty({ type: () => AdminAggregateAgeMetricDto })
+  totalHighOrCritical!: AdminAggregateAgeMetricDto;
+}
+
+class AdminOperationalSignalMetricsDto {
+  @ApiProperty({ minimum: 1, example: 15 })
+  windowMinutes!: number;
+
+  @ApiProperty({ format: 'date-time' })
+  windowStartedAt!: string;
+
+  @ApiProperty({ type: () => AdminAuthenticationSignalMetricsDto })
+  authentication!: AdminAuthenticationSignalMetricsDto;
+
+  @ApiProperty({ type: () => AdminSecuritySignalMetricsDto })
+  adminSecurityEvents!: AdminSecuritySignalMetricsDto;
+}
+
+class AdminDeliveryOperationalMetricsDto {
+  @ApiProperty({ type: () => AdminAggregateAgeMetricDto })
+  activeBacklog!: AdminAggregateAgeMetricDto;
+}
+
+class AdminCashOnDeliveryOperationalMetricsDto {
+  @ApiProperty({ type: () => AdminAggregateAgeMetricDto })
+  openDiscrepancies!: AdminAggregateAgeMetricDto;
+
+  @ApiProperty({ type: () => AdminAggregateAgeMetricDto })
+  investigatingDiscrepancies!: AdminAggregateAgeMetricDto;
+
+  @ApiProperty({ type: () => AdminAggregateAgeMetricDto })
+  totalActionableDiscrepancies!: AdminAggregateAgeMetricDto;
+}
+
 class AdminOperationalMetricsDataDto {
   @ApiProperty({ format: 'date-time' })
   asOf!: string;
@@ -70,6 +136,15 @@ class AdminOperationalMetricsDataDto {
 
   @ApiProperty({ type: () => AdminWorkerMetricsDto })
   worker!: AdminWorkerMetricsDto;
+
+  @ApiProperty({ type: () => AdminOperationalSignalMetricsDto })
+  signals!: AdminOperationalSignalMetricsDto;
+
+  @ApiProperty({ type: () => AdminDeliveryOperationalMetricsDto })
+  delivery!: AdminDeliveryOperationalMetricsDto;
+
+  @ApiProperty({ type: () => AdminCashOnDeliveryOperationalMetricsDto })
+  cashOnDelivery!: AdminCashOnDeliveryOperationalMetricsDto;
 
   @ApiProperty({ additionalProperties: { type: 'string' } })
   definitions!: Record<string, string>;

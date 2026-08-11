@@ -93,6 +93,18 @@ Notifications are queued after commit, localized in French/Arabic, idempotent, a
 
 `GET /api/v1/admin/deliveries/courier-records` lists bounded records. Creation and optimistic update require `deliveries.update`, administrator CSRF, recent authentication, and an explicit confirmation string. Creation writes a `MANUAL` integration marker without credentials or provider configuration. Update refuses records carrying API/CSV integrations. Suspension and archival are non-destructive and fail with `COURIER_HAS_ACTIVE_CUSTODY` until every assigned delivery is terminal and every manifest is closed or cancelled. There is no courier-delete route.
 
+The **Livraison -> Operations** workspace separates courier configuration from delivery execution:
+
+1. Search or filter courier records by text, lifecycle status, or `AVAILABLE`/`OFF_DUTY` availability.
+2. Create or edit the courier identity and contact details, normalized phone/WhatsApp number, availability, optional active-delivery capacity, default internal fee, WhatsApp template, and internal notes.
+3. Select explicit delivery-zone coverage and, when needed, a zone-specific internal fee. Fees entered in the administration UI are TND text values converted to integer millimes before the API call. These costs never replace the customer-facing delivery rate.
+4. Review the active-workload and coverage indicators before assigning a delivery. An off-duty or inactive courier cannot be selected. Outside-coverage and at-capacity assignments require the exact warning acknowledgement and remain visible in delivery history.
+5. Use reasoned reassignment when custody rules allow it. Unassignment is limited to pre-custody states and is rejected while an active manifest contains the delivery.
+
+Zero courier-zone rows preserve unrestricted legacy coverage; operators should configure explicit zones for new production couriers. Clearing a zone list therefore does not mean that the courier serves no zones. Lifecycle suspension and archival are the supported alternatives to deletion.
+
+For manual WhatsApp handoff, select an assigned delivery and request the server-rendered preview. The API takes the recipient, immutable order/address snapshot, COD amount, and delivery instructions from server state, substitutes only allowlisted tokens into the bounded courier template, and returns an encoded HTTPS `wa.me` link. The application never sends the message. Copy or open the preview manually, then use the separate **contact recorded** operation to append delivery and audit evidence; the rendered message and customer address are not stored in audit metadata. Internal delivery notes use an optimistic version and audit only presence/length, not their text. Treat the preview as a customer-data disclosure and expose it only to an administrator performing the delivery handoff.
+
 ## Operator-supplied target service profiles
 
 The following July 2026 target profiles are recorded as operational input. They are not seed data, are not active merely because they appear in this document, and do not claim an external provider integration.
@@ -107,7 +119,7 @@ Safe mapping to the current system:
 - Represent Intigo and each manual driver/provider as credential-free manual courier records. A label or note does not enable an Intigo API.
 - `STANDARD_COD` is an administrator UI preset, not a code-specific backend exception. It pre-fills `estimatedMinDays=1`, `estimatedMaxDays=3`, `paymentMethod=CASH_ON_DELIVERY`, `assignmentMode=MANUAL`, and `phoneConfirmationRequired=true`. National coverage still means linking every approved active locality, and the operator must separately create and activate a zone-scoped `BASE` rate of `8000` millimes.
 - `BIZERTE_EXPRESS` is a reserved server-validated code. Before activation and on every update while active, it requires day estimates to be null, exact `estimatedMinMinutes=30` and `estimatedMaxMinutes=50`, `paymentMethod=CASH_ON_DELIVERY`, `assignmentMode=MANUAL`, and `driverCommunication=WHATSAPP`. Active coverage must come from explicit delegation/locality links that resolve entirely inside Bizerte; a whole-governorate link or any outside-Bizerte locality is rejected.
-- COD, manually entered tracking numbers, and return-to-sender controls exist independently of a courier profile. The WhatsApp value is persisted internal operating metadata only; it does not send a message or enable a messaging adapter.
+- COD, manually entered tracking numbers, and return-to-sender controls exist independently of a courier profile. A courier's phone, WhatsApp template, availability, capacity, coverage, and internal fees are operational configuration only. They do not send a message, enable a messaging adapter, or alter the customer delivery charge.
 
 For every zone, day estimates must be supplied as an ordered complete 0–365 pair or minute estimates as an ordered complete 1–10,080 pair; the units cannot be mixed. Money values are integer millimes from 0 to 1,000,000. A zero rate is valid only when the zone explicitly configures a zero free-delivery threshold. The API refuses to remove that explicit free setting while any active zero-fee rate remains and rechecks the invariant before zone activation.
 

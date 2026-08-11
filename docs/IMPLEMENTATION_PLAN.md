@@ -1,6 +1,6 @@
 # Implementation plan
 
-Last updated: 2026-08-04
+Last updated: 2026-08-11
 
 ## Delivery policy
 
@@ -15,7 +15,7 @@ The direct dependency baseline selected in the manifests on 2026-07-11 is:
 | Area                   | Exact versions                                                                                                                                                              |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Toolchain              | Node >=22.22.0 (container line 24), pnpm 11.11.0, TypeScript 5.9.3, Prisma/Prisma Client 6.19.3, ESLint 10.7.0, Prettier 3.9.5, tsx 4.23.0                                  |
-| API framework/security | NestJS common/core/platform-express 11.1.28, Nest config 4.0.4, Swagger 11.4.5, throttler 6.5.0, Argon2 0.44.0, Helmet 8.2.0, cookie-parser 1.4.7, Zod 4.4.3                |
+| API framework/security | NestJS common/core/platform-express 11.1.28, Nest config 4.0.4, Swagger 11.4.6, throttler 6.5.0, Argon2 0.44.0, Helmet 8.2.0, cookie-parser 1.4.7, Zod 4.4.3                |
 | API runtime/telemetry  | ioredis 5.11.1, nestjs-pino 4.6.1, pino-http 11.0.0, otplib 13.4.1, qrcode 1.5.4, RxJS 7.8.2, Undici 7.29.0, uuid 14.0.1                                                    |
 | Web                    | React/React DOM 19.2.7, Vite 8.1.4, React Router 8.3.0, TanStack Query 5.101.2, React Hook Form 7.81.0, Zod 4.4.3, i18next 26.3.6, react-i18next 17.0.9, Tailwind CSS 4.3.2 |
 | Accessible UI          | Radix Dialog 1.1.19, Radix Slot 1.3.0, Lucide React 1.24.0                                                                                                                  |
@@ -44,50 +44,113 @@ manifest resolves Nano ID 3.3.16 as its sole associated lockfile refresh. Each s
 the first patched release in the dependency line already present. No Vite, Vitest, jsdom, ESLint,
 minimatch, or unrelated application dependency is upgraded.
 
-The exact patched worktree passes the frozen install and all-severity dependency audit, formatting,
-linting, workspace type checking, Prisma validation, 97 API files/408 unit tests, 24 web files/130
-unit tests, 6 worker files/30 unit tests, 3 disposable MySQL/Redis integration files/19 tests, 2
-security files/6 tests, 26 operations tests, and all six production workspace builds. Standard
-Playwright passes 8 tests with 2 intentional project-matrix skips. The disposable operational
-Chromium journey reapplies all ten migrations and the structural seed, then passes its complete
-checkout, TOTP, RBAC, catalog/media/import, inventory, Bizerte Express, delivery, COD, maintenance,
-and technical-gate scenario in 2.2 minutes.
+Three later HIGH advisories are addressed independently without a forced audit repair or parent
+framework upgrade. GHSA-5p4m-2wfm-xmqj moves `@nestjs/swagger` from 11.4.5 to the latest stable
+11.4.6, replacing vulnerable js-yaml 4.3.0. That Swagger release pins js-yaml 5.2.1, which is itself
+affected by GHSA-pm4m-ph32-ghv5; because no newer stable Swagger 11 release exists, the workspace
+applies the first patched js-yaml 5.x release, 5.2.2, as an exact security override. Swagger
+document generation, API type checking, all API unit tests, and the production API build verify the
+override. GHSA-2v37-7h3g-55p8 advances only the existing PostCSS override from 8.5.23 to 8.5.26;
+PostCSS then resolves Nano ID 3.3.18, above the advisory's 3.3.17 patched floor. Frozen installation
+and full, production-only, and development-only high-severity audits report no known vulnerability.
+
+The last fully counted snapshot before the current courier, rendition, and collection-discrepancy
+slices passed the frozen install and all-severity dependency audit, formatting, linting, workspace
+type checking, Prisma validation, 97 API files/408 unit tests, 24 web files/130 unit tests, 6 worker
+files/30 unit tests, 3 disposable MySQL/Redis integration files/19 tests, 2 security files/6 tests,
+26 operations tests, and all six production workspace builds. Standard Playwright passed 8 tests
+with 2 intentional project-matrix skips. That dated disposable operational Chromium journey applied
+the ten migrations that existed at the time and passed its checkout, TOTP, RBAC,
+catalog/media/import, inventory, Bizerte Express, delivery, COD, maintenance, and technical-gate
+scenario. These figures are historical evidence, not counts for the current fourteen-migration
+worktree.
+
+The 2026-08-09 migration-13 candidate added migrations
+`20260804120000_manual_courier_operations` and
+`20260804130000_collection_discrepancy_scope`, the administrator courier workspace, guarded manual
+WhatsApp handoff, deterministic media renditions, and collection-scoped COD discrepancy resolution.
+That exact worktree passed the complete fourteen-stage
+release verifier in 556.2 seconds: 105 API files/537 unit tests, 28 web files/154 unit tests, 6 worker
+files/34 unit tests, 4 disposable MySQL/Redis integration files/24 tests, 2 security files/6 tests,
+33 operational tests, all production builds, fast Playwright with 8 passes/2 intentional skips, and
+the complete disposable order-to-cash browser journey. The unchanged full-target load also passed
+500 catalog requests at concurrency 100, 50 checkouts, final-unit contention, replay, admin-list,
+worker-recovery, and reconciliation gates with zero catalog/checkout failures and zero dead letters.
 
 The corresponding container-security follow-up removes unused npm binaries and npm's bundled
-dependency tree from the final API and worker images. Both services already start directly with
-`node`, so this changes no runtime command or application dependency. It removes the separate
-image copies of vulnerable brace-expansion 5.0.7 and tar 7.5.19 without a broad package-manager
-upgrade. The Trivy action remains on stable v0.36.0 and now selects the current stable Trivy 0.72.0
-scanner, explicitly scans vulnerabilities and secrets, limits its SARIF gate to the configured
-`HIGH,CRITICAL` severities, and retains `ignore-unfixed: true` and a failing exit code.
-Local parity builds of both final images pass, retain the non-root `node` user and direct Node.js
-commands, and contain no npm directory or npm/npx executable. Trivy 0.72.0 returns success with zero
-fixed HIGH/CRITICAL vulnerability or secret findings for the API, worker, and current web runtimes.
+dependency tree from the final API, worker, and dedicated migration images. API and worker already
+start directly with `node`; the migration image packages the already locked Prisma 6.19.3 CLI into
+a clean non-root runtime instead of inheriting the roughly 695 MB build stage. This changes no
+application dependency or migration behavior. The Trivy action remains on stable v0.36.0 and now
+selects Trivy 0.73.0, scans API/migration/worker/web for vulnerabilities and secrets, limits its
+SARIF gate to `HIGH,CRITICAL`, scans fixed and unfixed findings, and retains a failing exit code. The
+migration target is about 104 MB, runs as UID 1000, exposes no npm/npm/npx on `PATH`, contains no
+bundled npm or `brace-expansion` tree, executes the exact head-13 migration command, and reports zero
+HIGH/CRITICAL findings with and without `ignore-unfixed`.
+The security workflow now distinguishes build, scan, SARIF-presence/upload, and SBOM failures: a
+missing image no longer produces misleading follow-on SARIF/SBOM errors, while a vulnerability
+finding still fails the Trivy step and uploads its available SARIF under an image-specific category.
+
+The current candidate adds migration `20260811170000_product_image_renditions`, the fourteenth
+migration. It persists immutable profile-versioned rendition checksums, sizes, and dimensions so a
+cache hit can be verified without reading or re-encoding the original. The schema and fresh
+disposable installation have passed focused verification. The exact worktree also passed the
+uninterrupted 14-stage release verifier in 547.4 seconds: API 106 files/548 unit tests, web 28/155,
+worker 6/34, disposable integration 4/24 after all 14 migrations and a repeated structural seed,
+security 2/6, 34 operations tests, all production builds, fast Playwright with 8 passes/2 expected
+skips, and one complete operational Playwright journey. The unchanged six-scenario load gate and an
+encrypted isolated restore with all 14 migration checksums and zero invariant violations also
+passed. The final API (`ac4239b3faa1`), migration (`1a6e2f36d053`), worker (`6ceeeafdc52e`), and
+web (`0096c46a0477`) images built successfully. Trivy 0.73.0 scanned all four for vulnerabilities
+and secrets with severity `HIGH,CRITICAL`, `--ignore-unfixed=false`, and `--exit-code 1`; every scan
+exited `0` with zero vulnerabilities and zero secrets. The non-root migration image runs the Prisma
+6.19.3 CLI through a direct Node command as UID/GID 1000, exposes no npm, npx, or pnpm on `PATH`,
+and contains no bundled npm dependency tree; upstream Corepack 0.35 and inert shims remain. It found
+all 14 migrations current. The recreated live stack passed dependency readiness, storefront,
+checkout-policy, and launch-state smoke.
 
 The lockfile, not this summary, resolves transitive versions. Before controlled staging, review runtime compatibility and security advisories, pin container digests and CI action commit SHAs, generate an SBOM, and record any approved exception.
 
 ## Current status
 
-| Phase                             | Scope                                                                         | Status                         | Recorded exit evidence                                                           |
-| --------------------------------- | ----------------------------------------------------------------------------- | ------------------------------ | -------------------------------------------------------------------------------- |
-| 1. Foundation                     | pnpm workspace, React, NestJS, worker, configuration, Docker, CI              | Implemented/local pass         | Frozen gate, production builds, healthy full Compose stack                       |
-| 2. Database                       | Complete Prisma model, migration, structural Tunisia/RBAC seed, indexes       | Implemented; gate refresh open | Fresh 10-migration integration; repeat seed at 24/279/2,082; recovery still open |
-| 3. Authentication and RBAC        | Separate customer/admin authentication, sessions, 2FA, permissions, admin CLI | Implemented/local pass         | Realm/CSRF/TOTP/RBAC positive and negative tests                                 |
-| 4. Catalog                        | Products, variants, taxonomy, suppliers, images, admin CRUD, storefront       | Implemented; browser gate open | API 97/408; web 24/130; variant guard 14/14; real integration                    |
-| 5. Inventory                      | Locations, movements, reservations, batch/expiry, concurrency                 | Implemented/local pass         | Receipt/adjustment/transfer plus full-target final-unit race                     |
-| 6. Geography and delivery pricing | Tunisia hierarchy, zones, rates, pickup, deterministic resolver               | Implemented; focused pass      | INS hierarchy/rules plus fresh real-service integration (3 files/19 tests)       |
-| 7. Cart and checkout              | Customer carts, authoritative totals, COD, reservations and idempotency       | Implemented/local pass         | Real browser checkout/replay and 50-checkout/20-replay load                      |
-| 8. Orders and delivery            | State machines, attempts, manual fulfillment and notifications                | Implemented/local pass         | Real order-to-delivery flow, guarded transitions, manual operations              |
-| 9. COD reconciliation             | Collection, remittance, discrepancies, reports                                | Implemented/local pass         | Collection/remittance and independent dual-control reconciliation                |
-| 10. Compliance                    | Age gates, consent, delivery verification and operational launch gate         | Implemented/local pass         | Configurable controls; only store/delivery blockers on fresh seed                |
-| 11. Reporting/admin               | Dashboards, customer operations, settings, exports and audit views            | Implemented/local pass         | Permission/pagination/privacy/formula-safe export and admin UI tests             |
-| 12. Hardening                     | Security, health, outbox, backup/restore, load and staging deployment         | Implemented; target open       | Security gate, 500/50 load, encrypted restore drill, non-root Compose smoke      |
+| Phase                             | Scope                                                                         | Status                   | Recorded exit evidence                                                                |
+| --------------------------------- | ----------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------- |
+| 1. Foundation                     | pnpm workspace, React, NestJS, worker, configuration, Docker, CI              | Implemented/local pass   | Frozen release gate, final image builds/scans, and healthy current-head Compose smoke |
+| 2. Database                       | Complete Prisma model, migration, structural Tunisia/RBAC seed, indexes       | Implemented/local pass   | Head 14 fresh install/repeat seed and isolated 14-checksum encrypted restore          |
+| 3. Authentication and RBAC        | Separate customer/admin authentication, sessions, 2FA, permissions, admin CLI | Implemented/local pass   | Realm/CSRF/TOTP/RBAC positive and negative tests                                      |
+| 4. Catalog                        | Products, variants, taxonomy, suppliers, images, admin CRUD, storefront       | Implemented/local pass   | Exact totals, unit/integration/load, media lifecycle and operational browser pass     |
+| 5. Inventory                      | Locations, movements, reservations, batch/expiry, concurrency                 | Implemented/local pass   | Receipt/adjustment/transfer plus full-target final-unit race                          |
+| 6. Geography and delivery pricing | Tunisia hierarchy, zones, rates, pickup, deterministic resolver               | Implemented/local pass   | INS hierarchy/rules and current real-service release journey pass                     |
+| 7. Cart and checkout              | Customer carts, authoritative totals, COD, reservations and idempotency       | Implemented/local pass   | Real browser checkout/replay and 50-checkout/20-replay load                           |
+| 8. Orders and delivery            | State machines, attempts, manual fulfillment and notifications                | Implemented/local pass   | Real order-to-delivery flow, guarded transitions, manual operations                   |
+| 9. COD reconciliation             | Collection, remittance, discrepancies, reports                                | Implemented/local pass   | Scoped dual control, order-wide aggregate, collision migration and E2E pass           |
+| 10. Compliance                    | Age gates, consent, delivery verification and operational launch gate         | Implemented/local pass   | Configurable controls; only store/delivery blockers on fresh seed                     |
+| 11. Reporting/admin               | Dashboards, customer operations, settings, exports and audit views            | Implemented/local pass   | Permission/pagination/privacy/formula-safe export and admin UI tests                  |
+| 12. Hardening                     | Security, health, outbox, backup/restore, load and staging deployment         | Implemented; target open | Current security/load/restore/image/Compose gates; target acceptance remains open     |
 
 Do not change a status to complete based on unrecorded local results. Link CI runs, test reports, migration checks, restore evidence, and human sign-offs in this file or the readiness report.
 
-The 2026-07-27 through 2026-08-04 geography, delivery-metadata, catalog-consistency, administrator-workspace, settings-feedback, checkout-feedback, and dependency-security follow-up has current API unit (97 files/408 tests), web unit (24 files/130 tests plus a focused 5-test media-manager pass), worker unit (6 files/30 tests), security (2 files/6 tests), static, and six-workspace production-build evidence. It also has a live Compose migration-10 deployment, repeat-seed proof at 24/279/2,082, a fresh real-MySQL/Redis integration pass (3 files/19 tests), and fast Playwright evidence with 8 passes and 2 intentional project-matrix skips. The delivery lifecycle controller now explicitly returns the documented HTTP 200 for all eight activate/deactivate actions, with focused metadata coverage, while resource-creation routes retain HTTP 201. On 2026-08-04 the disposable operational browser scenario applied all ten migrations, ran the structural seed without commerce/demo accounts, built the production web bundle, and passed its complete real-service scenario in 1.6 minutes. Its stale closed-disclosure, receipt-form, and read-only postal-code interactions were corrected, and the media manager now serializes owner-version mutations and avoids overlapping list invalidation through a broad product-query prefix. The current full Compose smoke, representative upgrade, and migration-10 backup/restore drill still require exact-worktree refresh. The 2026-07-23 complete release evidence is historical.
+The 2026-07-27 through 2026-08-04 geography, delivery-metadata, catalog-consistency,
+administrator-workspace, settings-feedback, checkout-feedback, and dependency-security follow-up is
+historical evidence. It recorded API unit (97 files/408 tests), web unit (24 files/130 tests plus a
+focused 5-test media-manager pass), worker unit (6 files/30 tests), security (2 files/6 tests),
+static, six-workspace production-build, live Compose migration-10, repeat-seed, disposable
+MySQL/Redis, and fast Playwright passes. On 2026-08-04 its operational browser scenario applied all
+ten migrations then present, ran the structural seed without commerce/demo accounts, built the
+production web bundle, and passed the complete real-service scenario. It also verified the explicit
+HTTP 200 delivery lifecycle handlers and the corrected media-manager invalidation behavior. It does
+not certify the current worktree.
 
-The shared worktree contains the complete operational slices for separated authentication and account lifecycle, writable catalog/media/taxonomy, transactional inventory and reservations, Tunisia geography and manual delivery, customer carts/accounts, authoritative atomic COD checkout, guarded order/delivery transitions, COD custody/reconciliation, settings, notifications, durable outbox processing, dependency readiness, and encrypted backup/restore. The recorded local evidence now includes MySQL 8.4/Redis integration, real-browser order-to-cash coverage, the full 500-browser/50-checkout load target, an isolated encrypted restore drill, production builds, non-root container builds, and a healthy full Compose smoke. Purchaser provider credentials and target-environment acceptance remain deployment work, not missing application behavior.
+The current repository head is
+`20260811170000_product_image_renditions`, the fourteenth migration. Its Prisma schema validation,
+fresh disposable installation and repeated structural seed, complete release/browser journey,
+full-target load, and encrypted isolated backup/restore drill are recorded against the exact
+worktree. The migration-13 ambiguous/cross-discrepancy upgrade fixture remains historical evidence;
+final current-head image builds, strict scans, migration execution, and live-stack smoke also pass.
+Target-owned provider acceptance and mandatory remote CI/security evidence remain required for the
+promoted commit. The 2026-07-23 complete release evidence is retained only as history.
+
+The shared worktree contains the complete operational slices for separated authentication and account lifecycle, writable catalog/media/taxonomy, transactional inventory and reservations, Tunisia geography and manual delivery, customer carts/accounts, authoritative atomic COD checkout, guarded order/delivery transitions, COD custody/reconciliation, settings, notifications, durable outbox processing, dependency readiness, and encrypted backup/restore. The exact current-head evidence includes MySQL 8.4/Redis integration, real-browser order-to-cash coverage, the full 500-browser/50-checkout load target, an isolated encrypted restore drill, production builds, final container builds and scans, and a healthy live Compose smoke. Purchaser provider credentials and target-environment acceptance remain deployment work, not missing application behavior.
 
 Fresh-database operational defaults are `checkout.enabled=true` and `prelaunch.mode=false`, with corresponding environment defaults `CHECKOUT_ENABLED=true` and `PRELAUNCH_MODE=false`. Re-running the structural seed preserves an existing setting value rather than overriding an operator change. Legal review and legal-document publication are not runtime checkout prerequisites or technical-readiness inputs. Checkout still fails closed for a stricter checkout or prelaunch environment override, maintenance mode, an invalid configured minimum age, missing store name/phone/email/address, no active pickup or supported zone/current rate, unavailable required services, and request-specific catalog, customer, address, stock, pricing, configured consent, or COD validation failures. The structural seed creates no administrator, customer, product, stock, rate, pickup, or provider configuration.
 
@@ -165,7 +228,7 @@ Fresh-database operational defaults are `checkout.enabled=true` and `prelaunch.m
 
 - The durable worker now leases MySQL `OutboxEvent` rows in bounded batches and uses BullMQ only as transport. Versioned handlers expire reservations or dispatch notifications idempotently; failures use bounded retry and dead-letter states. Development supports console and Mailpit SMTP; production supports authenticated TLS SMTP and an optional authenticated HTTPS SMS webhook. Explicitly disabled SMS rows close as cancelled without a provider call. Selected-provider acceptance evidence remains a deployment task.
 - `/api/v1/health/live` is process-only. `/api/v1/health/ready` fails with 503 unless MySQL, Redis, the expected migration, and a fresh durable-worker heartbeat are all available.
-- Backup tooling creates a timestamped gzip logical MySQL dump, AES-256-GCM encrypted by default, plus an authenticated checksum/migration/count manifest and safe age retention. Restore requires an explicitly confirmed empty disposable target, authenticates and expands before mutation, and runs migration/structural verification. The 2026-07-20 local drill restored and verified in 16.372 seconds, removed its generated database/identity, and recorded zero invariant violations. The purchaser must still measure accepted full-service RPO/RTO in target staging.
+- Backup tooling creates a timestamped gzip logical MySQL dump, AES-256-GCM encrypted by default, plus an authenticated checksum/migration/count manifest and safe age retention. Restore requires an explicitly confirmed empty disposable target, authenticates and expands before mutation, and runs migration/structural verification. The 2026-08-11 current-head local drill matched all 14 migration checksums and table counts, recorded zero inventory/reservation/order/line/cash/orphan/migration invariant violations, and removed its encrypted artifact, generated database, scoped identity, and temporary files. The purchaser must still measure accepted full-service RPO/RTO in target staging.
 - Architecture, security, business-logic, accessibility, and operations checks are included in the local release and operational-browser suites; an independent human review remains part of target acceptance.
 - The documented disposable workload passed the full 500-browser/50-checkout targets without oversell, duplicate orders, dead letters, or reconciliation drift.
 - Dependency/source/secret/container/SBOM workflows are configured; mandatory remote workflow results must be retained for the promoted commit.

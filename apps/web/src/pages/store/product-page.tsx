@@ -135,7 +135,13 @@ export function ProductPage() {
           {activeImage ? (
             <img
               className="product-gallery__main"
-              src={activeImage.url}
+              src={activeImage.renditions?.detail ?? activeImage.url}
+              srcSet={
+                activeImage.renditions
+                  ? `${activeImage.renditions.card} 720w, ${activeImage.renditions.detail} 1200w, ${activeImage.renditions.highResolution} 1920w`
+                  : undefined
+              }
+              sizes="(max-width: 860px) 94vw, 50vw"
               alt={activeImage.altText ?? t('product.imageAltFallback', { name: product.name })}
               width={activeImage.width ?? 900}
               height={activeImage.height ?? 900}
@@ -166,7 +172,7 @@ export function ProductPage() {
                     onClick={() => setSelectedImageId(image.id)}
                   >
                     <img
-                      src={image.url}
+                      src={image.renditions?.thumbnail ?? image.url}
                       alt=""
                       width={image.width ?? 120}
                       height={image.height ?? 120}

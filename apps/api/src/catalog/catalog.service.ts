@@ -5,7 +5,11 @@ import type { Request } from 'express';
 import { AgeGateService } from '../compliance/age-gate.service';
 import type { Environment } from '../config/environment';
 import { PrismaService } from '../database/prisma.service';
-import { publicProductImageUrl } from '../product-media/product-media.service';
+import {
+  publicProductImageRenditionUrls,
+  publicProductImageUrl,
+} from '../product-media/product-media.service';
+import { PRODUCT_IMAGE_RENDITION_PROFILE_VERSION } from '../product-media/product-image-rendition-profile';
 import {
   buildPublicProductWhere,
   catalogProductOrderBy,
@@ -26,6 +30,12 @@ const publicImageSelect = {
   altTextAr: true,
   width: true,
   height: true,
+  renditions: {
+    where: { profileVersion: PRODUCT_IMAGE_RENDITION_PROFILE_VERSION },
+    orderBy: [{ name: 'asc' as const }, { format: 'asc' as const }],
+    take: 9,
+    select: { name: true, format: true, profileVersion: true },
+  },
 } satisfies Prisma.ProductImageSelect;
 
 const publicImages = {
@@ -171,16 +181,17 @@ const displayPrice = (product: PublicProductRecord) => {
   return candidates[0] ?? { list: 0, promotional: null, effective: 0 };
 };
 
-const serializeImage = (
-  image: PublicProductRecord['images'][number],
-  locale: StorefrontLocale,
-) => ({
-  id: image.id,
-  url: publicProductImageUrl(image.objectKeyHash),
-  altText: locale === 'ar' ? image.altTextAr : image.altTextFr,
-  width: image.width ?? undefined,
-  height: image.height ?? undefined,
-});
+const serializeImage = (image: PublicProductRecord['images'][number], locale: StorefrontLocale) => {
+  const originalUrl = publicProductImageUrl(image.objectKeyHash);
+  return {
+    id: image.id,
+    url: originalUrl,
+    renditions: publicProductImageRenditionUrls(image.objectKeyHash, image.renditions, originalUrl),
+    altText: locale === 'ar' ? image.altTextAr : image.altTextFr,
+    width: image.width ?? undefined,
+    height: image.height ?? undefined,
+  };
+};
 
 const decimalNumber = (value: Prisma.Decimal | null | undefined): number | null => {
   if (value === null || value === undefined) return null;

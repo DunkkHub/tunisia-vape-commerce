@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { MulterModule } from '@nestjs/platform-express';
 import { AuthModule } from '../auth/auth.module';
 import { CatalogImportController } from '../catalog-import/catalog-import.controller';
 import { CatalogMediaImportService } from '../catalog-import/catalog-media-import.service';
@@ -31,7 +33,9 @@ import {
   PublicProductMediaController,
 } from '../product-media/product-media.controller';
 import { ProductImageValidatorService } from '../product-media/product-image-validator.service';
+import { productMediaMulterOptions } from '../product-media/product-media-multipart.options';
 import { ProductMediaService } from '../product-media/product-media.service';
+import { ProductMediaUploadGateInterceptor } from '../product-media/product-media-upload-gate.interceptor';
 import { productMediaStorageProvider } from '../product-media/storage/media-storage.provider';
 import {
   LegalDocumentsController,
@@ -44,7 +48,13 @@ import { WishlistController } from '../wishlist/wishlist.controller';
 import { WishlistService } from '../wishlist/wishlist.service';
 
 @Module({
-  imports: [AuthModule],
+  imports: [
+    AuthModule,
+    MulterModule.registerAsync({
+      inject: [ConfigService],
+      useFactory: productMediaMulterOptions,
+    }),
+  ],
   controllers: [
     CatalogController,
     StorefrontCatalogController,
@@ -83,6 +93,7 @@ import { WishlistService } from '../wishlist/wishlist.service';
     WishlistService,
     StorefrontContentService,
     ProductImageValidatorService,
+    ProductMediaUploadGateInterceptor,
     productMediaStorageProvider,
     ProductMediaService,
     AdminBrandsService,

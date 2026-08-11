@@ -7,6 +7,7 @@ import {
 import {
   AgeVerificationResult,
   CashCollectionStatus,
+  CashDiscrepancyStatus,
   DeliveryAttemptOutcome,
   DeliveryMethodType,
   DeliveryStatus,
@@ -20,15 +21,27 @@ import {
   notificationEventForDeliveryStatus,
 } from '../common/outbox/order-notifications';
 import { CryptoService } from '../common/security/crypto.service';
+import { cashDifference } from '../cash/cash-calculations';
 import { PrismaService } from '../database/prisma.service';
 import type {
   AssignDeliveryDto,
   CompleteDeliveryDto,
   CompleteDeliveryReturnDto,
+  CourierAssignmentWarning,
+  CourierOptionsQueryDto,
+  RecordCourierWhatsAppContactDto,
   ReassignDeliveryDto,
   RecordDeliveryAttemptDto,
   TransitionDeliveryDto,
+  UnassignDeliveryDto,
+  UpdateDeliveryInternalNotesDto,
 } from './dto/admin-delivery.dto';
+import {
+  buildCourierWhatsAppLink,
+  CourierWhatsAppError,
+  DEFAULT_COURIER_WHATSAPP_TEMPLATE,
+  type CourierWhatsAppTemplateValues,
+} from './courier-whatsapp';
 import {
   ATTEMPT_OUTCOME_STATUS,
   canTransitionDelivery,
@@ -98,6 +111,7 @@ const DELIVERY_OPERATION_SELECT = {
   status: true,
   trackingNumber: true,
   courierFeeMillimes: true,
+  internalNotes: true,
   ageVerificationRequired: true,
   ageVerificationResult: true,
   version: true,
@@ -111,6 +125,9 @@ const DELIVERY_OPERATION_SELECT = {
       status: true,
       paymentStatus: true,
       expectedCodMillimes: true,
+      customerNameSnapshot: true,
+      deliveryZoneId: true,
+      deliveryInstructions: true,
       minimumAgeSnapshot: true,
       deliveryMethodType: true,
       version: true,
@@ -123,12 +140,27 @@ const DELIVERY_OPERATION_SELECT = {
     select: { attemptNumber: true },
   },
   cashCollections: {
-    select: { status: true, collectedMillimes: true },
+    select: {
+      id: true,
+      status: true,
+      expectedMillimes: true,
+      collectedMillimes: true,
+      discrepancy: {
+        select: {
+          cashCollectionId: true,
+          status: true,
+          expectedMillimes: true,
+          actualMillimes: true,
+          differenceMillimes: true,
+        },
+      },
+    },
   },
 } as const satisfies Prisma.DeliverySelect;
 
 type DeliveryDetail = Prisma.DeliveryGetPayload<{ select: typeof DELIVERY_DETAIL_SELECT }>;
 type DeliveryOperation = Prisma.DeliveryGetPayload<{ select: typeof DELIVERY_OPERATION_SELECT }>;
+type DeliveryCashCollection = DeliveryOperation['cashCollections'][number];
 type Transaction = Prisma.TransactionClient;
 
 const NEGATIVE_AGE_RESULTS = [
@@ -160,6 +192,77 @@ const CASH_PAYMENT_STATUSES = new Set<PaymentStatus>([
   PaymentStatus.CASH_REMITTED,
 ]);
 
+const TERMINAL_DELIVERY_STATUSES = [
+  DeliveryStatus.DELIVERED,
+  DeliveryStatus.RETURNED,
+  DeliveryStatus.CANCELLED,
+] as const;
+
+const COURIER_UNASSIGNMENT_STATUSES = new Set<DeliveryStatus>([
+  DeliveryStatus.CONFIRMED,
+  DeliveryStatus.PREPARING,
+]);
+
+const COURIER_WHATSAPP_STATUSES = new Set<DeliveryStatus>([
+  DeliveryStatus.CONFIRMED,
+  DeliveryStatus.ON_HOLD,
+  DeliveryStatus.PREPARING,
+  DeliveryStatus.READY_FOR_PICKUP,
+  DeliveryStatus.ASSIGNED_TO_COURIER,
+  DeliveryStatus.HANDED_TO_COURIER,
+  DeliveryStatus.IN_TRANSIT,
+  DeliveryStatus.OUT_FOR_DELIVERY,
+  DeliveryStatus.DELIVERY_ATTEMPTED,
+  DeliveryStatus.RESCHEDULED,
+]);
+
+const COURIER_WHATSAPP_SELECT = {
+  id: true,
+  status: true,
+  version: true,
+  courierId: true,
+  courier: {
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      phoneE164: true,
+      whatsappPhoneE164: true,
+      whatsappTemplate: true,
+    },
+  },
+  order: {
+    select: {
+      orderNumber: true,
+      customerNameSnapshot: true,
+      customerPhoneSnapshot: true,
+      expectedCodMillimes: true,
+      deliveryInstructions: true,
+      addressSnapshots: {
+        where: { type: 'DELIVERY' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: 1,
+        select: {
+          governorateName: true,
+          delegationName: true,
+          localityName: true,
+          postalCode: true,
+          street: true,
+          building: true,
+          floor: true,
+          apartment: true,
+          landmark: true,
+          instructions: true,
+        },
+      },
+    },
+  },
+} as const satisfies Prisma.DeliverySelect;
+
+type CourierWhatsAppRecord = Prisma.DeliveryGetPayload<{
+  select: typeof COURIER_WHATSAPP_SELECT;
+}>;
+
 @Injectable()
 export class AdminDeliveriesService {
   constructor(
@@ -167,14 +270,55 @@ export class AdminDeliveriesService {
     private readonly crypto: CryptoService,
   ) {}
 
-  async listCouriers() {
+  async listCouriers(query: CourierOptionsQueryDto = {}) {
+    const deliveryContext = query.deliveryId
+      ? await this.prisma.delivery.findUnique({
+          where: { id: query.deliveryId },
+          select: { order: { select: { deliveryZoneId: true } } },
+        })
+      : null;
+    if (query.deliveryId && !deliveryContext) throw this.notFound();
     const couriers = await this.prisma.courier.findMany({
       where: { status: 'ACTIVE' },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
       take: 100,
-      select: { id: true, code: true, name: true },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        availabilityStatus: true,
+        maximumActiveDeliveries: true,
+        deliveryZones: {
+          select: { deliveryZoneId: true, active: true },
+        },
+        _count: {
+          select: {
+            deliveries: { where: { status: { notIn: [...TERMINAL_DELIVERY_STATUSES] } } },
+          },
+        },
+      },
     });
-    return { data: couriers };
+    return {
+      data: couriers.map((courier) => {
+        const warnings = this.assignmentWarnings(
+          courier,
+          deliveryContext?.order.deliveryZoneId ?? null,
+        );
+        return {
+          id: courier.id,
+          code: courier.code,
+          name: courier.name,
+          availabilityStatus: courier.availabilityStatus,
+          activeDeliveryCount: courier._count.deliveries,
+          maximumActiveDeliveries: courier.maximumActiveDeliveries,
+          assignable: courier.availabilityStatus === 'AVAILABLE',
+          requiresWarningAcknowledgement: warnings.length > 0,
+          unavailableReason:
+            courier.availabilityStatus === 'OFF_DUTY' ? ('COURIER_OFF_DUTY' as const) : null,
+          warnings,
+        };
+      }),
+    };
   }
 
   async get(id: string) {
@@ -192,6 +336,199 @@ export class AdminDeliveriesService {
 
   reassign(id: string, input: ReassignDeliveryDto, request: Request) {
     return this.assignment('reassign', id, input, request);
+  }
+
+  async unassign(id: string, input: UnassignDeliveryDto, request: Request) {
+    return this.prisma.$transaction(async (transaction) => {
+      const delivery = await this.lockDelivery(transaction, id);
+      this.assertVersion(delivery, input.expectedVersion);
+      this.requireExplanation(input.reason, 'UNASSIGNMENT_REASON_REQUIRED');
+      if (
+        !delivery.courierId ||
+        !COURIER_UNASSIGNMENT_STATUSES.has(delivery.status) ||
+        delivery.order.status !== delivery.status
+      ) {
+        throw this.stateConflict('COURIER_UNASSIGNMENT_NOT_ALLOWED');
+      }
+      const activeManifestCount = await transaction.deliveryManifestItem.count({
+        where: {
+          deliveryId: delivery.id,
+          manifest: { status: { in: ['DRAFT', 'SEALED', 'HANDED_OVER'] } },
+        },
+      });
+      if (activeManifestCount > 0) {
+        throw this.conflict(
+          'COURIER_UNASSIGNMENT_MANIFEST_ACTIVE',
+          'Remove the delivery from its active manifest before unassigning the courier.',
+        );
+      }
+      const updated = await transaction.delivery.updateMany({
+        where: { id: delivery.id, version: input.expectedVersion },
+        data: {
+          courierId: null,
+          trackingNumber: null,
+          courierFeeMillimes: null,
+          assignedAt: null,
+          version: { increment: 1 },
+        },
+      });
+      if (updated.count !== 1) throw this.versionConflict();
+      await Promise.all([
+        transaction.deliveryEvent.create({
+          data: {
+            deliveryId: delivery.id,
+            fromStatus: delivery.status,
+            toStatus: delivery.status,
+            actorUserId: request.auth!.userId,
+            source: 'MANUAL_ADMIN',
+            reasonCode: 'COURIER_UNASSIGNED',
+            note: input.reason.trim(),
+            payload: { previousCourierId: delivery.courierId },
+            requestId: request.requestId,
+          },
+        }),
+        this.audit(transaction, request, delivery, 'delivery.courier.unassigned', {
+          before: {
+            courierId: delivery.courierId,
+            status: delivery.status,
+            version: delivery.version,
+          },
+          after: { courierId: null, status: delivery.status, version: delivery.version + 1 },
+        }),
+      ]);
+      return { data: this.serialize(await this.requireDetail(transaction, delivery.id)) };
+    });
+  }
+
+  getCourierWhatsApp(id: string, request: Request) {
+    return this.prisma.$transaction(async (transaction) => {
+      const record = await this.requireCourierWhatsAppRecord(transaction, id);
+      const preview = this.buildCourierWhatsAppPreview(record);
+      await transaction.auditLog.create({
+        data: {
+          actorUserId: request.auth!.userId,
+          actorType: 'ADMIN',
+          action: 'delivery.courier.whatsapp_previewed',
+          resourceType: 'Delivery',
+          resourceId: record.id,
+          outcome: 'SUCCESS',
+          requestId: request.requestId,
+          ipAddress: (request.ip ?? request.socket.remoteAddress ?? 'unknown').slice(0, 45),
+          userAgent: request.get('user-agent')?.slice(0, 512) ?? null,
+          beforeSummary: Prisma.DbNull,
+          afterSummary: {
+            courierId: record.courierId,
+            channel: 'WHATSAPP',
+            manualOnly: true,
+            messageTemplateHash: this.crypto.hashToken(
+              record.courier?.whatsappTemplate ?? DEFAULT_COURIER_WHATSAPP_TEMPLATE,
+            ),
+          },
+        },
+      });
+      return { data: preview };
+    });
+  }
+
+  async recordCourierWhatsAppContact(
+    id: string,
+    input: RecordCourierWhatsAppContactDto,
+    request: Request,
+  ) {
+    return this.prisma.$transaction(async (transaction) => {
+      const delivery = await this.lockDelivery(transaction, id);
+      this.assertVersion(delivery, input.expectedVersion);
+      const whatsapp = await this.requireCourierWhatsAppRecord(transaction, id);
+      const preview = this.buildCourierWhatsAppPreview(whatsapp);
+      const updated = await transaction.delivery.updateMany({
+        where: { id: delivery.id, version: input.expectedVersion },
+        data: { version: { increment: 1 } },
+      });
+      if (updated.count !== 1) throw this.versionConflict();
+      const occurredAt = new Date();
+      await Promise.all([
+        transaction.deliveryEvent.create({
+          data: {
+            deliveryId: delivery.id,
+            fromStatus: delivery.status,
+            toStatus: delivery.status,
+            actorUserId: request.auth!.userId,
+            source: 'MANUAL_ADMIN',
+            reasonCode: 'COURIER_CONTACTED',
+            payload: {
+              courierId: whatsapp.courierId,
+              channel: 'WHATSAPP',
+              manualOnly: true,
+              messageTemplateHash: this.crypto.hashToken(
+                whatsapp.courier?.whatsappTemplate ?? DEFAULT_COURIER_WHATSAPP_TEMPLATE,
+              ),
+            },
+            requestId: request.requestId,
+            occurredAt,
+          },
+        }),
+        this.audit(transaction, request, delivery, 'delivery.courier.contacted', {
+          before: { status: delivery.status, version: delivery.version },
+          after: {
+            status: delivery.status,
+            version: delivery.version + 1,
+            courierId: whatsapp.courierId,
+            channel: 'WHATSAPP',
+            manualOnly: true,
+          },
+        }),
+      ]);
+      return {
+        data: this.serialize(await this.requireDetail(transaction, delivery.id)),
+        contact: { ...preview, contactedAt: occurredAt.toISOString() },
+      };
+    });
+  }
+
+  async updateInternalNotes(id: string, input: UpdateDeliveryInternalNotesDto, request: Request) {
+    if (input.internalNotes === undefined) {
+      throw this.badRequest(
+        'DELIVERY_INTERNAL_NOTES_REQUIRED',
+        'Provide the internal notes value, or null to clear it.',
+      );
+    }
+    return this.prisma.$transaction(async (transaction) => {
+      const delivery = await this.lockDelivery(transaction, id);
+      this.assertVersion(delivery, input.expectedVersion);
+      const internalNotes = input.internalNotes?.trim() ?? null;
+      const updated = await transaction.delivery.updateMany({
+        where: { id: delivery.id, version: input.expectedVersion },
+        data: { internalNotes, version: { increment: 1 } },
+      });
+      if (updated.count !== 1) throw this.versionConflict();
+      await Promise.all([
+        transaction.deliveryEvent.create({
+          data: {
+            deliveryId: delivery.id,
+            fromStatus: delivery.status,
+            toStatus: delivery.status,
+            actorUserId: request.auth!.userId,
+            source: 'MANUAL_ADMIN',
+            reasonCode: 'INTERNAL_NOTES_UPDATED',
+            requestId: request.requestId,
+          },
+        }),
+        this.audit(transaction, request, delivery, 'delivery.internal_notes.updated', {
+          before: {
+            status: delivery.status,
+            version: delivery.version,
+            notesPresent: Boolean(delivery.internalNotes),
+          },
+          after: {
+            status: delivery.status,
+            version: delivery.version + 1,
+            notesPresent: internalNotes !== null,
+            notesLength: internalNotes?.length ?? 0,
+          },
+        }),
+      ]);
+      return { data: this.serialize(await this.requireDetail(transaction, delivery.id)) };
+    });
   }
 
   private async assignment(
@@ -232,11 +569,48 @@ export class AdminDeliveriesService {
         );
         const courier = await transaction.courier.findFirst({
           where: { id: input.courierId, status: 'ACTIVE' },
-          select: { id: true },
+          select: {
+            id: true,
+            availabilityStatus: true,
+            defaultFeeMillimes: true,
+            maximumActiveDeliveries: true,
+            deliveryZones: {
+              select: { deliveryZoneId: true, active: true, feeMillimes: true },
+            },
+          },
         });
         if (!courier) {
           throw this.conflict('COURIER_UNAVAILABLE', 'The selected courier is unavailable.');
         }
+        if (courier.availabilityStatus !== 'AVAILABLE') {
+          throw this.conflict('COURIER_OFF_DUTY', 'The selected courier is currently off duty.');
+        }
+        const activeDeliveryCount = await transaction.delivery.count({
+          where: {
+            courierId: courier.id,
+            status: { notIn: [...TERMINAL_DELIVERY_STATUSES] },
+          },
+        });
+        const operationalWarnings = this.assignmentWarnings(
+          { ...courier, _count: { deliveries: activeDeliveryCount } },
+          delivery.order.deliveryZoneId,
+        );
+        const acknowledgedWarnings = new Set(input.acknowledgedWarnings ?? []);
+        const unacknowledgedWarnings = operationalWarnings.filter(
+          (warning) => !acknowledgedWarnings.has(warning),
+        );
+        if (unacknowledgedWarnings.length > 0) {
+          throw new ConflictException({
+            code: 'COURIER_ASSIGNMENT_WARNING_ACKNOWLEDGEMENT_REQUIRED',
+            message: 'Review and explicitly acknowledge the courier assignment warnings.',
+            warnings: unacknowledgedWarnings,
+          });
+        }
+
+        const matchingZone = courier.deliveryZones.find(
+          (zone) => zone.active && zone.deliveryZoneId === delivery.order.deliveryZoneId,
+        );
+        const courierFeeMillimes = matchingZone?.feeMillimes ?? courier.defaultFeeMillimes;
 
         const now = new Date();
         const updated = await transaction.delivery.updateMany({
@@ -247,9 +621,7 @@ export class AdminDeliveriesService {
             ...(input.trackingNumber !== undefined
               ? { trackingNumber: input.trackingNumber.trim() }
               : {}),
-            ...(input.courierFeeMillimes !== undefined
-              ? { courierFeeMillimes: input.courierFeeMillimes }
-              : {}),
+            courierFeeMillimes,
             version: { increment: 1 },
           },
         });
@@ -269,6 +641,16 @@ export class AdminDeliveriesService {
               payload: {
                 previousCourierId: delivery.courierId,
                 courierId: courier.id,
+                operationalWarnings,
+                acknowledgedWarnings: operationalWarnings.filter((warning) =>
+                  acknowledgedWarnings.has(warning),
+                ),
+                internalFeeSource:
+                  matchingZone?.feeMillimes != null
+                    ? 'ZONE'
+                    : courier.defaultFeeMillimes != null
+                      ? 'DEFAULT'
+                      : 'NONE',
               },
               requestId: request.requestId,
             },
@@ -283,6 +665,9 @@ export class AdminDeliveriesService {
               courierId: courier.id,
               status: delivery.status,
               version: delivery.version + 1,
+              operationalWarnings,
+              warningsAcknowledged: operationalWarnings.length > 0,
+              courierFeeMillimes,
             },
           }),
         ]);
@@ -470,9 +855,10 @@ export class AdminDeliveriesService {
           'A failed age-verification delivery cannot be completed.',
         );
       }
-      const collectedMillimes = delivery.cashCollections
-        .filter(({ status }) => COLLECTED_CASH_STATUSES.has(status))
-        .reduce((total, collection) => total + collection.collectedMillimes, 0);
+      const collectedMillimes = delivery.cashCollections.reduce(
+        (total, collection) => total + this.accountableCashForDeliveryCompletion(collection),
+        0,
+      );
       if (
         delivery.order.expectedCodMillimes > 0 &&
         (collectedMillimes !== delivery.order.expectedCodMillimes ||
@@ -547,6 +933,152 @@ export class AdminDeliveriesService {
       });
       return { data: this.serialize(await this.requireDetail(transaction, delivery.id)) };
     });
+  }
+
+  private assignmentWarnings(
+    courier: {
+      maximumActiveDeliveries: number | null;
+      deliveryZones: Array<{ deliveryZoneId: string; active: boolean }>;
+      _count: { deliveries: number };
+    },
+    deliveryZoneId: string | null,
+  ): CourierAssignmentWarning[] {
+    const warnings: CourierAssignmentWarning[] = [];
+    const activeCoverage = courier.deliveryZones.filter(({ active }) => active);
+    if (
+      courier.deliveryZones.length > 0 &&
+      (!deliveryZoneId || !activeCoverage.some((zone) => zone.deliveryZoneId === deliveryZoneId))
+    ) {
+      warnings.push('COURIER_OUTSIDE_DELIVERY_ZONE');
+    }
+    if (
+      courier.maximumActiveDeliveries !== null &&
+      courier._count.deliveries >= courier.maximumActiveDeliveries
+    ) {
+      warnings.push('COURIER_CAPACITY_EXCEEDED');
+    }
+    return warnings;
+  }
+
+  private async requireCourierWhatsAppRecord(
+    transaction: Transaction,
+    id: string,
+  ): Promise<CourierWhatsAppRecord> {
+    const record = await transaction.delivery.findUnique({
+      where: { id },
+      select: COURIER_WHATSAPP_SELECT,
+    });
+    if (!record) throw this.notFound();
+    if (!record.courierId || !record.courier) {
+      throw this.stateConflict('DELIVERY_COURIER_REQUIRED');
+    }
+    if (!COURIER_WHATSAPP_STATUSES.has(record.status)) {
+      throw this.stateConflict('DELIVERY_COURIER_CONTACT_NOT_ALLOWED');
+    }
+    if (record.courier.status !== 'ACTIVE') {
+      throw this.conflict('COURIER_UNAVAILABLE', 'The assigned courier is unavailable.');
+    }
+    return record;
+  }
+
+  private buildCourierWhatsAppPreview(record: CourierWhatsAppRecord) {
+    const courier = record.courier;
+    if (!courier) throw this.stateConflict('DELIVERY_COURIER_REQUIRED');
+    const address = record.order.addressSnapshots[0];
+    if (!address) {
+      throw this.conflict(
+        'DELIVERY_ADDRESS_UNAVAILABLE',
+        'The delivery address snapshot is unavailable.',
+      );
+    }
+    const values = Object.freeze({
+      orderNumber: record.order.orderNumber,
+      customerName: record.order.customerNameSnapshot,
+      customerPhone: record.order.customerPhoneSnapshot,
+      deliveryAddress: [
+        address.street,
+        address.building,
+        address.floor,
+        address.apartment,
+        address.landmark,
+        address.postalCode,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(', '),
+      governorate: address.governorateName,
+      delegation: address.delegationName,
+      locality: address.localityName ?? '',
+      amountToCollect: this.formatMillimes(record.order.expectedCodMillimes),
+      orderNotes: record.order.deliveryInstructions ?? address.instructions ?? '',
+    }) satisfies CourierWhatsAppTemplateValues;
+    const phoneE164 = courier.whatsappPhoneE164 ?? courier.phoneE164;
+    if (!phoneE164) {
+      throw this.conflict(
+        'COURIER_WHATSAPP_PHONE_MISSING',
+        'The assigned courier has no WhatsApp contact number.',
+      );
+    }
+    try {
+      const link = buildCourierWhatsAppLink({
+        courierPhoneE164: phoneE164,
+        template: courier.whatsappTemplate ?? DEFAULT_COURIER_WHATSAPP_TEMPLATE,
+        values,
+      });
+      return {
+        courierId: courier.id,
+        courierName: courier.name,
+        phoneE164,
+        ...link,
+        manualOnly: true as const,
+      };
+    } catch (error) {
+      if (error instanceof CourierWhatsAppError) {
+        throw this.conflict(error.code, 'The courier WhatsApp preview could not be created.');
+      }
+      throw error;
+    }
+  }
+
+  private formatMillimes(value: number): string {
+    return `${Math.floor(value / 1_000)}.${String(value % 1_000).padStart(3, '0')} TND`;
+  }
+
+  private accountableCashForDeliveryCompletion(collection: DeliveryCashCollection): number {
+    const difference = cashDifference(collection.expectedMillimes, collection.collectedMillimes);
+    const discrepancy = collection.discrepancy;
+    if (!discrepancy) {
+      if (difference !== 0 && COLLECTED_CASH_STATUSES.has(collection.status)) {
+        throw this.conflict(
+          'COD_COLLECTION_DISCREPANCY_LINK_MISSING',
+          'A non-exact cash collection requires a linked reconciliation discrepancy.',
+        );
+      }
+      return COLLECTED_CASH_STATUSES.has(collection.status) ? collection.collectedMillimes : 0;
+    }
+    if (
+      discrepancy.cashCollectionId !== collection.id ||
+      discrepancy.expectedMillimes !== collection.expectedMillimes ||
+      discrepancy.actualMillimes !== collection.collectedMillimes ||
+      discrepancy.differenceMillimes !== difference
+    ) {
+      throw this.conflict(
+        'COD_COLLECTION_DISCREPANCY_INVALID',
+        'The cash collection discrepancy does not match its immutable collection record.',
+      );
+    }
+    if (discrepancy.status !== CashDiscrepancyStatus.RESOLVED) {
+      throw this.conflict(
+        'COD_COLLECTION_DISCREPANCY_UNRESOLVED',
+        'An open or written-off cash discrepancy blocks delivery completion.',
+      );
+    }
+    if (!COLLECTED_CASH_STATUSES.has(collection.status)) {
+      throw this.conflict(
+        'COD_COLLECTION_DISCREPANCY_INVALID',
+        'A resolved cash discrepancy requires a collected cash state.',
+      );
+    }
+    return collection.expectedMillimes;
   }
 
   private async lockDelivery(transaction: Transaction, id: string): Promise<DeliveryOperation> {

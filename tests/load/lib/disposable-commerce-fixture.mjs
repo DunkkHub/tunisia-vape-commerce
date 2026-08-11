@@ -1,6 +1,36 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 const hashToken = (value) => createHash('sha256').update(value, 'utf8').digest('hex');
+const LOAD_IMAGE_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZsAAAAASUVORK5CYII=',
+  'base64',
+);
+
+const addApprovedLoadImage = async (transaction, productId, key) => {
+  const objectKey = `disposable-load/${productId}/${key.toLowerCase()}.png`;
+  await transaction.productImage.create({
+    data: {
+      productId,
+      objectKey,
+      objectKeyHash: hashToken(objectKey),
+      bucket:
+        process.env.MEDIA_STORAGE_DRIVER === 's3'
+          ? (process.env.S3_BUCKET ?? 'vape-store')
+          : 'local-media',
+      contentType: 'image/png',
+      originalFilename: `${key.toLowerCase()}.png`,
+      byteSize: LOAD_IMAGE_BYTES.length,
+      checksumSha256: createHash('sha256').update(LOAD_IMAGE_BYTES).digest('hex'),
+      width: 1,
+      height: 1,
+      altTextFr: `Image de charge ${key}`,
+      altTextAr: `Load image ${key}`,
+      sortOrder: 0,
+      isPrimary: true,
+      moderationStatus: 'APPROVED',
+    },
+  });
+};
 
 const sessionLifetime = () => {
   const now = new Date();
@@ -84,6 +114,7 @@ const productWithInventory = async (
   });
   const variant = product.variants[0];
   if (!variant) throw new Error(`Fixture product ${key} has no variant`);
+  await addApprovedLoadImage(transaction, product.id, key);
   const inventory = await transaction.inventoryItem.create({
     data: {
       variantId: variant.id,
@@ -155,6 +186,7 @@ const productWithIndependentInventory = async (
     include: { variants: { orderBy: { sku: 'asc' }, select: { id: true, sku: true } } },
   });
   const variants = [];
+  await addApprovedLoadImage(transaction, product.id, 'INDEPENDENT');
   for (const variant of product.variants) {
     const inventory = await transaction.inventoryItem.create({
       data: { variantId: variant.id, locationId, onHandQuantity: 1 },

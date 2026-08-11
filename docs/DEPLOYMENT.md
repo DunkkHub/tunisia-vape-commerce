@@ -45,6 +45,13 @@ Required secret classes include database runtime/migration credentials, Redis cr
 5. Promote the exact digest between environments; do not rebuild for production.
 6. A protected GitHub environment requires a human approver and provides only environment-scoped credentials.
 
+The security workflow keeps API, worker, and web scan results in distinct SARIF categories. A
+HIGH/CRITICAL fixed vulnerability remains a failing gate; the SARIF upload still runs when Trivy
+produces a report. If image construction fails before scanning, SARIF upload and SBOM generation are
+skipped instead of replacing the primary build error with missing-file or missing-image failures.
+Controlled-staging dispatch evidence is passed to its shell step only through environment variables,
+never by interpolating operator-supplied text into the script body.
+
 Pin base images and CI actions to reviewed versions/digests in a release hardening change. Rebuild promptly for patched base images.
 
 ## Database changes
@@ -58,7 +65,7 @@ Use expand-contract migrations:
 
 Before a risky migration, create and verify a fresh encrypted backup or snapshot. Rehearse against a production-like clone. A dedicated migration job using `DATABASE_MIGRATION_URL` runs `pnpm prisma:migrate:deploy` once; API replicas do not run development migrations or seed on startup.
 
-The current expected migration is `20260804090000_customer_google_identity`. It adds a customer-profile-scoped external identity binding and makes the local customer password nullable for provider-only accounts; it does not alter administrator password or TOTP requirements and stores no OAuth tokens. The preceding delivery and catalog migrations add operational delivery metadata and reviewed import/provenance structures while preserving integer-millime price authority. Rehearse both an empty-database deploy and a representative existing-data upgrade containing existing customers, orders, inventory, delivery/COD, and catalog/media records before promotion.
+The current expected migration is `20260811170000_product_image_renditions`. It adds the keyed size, SHA-256, dimensions, and profile version for immutable storefront renditions without rewriting stored image bytes. Existing approved images converge through a bounded first-read backfill that verifies the original and all eight generated objects before recording metadata. The preceding migrations link collection-level discrepancies to exact cash collections and add non-destructive manual-courier operations. Rehearse both an empty-database deploy and a representative existing-data upgrade containing media backfill, fail-closed discrepancy fixtures, existing customers, orders, inventory, delivery/COD, courier, and catalog/media records before promotion.
 
 Prisma rollback is usually a forward corrective migration. If an application rollback is needed, confirm its older version remains schema-compatible. Never run migrate reset or destructive development commands outside disposable local databases.
 
@@ -113,6 +120,12 @@ placeholder defaults; maps `DATABASE_MIGRATION_URL` explicitly into the migratio
 `DATABASE_URL`; adds authenticated Redis configuration from a mounted secret; switches API health
 to readiness; checks worker heartbeat age; and adds bounded graceful-stop periods. Base resource
 limits are starting guidance only and must be load-tested on the selected platform.
+
+The local MinIO, MinIO initialization, and Mailpit services are assigned to the disabled-by-default
+`local-dependencies` profile in this overlay. Production API and worker services depend only on the
+migration job and authenticated Redis and use the required external S3 and SMTP settings. Do not
+enable that profile in a real deployment or substitute its development credentials for managed
+object storage and email-provider credentials.
 
 Run `pnpm verify:db-privileges` with the runtime `DATABASE_URL` after database provisioning. It
 performs a randomized, cleaned-up DDL probe and succeeds only when MySQL denies `CREATE` with the

@@ -132,6 +132,7 @@ const completeFixture = (baseUrl) => ({
         {
           method: 'GET',
           path: '/api/v1/products?page=1&pageSize=20',
+          diagnosticLabel: 'catalog-read',
           headers: { Cookie: 'private-age-cookie' },
         },
       ],
@@ -272,4 +273,30 @@ test('requires the unexpected-response rate to remain strictly below one percent
 
   assert.equal(catalog.status, 'failed');
   assert.match(catalog.reason, /error rate 0\.0100 did not remain below 0\.0100/);
+});
+
+test('reports a bounded network exception signature without exposing its message', async () => {
+  const fixture = completeFixture('http://127.0.0.1:3000');
+  fixture.scale = 0.01;
+  fixture.scenarios = {
+    catalogBrowsing: fixture.scenarios.catalogBrowsing,
+    checkoutAttempts: { enabled: false },
+    finalUnitRace: { enabled: false },
+    repeatedIdempotency: { enabled: false },
+    adminOrderList: { enabled: false },
+    workerBacklogRecovery: { enabled: false },
+  };
+  const fetchImpl = async () => {
+    const error = new Error('private request detail must not be reported');
+    error.code = 'ECONNRESET';
+    error.syscall = 'read';
+    throw error;
+  };
+
+  const report = await runLoadSuite(fixture, { fetchImpl });
+  const catalog = report.scenarios.find(({ name }) => name === 'catalogBrowsing');
+
+  assert.equal(catalog.status, 'failed');
+  assert.match(catalog.reason, /"Error:ECONNRESET:read@catalog-read":5/);
+  assert.doesNotMatch(catalog.reason, /private request detail/);
 });
